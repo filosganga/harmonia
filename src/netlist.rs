@@ -65,7 +65,7 @@ fn component(comp: &Sexpr, library: &HashMap<String, Footprint>) -> Component {
     let fp = library.get(name).unwrap_or_else(|| {
         panic!("{reference} uses footprint {name}, which isn't in {FOOTPRINTS} yet: add its size and pads in holes")
     });
-    let pins = fp.pins.iter().map(|(name, &at)| Pin { name: name.clone(), at }).collect();
+    let pins = fp.pins.iter().map(|(name, &at)| Pin { name: name.clone(), at, off_grid: false }).collect();
     let value = comp.value("value").unwrap_or("").to_string();
     let body = Component::full_body(fp.w, fp.h);
     Component { reference, value, footprint: footprint.to_string(), diylc: fp.diylc.clone(), w: fp.w, h: fp.h, pins, body, source: None, low: fp.low }

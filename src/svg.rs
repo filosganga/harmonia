@@ -34,6 +34,7 @@ const STYLE: &str = "
   .lead { stroke: #8f8f8f; stroke-width: 2.5; }
   .jumper-halo { stroke: #ffffff; stroke-width: 7; stroke-linecap: round; }
   .jumper { stroke: #1f4fd6; stroke-width: 4; stroke-linecap: round; }
+  .bottom-wire { stroke: #b00020; stroke-width: 4; stroke-linecap: round; stroke-dasharray: 8 5; }
   .resistor { fill: #e0c68b; stroke: #a59268; stroke-width: 1.5; }
   .diode { fill: #444444; stroke: #222222; stroke-width: 1.5; }
   .band { fill: #dddddd; }
@@ -176,7 +177,14 @@ pub fn draw(c: &Circuit, placement: &[Place], title: &str, side: Side) -> String
         )
         .unwrap();
     }
-    for &(run, a, b) in routing.traces.iter().chain(&routing.jumpers) {
+    // Wires on the solder side, the last resort: dashed, with the copper.
+    for &(run, a, b) in &routing.bottom {
+        let ((x1, y1), (x2, y2)) = (at(a), at(b));
+        let line = format!(r#"x1="{x1:.1}" y1="{y1:.1}" x2="{x2:.1}" y2="{y2:.1}""#);
+        writeln!(wires, r#"<line {line} class="jumper-halo"/>"#).unwrap();
+        writeln!(wires, r#"<line {line} class="bottom-wire"><title>wire on the solder side, {}</title></line>"#, esc(&c.nets[c.runs[run].net].name)).unwrap();
+    }
+    for &(run, a, b) in routing.traces.iter().chain(&routing.jumpers).chain(&routing.bottom) {
         copper.insert(a, c.runs[run].net);
         copper.insert(b, c.runs[run].net);
     }
@@ -367,6 +375,7 @@ pub fn draw(c: &Circuit, placement: &[Place], title: &str, side: Side) -> String
         } else {
             "Thick lines are copper traces on the solder side, seen through the board. Blue lines are jumpers on the parts' side."
         },
+        "Dashed red lines are wires on the solder side, the last resort where neither a trace nor a jumper gets through.",
         "Hole numbers are the text board's, and the board file's.",
         "Hover a hole for its position, pin and net.",
     ];

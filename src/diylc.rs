@@ -208,6 +208,11 @@ pub fn write(c: &Circuit, placement: &[Place], title: &str) -> String {
         let color = &colors[net][1..]; // "#d62828" -> "d62828"
         two_legged(&mut s, &id(), class, &c.nets[net].name, "", ["ffffff", "000000", "000000", color], to_inch(a), to_inch(b), "NONE", extra);
     }
+    // DIYLC has no wire on the solder side, so a jumper that says so in its name, in red.
+    for &(run, a, b) in &routing.bottom {
+        let name = format!("{} (solder side)", c.nets[c.runs[run].net].name);
+        two_legged(&mut s, &id(), "connectivity.Jumper", &name, "", ["ffffff", "000000", "000000", "b00020"], to_inch(a), to_inch(b), "NAME", "<style>SOLID</style>");
+    }
 
     s += "</components>\n<groups/>\n<groupsEx>\n";
     for (name, ids) in groups {

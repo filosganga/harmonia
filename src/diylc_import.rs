@@ -82,6 +82,12 @@ fn hole((x, y): Inches) -> Point {
     ((x / HOLE).round() as i32, (y / HOLE).round() as i32)
 }
 
+/// True for a pin that isn't on a hole, like a tactile switch's legs (0.175" and 0.255" apart).
+fn off_grid((x, y): Inches) -> bool {
+    let off = |v: f64| (v / HOLE - (v / HOLE).round()).abs() > 0.01;
+    off(x) || off(y)
+}
+
 /// One part as drawn in the sketch, in sketch holes.
 struct Drawn<'a> {
     id: String,
@@ -248,12 +254,13 @@ fn components(path: &str, root: &Node, parts: &[Drawn], decorations: &HashMap<St
         let in_group = group.is_some();
         // Holes of the module's board outline (rectangles in the group), if any.
         let mut outline: Vec<Point> = extra.iter().filter(|n| n.tag_name().name().starts_with("diylc.shapes.")).flat_map(|n| covered(&points(*n))).collect();
-        let mut pins: Vec<(String, Point)> = Vec::new();
+        let mut pins: Vec<(String, Point, bool)> = Vec::new();
         let mut body: Vec<Point> = Vec::new();
         for &pi in &members {
             let p = &parts[pi];
             for (name, at) in &p.pins {
-                pins.push((if in_group { format!("{}.{name}", p.name) } else { name.clone() }, hole(*at)));
+                let name = if in_group { format!("{}.{name}", p.name) } else { name.clone() };
+                pins.push((name, hole(*at), off_grid(*at)));
             }
             body.extend(&p.body);
         }
@@ -273,7 +280,7 @@ fn components(path: &str, root: &Node, parts: &[Drawn], decorations: &HashMap<St
             diylc: None,
             w: x1 - x0 + 1,
             h: y1 - y0 + 1,
-            pins: pins.into_iter().map(|(name, at)| Pin { name, at: local(at) }).collect(),
+            pins: pins.into_iter().map(|(name, at, off_grid)| Pin { name, at: local(at), off_grid }).collect(),
             body: body.into_iter().map(local).collect(),
             source: Some(Source { xml, group, origin: (x0, y0) }),
             low: single && is_low(&first.class),

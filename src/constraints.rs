@@ -13,8 +13,9 @@
 //!       "star":    { "GND": { "at": "C1.2", "runs": [["U1.1", "D1.1"]] } }
 //!     }
 //!
-//! fixed, edge and keepout are hard limits, not preferences: the placer never moves a fixed
-//! part, always keeps an edge part touching its edge, and treats keep-out holes as taken.
+//! fixed and edge are hard limits: the placer never moves a fixed part and always keeps an edge
+//! part touching its edge. A keep-out counts like a collision (the "overlap" measurement): very
+//! expensive, but for now a cost, not a limit.
 //!
 //! near is a preference: the part should be as close as it can to that pin. It costs per hole.
 //!

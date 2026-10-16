@@ -25,15 +25,10 @@ target/
 # Ignore .DS_Store file in mac
 **/.DS_Store
 
-# Personal project notes: deployment addresses, credentials to hand, anything
-# true of this machine rather than of the project. Claude Code loads it
-# automatically beside CLAUDE.md; it is ignored so that it cannot be shared by
-# accident, which is the whole point of having it.
+# What only holds on one machine: sibling repos, installed tools and their
+# paths. Claude Code loads it automatically beside CLAUDE.md; it is ignored
+# because it is true of this machine, not of the project.
 CLAUDE.local.md
 
-# What the person building the units has to do by hand: names units and
-# addresses, so it is as private as CLAUDE.local.md.
-TODO.md
-
-# output of the program
+# What the program writes: pictures, KiCad and DIYLC files, the trained network.
 out/
