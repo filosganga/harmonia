@@ -6,6 +6,7 @@
 //!     cargo run --release -- place --judge net    # auto-place again, with the network as the judge
 //!     cargo run --release -- place my_sketch.diy  # read a rough DIYLC layout, score it, and fit it on the board
 //!     cargo run --release -- nets my_sketch.diy   # just show the parts and connections the program understood
+//!     cargo run --release -- check sketches/      # place, write and re-read every .diy: same connections?
 
 mod board;
 mod constraints;
@@ -58,7 +59,7 @@ fn parse_args() -> Args {
             "--board" => args.board = Some(it.next().and_then(|s| parse_size(&s)).expect("--board <width>x<height>, like 18x12")),
             "--power" => args.power = Some(it.next().expect("--power <net name>")),
             "--ground" => args.ground = Some(it.next().expect("--ground <net name>")),
-            "place" | "train" | "evolve" | "nets" => args.command = a,
+            "place" | "train" | "evolve" | "nets" | "check" => args.command = a,
             path => args.circuit = path.into(),
         }
     }
@@ -73,8 +74,27 @@ fn parse_size(s: &str) -> Option<BoardSize> {
 
 fn main() {
     let args = parse_args();
-    // The board file next to the netlist, if any. Flags win over it, so you can try a variation quickly.
-    let (board_file_path, board_file) = constraints::read_board_file(&args.circuit).unzip();
+    std::fs::create_dir_all("out").unwrap();
+    if args.command == "check" {
+        return check_cmd(&args);
+    }
+    let (circuit, sketch, board_file_path) = load(&args.circuit, &args);
+    if let Some(path) = board_file_path {
+        println!("Board file: {path}\n");
+    }
+    match args.command.as_str() {
+        "train" => train(&circuit, args.seed),
+        "evolve" => evolve(&circuit, args.seed),
+        "nets" => print_nets(&circuit),
+        _ => place_cmd(&circuit, &args, sketch),
+    }
+}
+
+/// Reads a circuit (a KiCad netlist or a DIYLC sketch) and the board file next to it, if any.
+/// For a sketch, also where you put things, as a starting point. Returns the board file's path too.
+fn load(path: &str, args: &Args) -> (Circuit, Option<board::Placement>, Option<String>) {
+    // Flags win over the board file, so you can try a variation quickly.
+    let (board_file_path, board_file) = constraints::read_board_file(path).unzip();
     let board_file = board_file.unwrap_or_default();
     let from_file = board_file.board.as_ref().map(|s| parse_size(s).unwrap_or_else(|| panic!("board file: \"board\" should look like \"18x12\"")));
     let opts = netlist::Options {
@@ -82,24 +102,145 @@ fn main() {
         power: args.power.clone().or(board_file.power.clone()),
         ground: args.ground.clone().or(board_file.ground.clone()),
     };
-    // A DIYLC file is a sketch: its connections, plus where you put things as a starting point.
-    let (mut circuit, sketch) = if args.circuit.ends_with(".diy") {
-        let (c, s) = diylc_import::load(&args.circuit, opts);
+    let (mut circuit, sketch) = if path.ends_with(".diy") {
+        let (c, s) = diylc_import::load(path, opts);
         (c, Some(s))
     } else {
-        (netlist::load(&args.circuit, opts), None)
+        (netlist::load(path, opts), None)
     };
     circuit.constraints = constraints::resolve(&board_file, &circuit);
     circuit.runs = constraints::runs(&circuit); // again, now that the star rules are known
-    if let Some(path) = board_file_path {
-        println!("Board file: {path}\n");
+    (circuit, sketch, board_file_path)
+}
+
+/// The connections of a circuit, in an order that doesn't depend on the file: each net with two
+/// pins or more, as its sorted pin names, sorted.
+fn connections(c: &Circuit) -> Vec<Vec<String>> {
+    let mut nets: Vec<Vec<String>> = c.nets.iter().filter(|n| n.pins.len() > 1).map(|n| {
+        let mut pins = n.pins.clone();
+        pins.sort();
+        pins
+    }).collect();
+    nets.sort();
+    nets
+}
+
+/// How one file did in `check`.
+enum Outcome {
+    Same,
+    NoConnections,
+    /// The reader refuses the file (say, a part it doesn't support): nothing to compare.
+    Unreadable(String),
+    /// When the placer stopped, this many pins still shared a hole or hung off the board, so their
+    /// nets may join for that reason alone.
+    Unfinished(usize),
+    /// Nets in the file but not in what was written back, and the other way round.
+    Different(Vec<Vec<String>>, Vec<Vec<String>>),
+    /// Something stopped after the file was read: the placer, the router, the writer, or reading
+    /// back what was written.
+    Crashed(String),
+}
+
+/// Where the last stop (panic) happened, kept by `check`'s panic hook for its report.
+static LAST_STOP: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+
+/// Runs `f`; if it stops, returns its message and where it stopped instead.
+fn caught<T>(f: impl FnOnce() -> T) -> Result<T, String> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).map_err(|e| {
+        let why = e.downcast_ref::<String>().cloned().or_else(|| e.downcast_ref::<&str>().map(|s| s.to_string()));
+        format!("{} ({})", why.unwrap_or_default(), LAST_STOP.lock().unwrap())
+    })
+}
+
+/// The round trip for one DIYLC file: place it as `place` does, write the `.diy` (to
+/// out/check.diy), read that back, and compare the connections.
+fn check_one(path: &str, args: &Args) -> Outcome {
+    let (c, sketch) = match caught(|| load(path, args)) {
+        Ok((c, sketch, _)) => (c, sketch),
+        Err(why) => return Outcome::Unreadable(why),
+    };
+    let before = connections(&c);
+    if before.is_empty() {
+        return Outcome::NoConnections;
     }
-    std::fs::create_dir_all("out").unwrap();
-    match args.command.as_str() {
-        "train" => train(&circuit, args.seed),
-        "evolve" => evolve(&circuit, args.seed),
-        "nets" => print_nets(&circuit),
-        _ => place_cmd(&circuit, &args, sketch),
+    let round_trip = || {
+        let mut start = sketch.expect("a .diy file has a sketch");
+        constraints::apply(&c, &mut start);
+        let best = place::anneal(&c, board::score, args.steps, &mut StdRng::seed_from_u64(args.seed), Some(start), |_| {});
+        let written = "out/check.diy";
+        std::fs::write(written, diylc::write(&c, &best, "check")).unwrap();
+        let after = connections(&load(written, args).0);
+        if before == after {
+            return Outcome::Same;
+        }
+        // Pins sharing a hole, or off the board, explain joined nets without any fault in the writer.
+        let (w, h) = (c.board.width, c.board.height);
+        let mut seen = std::collections::HashSet::new();
+        let pins = board::geometry(&c, &best).pins;
+        let clashing = pins.iter().flatten().filter(|&&(x, y)| x < 0 || x >= w || y < 0 || y >= h || !seen.insert((x, y))).count();
+        if clashing > 0 {
+            return Outcome::Unfinished(clashing);
+        }
+        let missing = before.iter().filter(|n| !after.contains(n)).cloned().collect();
+        let extra = after.iter().filter(|n| !before.contains(n)).cloned().collect();
+        Outcome::Different(missing, extra)
+    };
+    caught(round_trip).unwrap_or_else(Outcome::Crashed)
+}
+
+/// Places every DIYLC file given (one file, or every .diy in a folder), writes it out the way
+/// `place` does, reads that back, and checks it has exactly the connections it started with.
+/// Exits with an error if any file comes back wrong or stops the program.
+fn check_cmd(args: &Args) {
+    let path = std::path::Path::new(&args.circuit);
+    let mut files: Vec<String> = if path.is_dir() {
+        let entries = std::fs::read_dir(path).unwrap_or_else(|e| panic!("can't read {}: {e}", path.display()));
+        entries.filter_map(|e| e.ok()).map(|e| e.path().to_string_lossy().into_owned()).filter(|p| p.ends_with(".diy")).collect()
+    } else {
+        vec![args.circuit.clone()]
+    };
+    files.sort();
+    if files.is_empty() || files.iter().any(|f| !f.ends_with(".diy")) {
+        panic!("check reads DIYLC files: give it a .diy file or a folder of them");
+    }
+    // A stop (panic) in one file goes in the report below, with where it happened, and the check
+    // carries on with the next file.
+    std::panic::set_hook(Box::new(|info| {
+        *LAST_STOP.lock().unwrap() = info.location().map_or(String::new(), |l| format!("at {}:{}", l.file(), l.line()));
+    }));
+    let (mut same, mut skipped, mut unfinished, mut wrong, mut crashed) = (0, 0, 0, 0, 0);
+    for f in &files {
+        let name = std::path::Path::new(f).file_name().unwrap().to_string_lossy().into_owned();
+        match check_one(f, args) {
+            Outcome::Same => same += 1,
+            Outcome::NoConnections => skipped += 1,
+            Outcome::Unreadable(why) => {
+                skipped += 1;
+                println!("  can't read  {name}: {why}");
+            }
+            Outcome::Unfinished(pins) => {
+                unfinished += 1;
+                println!("  unfinished  {name}: {pins} pins still share a hole or hang off the board; try more --steps");
+            }
+            Outcome::Different(missing, extra) => {
+                wrong += 1;
+                println!("  WRONG       {name}: the written file has different connections");
+                missing.iter().for_each(|n| println!("                only in the file:    {}", n.join(" ")));
+                extra.iter().for_each(|n| println!("                only in the written: {}", n.join(" ")));
+            }
+            Outcome::Crashed(why) => {
+                crashed += 1;
+                println!("  STOPPED     {name}: {why}");
+            }
+        }
+    }
+    let _ = std::panic::take_hook();
+    println!(
+        "\n{} files: {same} same, {wrong} wrong, {crashed} stopped, {unfinished} unfinished, {skipped} skipped (no connections or can't read)",
+        files.len()
+    );
+    if wrong + crashed > 0 {
+        std::process::exit(1);
     }
 }
 

@@ -10,13 +10,15 @@ use std::fmt::Write;
 
 pub type Point = (i32, i32);
 
-/// The six things the rules measure. They are also the network's inputs.
-pub const FEATURES: [&str; 6] = ["wire", "jumpers", "power", "overlap", "area", "near"];
+/// The eight things the rules measure. They are also the network's inputs.
+pub const FEATURES: [&str; 8] = ["wire", "jumpers", "jumper_len", "bottom", "power", "overlap", "area", "near"];
 
 /// How much each measurement costs, in the same order as FEATURES. Lower total cost = better board.
-pub const WEIGHTS: [f64; 6] = [
-    1.0,  // wire: per hole of copper trace or jumper, as routed (see route.rs)
-    8.0,  // jumpers: per jumper, where a trace couldn't get through
+pub const WEIGHTS: [f64; 8] = [
+    1.0,  // wire: per hole of copper trace, as routed (see route.rs, whose costs match these)
+    5.0,  // jumpers: per jumper on the parts' side, where a trace couldn't get through
+    2.0,  // jumper_len: per hole of jumper or solder-side wire: twice a trace, so they stay short
+    30.0, // bottom: per wire on the solder side, the last resort
     1.5,  // power: per hole between each 5V pin and its nearest GND pin
     40.0, // overlap: per hole where two parts collide or a part hangs off the board
     0.15, // area: per hole of the rectangle that encloses all parts
@@ -28,7 +30,11 @@ pub const SCORE_SCALE: f64 = 150.0;
 
 pub struct Pin {
     pub name: String,
+    /// Its hole. For a pin between holes (`off_grid`), the nearest one.
     pub at: Point,
+    /// The pin isn't on a hole, like a tactile switch's legs. Copper in the holes around it could
+    /// touch it, so the router keeps other nets out of them.
+    pub off_grid: bool,
 }
 
 pub struct Component {
@@ -217,7 +223,12 @@ pub fn measure(c: &Circuit, placement: &[Place]) -> Measures {
     // For each "near" rule: holes from the part's closest pin to the pin it should be near.
     let near: i32 = c.constraints.near.iter().map(|&(part, (ci, pi))| g.pins[part].iter().map(|&p| manhattan(p, g.pins[ci][pi])).min().unwrap_or(0)).sum();
 
-    Measures([routing.length(), routing.jumpers.len() as f64, power as f64, overlap as f64, area as f64, near as f64])
+    Measures([
+        routing.trace_length(),
+        routing.jumpers.len() as f64,
+        routing.jumper_length(),
+        routing.bottom.len() as f64,
+        power as f64, overlap as f64, area as f64, near as f64])
 }
 
 /// Holes where something that doesn't fit sits under a module: (part, hole). Only low parts
