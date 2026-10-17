@@ -22,7 +22,7 @@
 
 use crate::board::{Circuit, Geometry, Point};
 use std::cmp::Reverse;
-use std::collections::BinaryHeap;
+use std::collections::{BinaryHeap, HashMap, HashSet};
 
 /// Where the copper goes. Each entry is (run, from hole, to hole).
 #[derive(Default)]
@@ -44,6 +44,39 @@ impl Routing {
     /// Length of jumper and solder-side wire, in holes.
     pub fn jumper_length(&self) -> f64 {
         self.jumpers.iter().chain(&self.bottom).map(|&(_, a, b)| distance(a, b)).sum::<f64>() + 0.0
+    }
+
+    /// Length of copper (traces, jumpers and solder-side wires), in holes, between two holes the
+    /// same net joins, going the way the router laid it. A star net's runs only meet at the star
+    /// point, so between two runs it goes through there.
+    pub fn copper_between(&self, c: &Circuit, net: usize, from: Point, to: Point) -> f64 {
+        // Every piece of copper of that net, as links between holes, both ways.
+        let mut links: HashMap<Point, Vec<(Point, f64)>> = HashMap::new();
+        for &(run, a, b) in self.traces.iter().chain(&self.jumpers).chain(&self.bottom) {
+            if c.runs[run].net == net {
+                links.entry(a).or_default().push((b, distance(a, b)));
+                links.entry(b).or_default().push((a, distance(a, b)));
+            }
+        }
+        // The shortest way along those links (Dijkstra): keep taking the closest hole not done
+        // yet, and see how far its neighbours are through it.
+        let mut best: HashMap<Point, f64> = HashMap::from([(from, 0.0)]);
+        let mut done: HashSet<Point> = HashSet::new();
+        loop {
+            let closest = best.iter().filter(|(p, _)| !done.contains(*p)).min_by(|a, b| a.1.total_cmp(b.1));
+            let Some((&p, &d)) = closest else {
+                panic!("the router left {from:?} and {to:?} unjoined, but it joins every pin of a net");
+            };
+            if p == to {
+                return d;
+            }
+            done.insert(p);
+            for &(q, len) in links.get(&p).into_iter().flatten() {
+                if best.get(&q).is_none_or(|&old| d + len < old) {
+                    best.insert(q, d + len);
+                }
+            }
+        }
     }
 
     /// The traces as straight runs: steps in a row, in the same direction, joined into one.

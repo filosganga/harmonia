@@ -2,7 +2,7 @@
 
 Rust, with four small crates (`rand`, `serde`, `serde_json`, and `roxmltree` to read DIYLC files).
 Every placer step routes the whole board, so most commands are over the one-second goal: on the 555,
-`place` takes about 0.7s, `train` 1.8s and `evolve` 2.9s; placing the bigger cat-feeder board about 2.7s.
+`place` takes about 0.7s, `train` 1.8s and `evolve` 2.9s; placing the bigger cat-feeder board about 2.9s.
 
 ```bash
 cargo run --release -- place                # auto-place the 555 blinker using the hand-written rules
@@ -91,25 +91,34 @@ Next to the netlist, a JSON file with the same name (`circuits/555_blinker.json`
 {
   "board": "18x12",
   "power": "+5V", "ground": "GND",
-  "fixed":   { "U1": { "at": [6, 3], "rot": 0 } },
-  "edge":    { "J1": "left" },
-  "keepout": [ { "from": [16, 0], "to": [17, 1], "why": "M3 screw" } ],
-  "near":    [ { "part": "C2", "pin": "U1.5" } ],
-  "star":    { "GND": { "at": "C1.2", "runs": [["U1.1", "C2.2"], ["D1.1"]] } }
+  "constraints": [
+    { "kind": "fixed",   "part": "U1", "at": [6, 3], "rot": 0 },
+    { "kind": "edge",    "part": "J1", "edge": "left" },
+    { "kind": "keepout", "name": "M3 screw", "from": [16, 0], "to": [17, 1] },
+    { "kind": "near",    "name": "C2 by CTRL", "pins": ["C2.1", "U1.5"] },
+    { "kind": "star",    "at": "C1.2", "runs": [["U1.1", "C2.2"], ["D1.1"]] }
+  ]
 }
 ```
 
 - **board / power / ground**: the same as the flags. A flag still wins, for a quick experiment.
+- **constraints**: your rules, in any order. Each says its `kind`, and may have a `name`: messages
+  about the rule use it, and a keep-out's is written on it in the pictures and DIYLC (in KiCad it
+  names the rule area).
 - **fixed**: the part goes exactly there, and the placer never moves it. `at` is the top-left hole of the
   part after turning it, `rot` is quarter turns clockwise (0–3).
 - **edge**: the part always touches that edge: `left`, `right`, `top` or `bottom`.
 - **keepout**: holes no part may cover, from one corner to the other. Shown as `x` on the text board, a
   grey box in the pictures and in DIYLC, and a "rule area" in KiCad, which keeps enforcing it while you edit.
-- **near**: the part should sit as close as it can to that pin, like a resistor guarding a GPIO or a
-  decoupling capacitor by its chip. A preference: it costs per hole of distance.
-- **star**: how a net is wired. Every run starts at the `at` pin and goes its own way, never sharing
-  copper with another run, so one part's current doesn't shift the voltage another part sees. Each run
-  in `runs` joins its pins in a chain; any other pin of the net gets a run of its own, straight from `at`.
+- **near**: two pins of the same net should be joined by as little copper as possible, like a resistor
+  guarding a GPIO or a decoupling capacitor by its chip. It's measured along the copper the router
+  laid (traces, jumpers and wires), not in a straight line. On a star net, two pins in different
+  runs are only joined through the star point, so that's the way it's measured. A preference: it
+  costs per hole of copper.
+- **star**: how the net of the `at` pin is wired. Every run starts at `at` and goes its own way, never
+  sharing copper with another run, so one part's current doesn't shift the voltage another part sees.
+  Each run in `runs` joins its pins in a chain; any other pin of the net gets a run of its own, straight
+  from `at`. A net can have one star rule.
 
 fixed and edge are hard limits: the placer puts the part back after every move, so it can't break them.
 A keep-out is, for now, a very expensive cost like a collision (see "Next steps"): if one can't be kept
@@ -150,7 +159,7 @@ text board. Pins are named like the `nets` command prints them.
 - **power**: for every supply pin, the distance to the nearest ground pin (keeps supply and ground close).
 - **overlap**: holes where two parts collide, a part hangs off the board, sits on a keep-out, or sits under a module without being low enough (very expensive).
 - **area**: the size of the rectangle that holds all parts (keeps the board compact).
-- **near**: for each `near` rule in the board file, the holes between the part and its pin.
+- **near**: for each `near` rule in the board file, the length of copper between its two pins, as routed.
 
 The weighted sum is the *cost*; the score is `100 * exp(-cost / 150)`, so 100 is perfect.
 The placer itself compares costs, not scores: for a big circuit the score is low and flat (a cost
@@ -296,5 +305,5 @@ In order:
    from those picks ("Your taste" above). Then more circuits to learn from.
 3. **Faster routing**, so big boards are back to about a second (see Known limits).
 
-Smaller ideas, not yet in that order, are in [TODO.md](TODO.md): a single list of board-file
-constraints, naming `near` by two pins, a part's side facing a board edge, and "one of" these rules.
+Smaller ideas, not yet in that order, are in [TODO.md](TODO.md): a part's side facing a board edge,
+and "one of" these rules.

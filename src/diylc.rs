@@ -192,9 +192,9 @@ pub fn write(c: &Circuit, placement: &[Place], title: &str) -> String {
         }
     }
 
-    // Keep-outs from the board file: see-through grey boxes, labelled with why.
+    // Keep-outs from the board file: see-through grey boxes, labelled with their name.
     for k in &c.constraints.keepout {
-        let label = if k.why.is_empty() { "keep-out" } else { &k.why };
+        let label = if k.name.is_empty() { "keep-out" } else { &k.name };
         labelled_box(&mut s, [id(), id()], label, (k.from, k.to), "999999", 40);
     }
 

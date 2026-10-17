@@ -2,23 +2,29 @@
   "board": "24x18",
   "power": "5v",
   "ground": "GND",
-  "near": [
-    { "part": "R1", "pin": "ESP32C6.ESP32C6-L.GP2" }
-  ],
-  "star": {
-    "5v": {
+  "constraints": [
+    {
+      "kind": "near",
+      "name": "R1 guards GPIO2",
+      "pins": ["R1.2", "ESP32C6.ESP32C6-L.GP2"]
+    },
+    {
+      "kind": "star",
+      "name": "5v from C1",
       "at": "C1.+",
       "runs": [
         ["DRV8833.DRV8833-L.Vcc", "Ext.5V"],
         ["ESP32C6.ESP32C6-L.5v"]
       ]
     },
-    "GND": {
+    {
+      "kind": "star",
+      "name": "GND from C1",
       "at": "C1.-",
       "runs": [
         ["DRV8833.DRV8833-L.GND", "Ext.GND"],
         ["ESP32C6.ESP32C6-L.GND", "DS3231.DS3231.GND"]
       ]
     }
-  }
+  ]
 }

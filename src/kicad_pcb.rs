@@ -111,7 +111,7 @@ pub fn write(c: &Circuit, placement: &[Place]) -> String {
     for k in &c.constraints.keepout {
         let (x0, x1) = (mm(k.from.0.min(k.to.0)) - PITCH / 2.0, mm(k.from.0.max(k.to.0)) + PITCH / 2.0);
         let (y0, y1) = (mm(k.from.1.min(k.to.1)) - PITCH / 2.0, mm(k.from.1.max(k.to.1)) + PITCH / 2.0);
-        let name = if k.why.is_empty() { "Keep-out" } else { &k.why };
+        let name = if k.name.is_empty() { "Keep-out" } else { &k.name };
         writeln!(
             s,
             "  (zone (net 0) (net_name \"\") (layers \"F.Cu\" \"B.Cu\") (uuid \"{}\") (name {}) (hatch full 0.5)\n    (connect_pads (clearance 0)) (min_thickness 0.25)\n    (keepout (tracks not_allowed) (vias not_allowed) (pads not_allowed) (copperpour not_allowed) (footprints not_allowed))\n    (fill (thermal_gap 0.5) (thermal_bridge_width 0.5))\n    (polygon (pts (xy {x0:.2} {y0:.2}) (xy {x1:.2} {y0:.2}) (xy {x1:.2} {y1:.2}) (xy {x0:.2} {y1:.2}))))",
