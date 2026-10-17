@@ -10,7 +10,7 @@
     (comp (ref "D2") (value "LED") (footprint "LED_THT:LED_D5.0mm"))
     (comp (ref "J1") (value "Logic in") (footprint "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical"))
     (comp (ref "J2") (value "Load") (footprint "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical"))
-    (comp (ref "J3") (value "12V in") (footprint "TerminalBlock:TerminalBlock_bornier-2_P5.08mm"))
+    (comp (ref "J3") (value "12V in") (footprint "TerminalBlock_Phoenix:TerminalBlock_Phoenix_MKDS-1,5-2-5.08_1x02_P5.08mm_Horizontal"))
     (comp (ref "Q1") (value "BC547") (footprint "Package_TO_SOT_THT:TO-92_Inline_Wide"))
     (comp (ref "R1") (value "1k") (footprint "Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal"))
     (comp (ref "R2") (value "10k") (footprint "Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal"))

@@ -64,21 +64,23 @@ Today's numbers, the plain placer (best cost per seed; lower is better; times ar
 
 | circuit | parts | nets | seed 1 | seed 2 | seed 3 | best | mean | s/run |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| 555_blinker | 8 | 7 | 84.6 | 99.5 | 88.1 | 84.6 | 90.7 | 3.4 |
-| cat_feeder | 11 | 18 | 464.2 | 392.9 | 401.7 | 392.9 | 419.6 | 19.5 |
-| lm7805_supply | 10 | 5 | 67.5 | 69.6 | 69.7 | 67.5 | 68.9 | 3.1 |
-| astable_flasher | 11 | 8 | 93.8 | 112.0 | 98.4 | 93.8 | 101.4 | 3.6 |
-| lm386_amp | 11 | 8 | 80.0 | 79.3 | 83.3 | 79.3 | 80.9 | 3.7 |
-| lm358_preamp | 14 | 9 | 141.0 | 117.1 | 127.8 | 117.1 | 128.6 | 4.6 |
-| attiny85_board | 11 | 10 | 180.4 | 165.7 | 164.3 | 164.3 | 170.1 | 5.0 |
-| led_chaser_4017 | 19 | 17 | 260.6 | 211.6 | 251.3 | 211.6 | 241.2 | 10.1 |
-| pwm_motor_555 | 15 | 10 | 194.3 | 189.5 | 207.2 | 189.5 | 197.0 | 8.6 |
-| npn_load_switch | 10 | 6 | 79.7 | 81.6 | 97.4 | 79.7 | 86.2 | 3.1 |
-| lm317_adjustable | 13 | 5 | 121.2 | 118.3 | 101.0 | 101.0 | 113.5 | 4.2 |
-| h_bridge_bjt | 15 | 8 | 117.0 | 128.3 | 136.0 | 117.0 | 127.1 | 6.1 |
+| 555_blinker | 8 | 7 | 84.6 | 99.5 | 88.1 | 84.6 | 90.7 | 3.7 |
+| cat_feeder | 11 | 18 | 464.2 | 392.9 | 401.7 | 392.9 | 419.6 | 20.5 |
+| lm7805_supply | 10 | 5 | 67.6 | 62.1 | 71.0 | 62.1 | 66.9 | 3.4 |
+| astable_flasher | 11 | 8 | 93.8 | 112.0 | 98.4 | 93.8 | 101.4 | 3.9 |
+| lm386_amp | 11 | 8 | 81.9 | 102.4 | 78.3 | 78.3 | 87.5 | 3.9 |
+| lm358_preamp | 14 | 9 | 141.0 | 117.1 | 127.8 | 117.1 | 128.6 | 5.1 |
+| attiny85_board | 11 | 10 | 180.4 | 165.7 | 164.3 | 164.3 | 170.1 | 5.4 |
+| led_chaser_4017 | 19 | 17 | 260.6 | 211.6 | 251.3 | 211.6 | 241.2 | 10.9 |
+| pwm_motor_555 | 15 | 10 | 169.0 | 186.2 | 177.9 | 169.0 | 177.7 | 9.0 |
+| npn_load_switch | 10 | 6 | 67.7 | 71.4 | 81.0 | 67.7 | 73.4 | 3.4 |
+| lm317_adjustable | 13 | 5 | 102.9 | 123.9 | 116.6 | 102.9 | 114.5 | 4.7 |
+| h_bridge_bjt | 15 | 8 | 117.0 | 128.3 | 136.0 | 117.0 | 127.1 | 6.5 |
 
-The spread between seeds (up to 20% on the cat feeder and the chaser) is how much a later stage has
-to beat before a difference means anything.
+(Rerun the same day after two footprints were corrected against KiCad's own files: the screw
+terminal and the trimmer, used by lm7805_supply, lm386_amp, pwm_motor_555, npn_load_switch and
+lm317_adjustable.) The spread between seeds (about 30% on the lm386, 20% on the cat feeder and the chaser) is how
+much a later stage has to beat before a difference means anything.
 
 ### Stage 1: training data
 

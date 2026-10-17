@@ -37,6 +37,58 @@ Follow README "Checking a change". In short:
 
 CI runs the build, clippy, the 555 example and the cat-feeder round trip on every pull request.
 
+## Adding a footprint
+
+A KiCad netlist names each part's footprint but not where its legs are, so every footprint a netlist
+uses needs an entry in `footprints.json`. When one is missing, `place` stops with "R5 uses footprint
+X, which isn't in footprints.json yet". (DIYLC sketches don't need entries: their parts come from
+DIYLC. For a DIYLC part the reader refuses, see `.claude/skills/perfboard-diylc-part`.)
+
+1. **The name** is the footprint's name after the `:`, exactly as the netlist writes it:
+   `Package_TO_SOT_THT:TO-92_Inline_Wide` is looked up as `TO-92_Inline_Wide`. Use the names of
+   KiCad's own libraries, so a netlist exported from KiCad finds them.
+2. **Find KiCad's file for it**, a `.kicad_mod`. KiCad installs its libraries as folders named
+   `<Library>.pretty` (Preferences → Configure Paths shows where; on macOS they're inside the app, in
+   `KiCad.app/Contents/SharedSupport/footprints/`), and they're online at
+   <https://gitlab.com/kicad/libraries/kicad-footprints>.
+3. **Draft the entry** from it:
+
+   ```bash
+   python3 dev/kicad_footprint.py path/to/TO-220-3_Vertical.kicad_mod
+   ```
+
+   It turns millimetres into holes (2.54mm apart, lined up with pad 1) and prints `w`, `h` and
+   `pins`, plus notes. The outline is the holes under the part's body as KiCad draws it on the
+   fabrication layer (F.Fab, the real body): a hole counts only if the body reaches 0.5mm past its
+   centre, since a leg still fits beside a body that only just reaches a hole. That's why a TO-220,
+   10mm wide, comes out 3 holes wide and 2 deep (the body stands behind its legs). Pins are
+   `[x, y]` from the outline's top-left hole, x to the right and y down, with the part as KiCad
+   draws it, unturned.
+4. **Read the notes.** A pad "between holes" means its leg must be bent to reach one. Often KiCad
+   has a variant on the grid: `TO-92_Inline` has its legs 1.27mm apart, `TO-92_Inline_Wide` 2.54mm,
+   the way a TO-92 is usually bent onto perfboard. `footprints.json` can't put a leg between
+   holes.
+5. **Check which pad is which.** The netlist joins pins by pad number, and what each number means
+   comes from the part's KiCad symbol and datasheet: for KiCad's BC547 pad 1 is the collector, for
+   an L7805 the input. A wrong order wires the wrong legs without any error. Write it in `"about"`.
+6. **Add by hand** what a footprint file doesn't say:
+   - `"about"`: what the part is and which pad is which.
+   - `"low": true` if the part lies flat enough to sit under a module on headers (a resistor, a
+     ceramic disc, a diode lying down). Leave it out otherwise.
+   - `"diylc"`, if DIYLC has a matching part: `{ "part": "Resistor" }` and the others README "Using
+     your own circuit" lists, with `"legs"` for a polarised two-legged part. Without it the part is
+     drawn in the `.diy` as a labelled box.
+7. **Without a KiCad file**, measure from the datasheet the same way: the leg spacing and the body's
+   size in mm, divided by 2.54. KiCad's names carry the main ones: `P10.16mm` is the leg spacing (4
+   holes), `W7.62mm` a DIP's row spacing (3 holes), `D5.0mm` a round body's diameter.
+8. **Check it**: `cargo run --release -- nets your.net` lists the part with its size and number of pins;
+   `place` it and look at `out/rules.svg` (each leg in its hole, the outline over the body). With a
+   `"diylc"` entry, open `out/rules.diy` in DIYLC. In KiCad, open `out/rules.kicad_pcb` and run
+   Tools → Update Footprints from Library: the real footprint's pads should land on the same holes.
+
+Changing an entry that's already there moves the legs of every circuit that uses it, the benchmark
+circuits too: rerun `bench` and say which numbers changed.
+
 ## How the project is shaped
 
 These are from README "Principles"; a pull request that goes against them will be asked to change.

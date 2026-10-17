@@ -11,7 +11,7 @@
     (comp (ref "C4") (value "10uF") (footprint "Capacitor_THT:CP_Radial_D5.0mm_P2.50mm"))
     (comp (ref "D1") (value "1N4007") (footprint "Diode_THT:D_DO-41_SOD81_P10.16mm_Horizontal"))
     (comp (ref "D2") (value "LED") (footprint "LED_THT:LED_D5.0mm"))
-    (comp (ref "J1") (value "DC in") (footprint "TerminalBlock:TerminalBlock_bornier-2_P5.08mm"))
+    (comp (ref "J1") (value "DC in") (footprint "TerminalBlock_Phoenix:TerminalBlock_Phoenix_MKDS-1,5-2-5.08_1x02_P5.08mm_Horizontal"))
     (comp (ref "J2") (value "5V out") (footprint "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical"))
     (comp (ref "R1") (value "1k") (footprint "Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal"))
     (comp (ref "U1") (value "L7805") (footprint "Package_TO_SOT_THT:TO-220-3_Vertical")))

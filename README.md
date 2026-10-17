@@ -55,7 +55,8 @@ for each case and which was best) and writes, in `out/` (named `rules` or `net` 
 A netlist only says what connects to what. It doesn't say where a part's legs are, so each footprint
 also needs an entry in `footprints.json`: its size in holes and which hole each pad sits in (top-left
 hole is `[0, 0]`, a hole is 2.54mm). If one is missing, the program names it. The library name before
-the `:` is ignored, so `Package_DIP:DIP-8_W7.62mm` is looked up as `DIP-8_W7.62mm`.
+the `:` is ignored, so `Package_DIP:DIP-8_W7.62mm` is looked up as `DIP-8_W7.62mm`. CONTRIBUTING.md
+"Adding a footprint" says how to measure one; `dev/kicad_footprint.py` drafts it from KiCad's own file.
 
 The optional `"diylc"` entry says how to draw the part in DIYLC: `Resistor`, `RadialElectrolytic`,
 `RadialCeramicDiskCapacitor`, `LED`, `DIL_IC` or `PinHeader`. For two-legged parts, `"legs"` says which pad is
@@ -182,6 +183,7 @@ text board. Pins are named like the `nets` command prints them.
 | `circuits/bench.txt` | The benchmark set: the circuits `bench` places. Never used to train a network. |
 | `circuits/bench/` | Ten classic hobby circuits for the benchmark (a 7805 supply, a transistor flasher, an LM386 amp, a 555 + 4017 LED chaser, ...), written as KiCad netlists after datasheet applications and well-known designs, each with a board file (its size, power, ground, and the connectors on edges). |
 | `footprints.json` | Footprint name → size in holes and where each pad is. |
+| `dev/kicad_footprint.py` | A dev tool (Python, not needed to run the program): drafts a `footprints.json` entry from a KiCad footprint file. |
 | `src/sexpr.rs` | Reads KiCad's bracket format, `(comp (ref "R1") ...)`, into a tree. |
 | `src/netlist.rs` | Turns a KiCad netlist plus `footprints.json` into the circuit the placer works on. |
 | `src/board.rs` | Places parts, works out where every pin lands, measures the board and gives it a score. |
@@ -313,7 +315,7 @@ measurements; one trained when a measurement meant something else loads silently
 ### The benchmark
 
 After a change meant to make layouts better (the placer, the router, a network), run the benchmark
-and compare the costs with the last run (`out/bench.json`) or with the first one, recorded in
+and compare the costs with the last run (`out/bench.json`) or with the baseline, the plain placer's numbers recorded in
 [docs/plans/placing-network.md](docs/plans/placing-network.md):
 
 ```bash
