@@ -78,8 +78,11 @@ touches, and every constant the diff changes, grep the whole repo for the old va
 - **No flags for model settings.** A new CLI flag for hidden neurons, learning rates, generations,
   rule weights or router costs is a finding. Flags are for the user's problem: circuit, board, power
   and ground, seed, steps.
-- **Hard rules are never learned.** Fixed parts and edges are enforced by the placer
-  (`constraints::apply`). Collisions, hanging off the board and keep-outs are still a cost (the
+- **Hard rules are never learned.** Placement rules (fixed, edge, orientation, within; all-of and
+  one-of become cases, each placed on its own) are enforced by the placer (`Constraints::allowed`,
+  kept by `constraints::apply`), and a
+  part with them also stays on the board and off keep-outs. Otherwise collisions, hanging off the
+  board and keep-outs are still a cost (the
   `overlap` measurement in `WEIGHTS`, and a network input) until README "Next steps" 1
   makes them exact checks. A change that weakens that cost (its weight, its `SCALE`), or turns another
   hard rule into something the network has to learn, is a finding.

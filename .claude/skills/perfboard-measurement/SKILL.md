@@ -16,8 +16,7 @@ A measurement is in five places that the compiler only partly ties together.
 3. `src/route.rs`: the router's costs are the matching weights × 10 (`STRAIGHT`/`DIAGONAL` for wire,
    `JUMPER_PER_HOLE` for jumper length). Change both together, or the router picks routes the score
    doesn't prefer.
-4. `src/main.rs` `check_one` finds `"overlap"` by name; renaming it breaks `check`.
-5. The text report and the SVG legend print every measurement themselves; nothing to change there.
+4. The text report and the SVG legend print every measurement themselves; nothing to change there.
 
 ## Network
 

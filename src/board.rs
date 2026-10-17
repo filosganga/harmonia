@@ -28,6 +28,7 @@ pub const WEIGHTS: [f64; 8] = [
 /// Turns the cost into a 0-100 score (100 = perfect, about 37 at cost == SCORE_SCALE).
 pub const SCORE_SCALE: f64 = 150.0;
 
+#[derive(Clone)]
 pub struct Pin {
     pub name: String,
     /// Its hole. For a pin between holes (`off_grid`), the nearest one.
@@ -37,6 +38,7 @@ pub struct Pin {
     pub off_grid: bool,
 }
 
+#[derive(Clone)]
 pub struct Component {
     pub reference: String,
     /// What the netlist says it is, e.g. "NE555P" or "10k". Only used when exporting.
@@ -65,6 +67,7 @@ impl Component {
     }
 }
 
+#[derive(Clone)]
 pub struct Net {
     pub name: String,
     pub pins: Vec<String>,
@@ -77,6 +80,7 @@ pub struct BoardSize {
 }
 
 /// Everything the placer needs. Built by `netlist::load` from a KiCad netlist.
+#[derive(Clone)]
 pub struct Circuit {
     pub board: BoardSize,
     pub components: Vec<Component>,
@@ -86,13 +90,14 @@ pub struct Circuit {
     pub ground: Option<String>,
     /// For each net, its pins as (component index, pin index).
     pub net_pins: Vec<Vec<(usize, usize)>>,
-    /// Your own rules for this board (fixed parts, edges, keep-outs, near, star), from the board file.
+    /// Your own rules for this board (where parts go, keep-outs, near, star), from the board file.
     pub constraints: crate::constraints::Constraints,
     /// What the router joins: one run per net, or one per branch of a star net.
     pub runs: Vec<Run>,
 }
 
 /// Pins to join with one piece of copper. Two runs never share copper, even on the same net.
+#[derive(Clone)]
 pub struct Run {
     pub net: usize,
     /// (component index, pin index); for a star run the star point comes first.

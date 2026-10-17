@@ -16,8 +16,9 @@ top; what depends on this machine (sibling repos, tool paths) is in CLAUDE.local
   plotting script), as long as the program never needs them to run.
 - If a model setting needs changing, change the constant, justify it with the unseen-board error, and
   note it in README.md (README "Principles": no flags for these).
-- Keep the feedback loop fast: every command should finish in about a second. After touching the
-  placer, router or `measure`, time `place circuits/cat_feeder.diy` and say how long it took.
+- Waiting time: a command may take as long as making and drinking an espresso (a couple of
+  minutes); quicker is nicer but not a goal that beats clarity. After touching the placer, router or
+  `measure`, time `place circuits/cat_feeder.diy` and say how long it took.
 - When README.md's facts change (timings, what an output contains, the measurements), update it in the
   same change.
 - TODO.md is Filippo's own list of ideas, in his words. Read it before designing anything in the board
