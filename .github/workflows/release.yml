@@ -1,0 +1,100 @@
+# Releases with release-plz (configured in release-plz.toml), on every push to main:
+# - release-pr: opens or updates the PR that bumps the version and the changelog.
+# - release: when that PR has just been merged, tags vX.Y.Z and creates the GitHub release.
+# - binaries: builds the program for each system and attaches it to that release.
+#
+# The binaries are built here, not in a workflow started by the new tag, because GitHub doesn't
+# start workflows for tags created with the workflow's own token.
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: read
+    outputs:
+      releases: ${{ steps.release-plz.outputs.releases }}
+      releases_created: ${{ steps.release-plz.outputs.releases_created }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - id: release-plz
+        uses: release-plz/action@v0.5.139
+        with:
+          command: release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  binaries:
+    needs: release
+    if: needs.release.outputs.releases_created == 'true'
+    permissions:
+      contents: write
+    strategy:
+      matrix:
+        include:
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu }
+          - { os: macos-latest, target: aarch64-apple-darwin }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc }
+    runs-on: ${{ matrix.os }}
+    env:
+      TAG: ${{ fromJSON(needs.release.outputs.releases)[0].tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+      # A folder with the program and what it reads at run time (footprints.json, the example
+      # circuits), so `harmonia place` works from inside it.
+      - name: Package
+        shell: bash
+        run: |
+          name="harmonia-$TAG-${{ matrix.target }}"
+          mkdir "$name"
+          exe=harmonia; [ "$RUNNER_OS" = Windows ] && exe=harmonia.exe
+          cp "target/${{ matrix.target }}/release/$exe" footprints.json README.md LICENSE-MIT LICENSE-APACHE "$name/"
+          cp -r circuits "$name/"
+          if [ "$RUNNER_OS" = Windows ]; then
+            7z a "$name.zip" "$name" > /dev/null
+            echo "ARCHIVE=$name.zip" >> "$GITHUB_ENV"
+          else
+            tar czf "$name.tar.gz" "$name"
+            echo "ARCHIVE=$name.tar.gz" >> "$GITHUB_ENV"
+          fi
+      - name: Attach to the release
+        shell: bash
+        run: gh release upload "$TAG" "$ARCHIVE" --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  release-pr:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    concurrency:
+      group: release-plz-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: release-plz/action@v0.5.139
+        with:
+          command: release-pr
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

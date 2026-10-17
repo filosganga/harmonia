@@ -24,6 +24,11 @@ Options: `--steps 50000` (placer effort), `--seed 7` (a different random start),
 ground, guessed from common names like `+5V`, `VCC` and `GND` if left out), or a path to another netlist.
 Board size, power and ground can also live in the board file (below); a flag wins over it.
 
+**Without Rust:** each [release](https://github.com/filosganga/harmonia/releases) has the program
+ready-built for Linux (x86-64), macOS (Apple silicon) and Windows (x86-64). Unpack it and run it from
+inside its folder, which also holds `footprints.json` and the example circuits: `./harmonia place`,
+`./harmonia place circuits/cat_feeder.diy`, and so on, the same commands without `cargo run --release --`.
+
 Each `place` run prints the board as text (with a `one-of` in the board file, first a line for each case
 and which was best) and writes, in `out/` (named `rules` or `net` after the judge):
 

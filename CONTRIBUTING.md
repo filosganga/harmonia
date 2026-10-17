@@ -50,6 +50,20 @@ These are from README "Principles"; a pull request that goes against them will b
 - **Docs change with the code.** If a change makes something in README.md wrong (a timing, an output,
   a measurement, a rule), fix the README in the same pull request.
 
+## Releasing
+
+Releases are made with [release-plz](https://release-plz.dev) (`release-plz.toml`,
+`.github/workflows/release.yml`):
+
+1. After each push to main, release-plz opens or updates a pull request named like "chore: release
+   v0.2.0". It bumps `version` in `Cargo.toml` (and `Cargo.lock`) and adds the commits since the last
+   release to `CHANGELOG.md`. Edit the version or the changelog in that pull request if you want.
+2. Merging it is the release: release-plz tags the merge commit `v0.2.0` and creates the GitHub
+   release, and the same workflow builds the program for Linux, macOS and Windows and attaches it.
+
+So every release is a commit in the history, with its version written in `Cargo.toml`. Nothing is
+published on crates.io.
+
 ## Working with an AI assistant
 
 `CLAUDE.md` and `.claude/` (skills for common changes, and a `drift-check` agent that looks for
