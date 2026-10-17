@@ -1,4 +1,4 @@
-# Perfboard layout neural network
+# Harmonia: perfboard layout neural network
 
 Goal: a neural network that scores and improves component placement on perfboard, from a netlist
 with pinouts and component sizes in perfboard hole coordinates. Good-practice signals: 5V and GND
