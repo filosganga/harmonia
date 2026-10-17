@@ -1,4 +1,4 @@
-//! Writes a placement as a KiCad board (.kicad_pcb) that opens in KiCad's PCB editor.
+//! Writes a layout (src/layout.rs) as a KiCad board (.kicad_pcb) that opens in KiCad's PCB editor.
 //!
 //! Each part becomes a simple footprint built from footprints.json: round pads (square
 //! for pad 1) on a 2.54mm grid, a box on the silkscreen and courtyard, and every pad on
@@ -8,7 +8,8 @@
 //!
 //! Written in KiCad 9's file format, which KiCad 10 opens fine.
 
-use crate::board::{self, Circuit, Component, Place, Point};
+use crate::board::{self, Component, Point};
+use crate::layout::Layout;
 use std::fmt::Write;
 
 /// One hole, in millimetres.
@@ -32,7 +33,8 @@ fn uuid(n: usize) -> String {
     format!("00000000-0000-4000-8000-{n:012x}")
 }
 
-pub fn write(c: &Circuit, placement: &[Place]) -> String {
+pub fn write(layout: &Layout) -> String {
+    let (c, placement) = (&layout.circuit, &layout.placement);
     let g = board::geometry(c, placement);
     let mut ids = 0..;
     let mut s = String::new();

@@ -35,7 +35,8 @@ Follow README "Checking a change". In short:
 - If you changed what a board is measured on, run `cargo run --release -- train` again and say how far
   off the network is on unseen boards.
 
-CI runs the build, clippy, the 555 example and the cat-feeder round trip on every pull request.
+CI runs the build, clippy, the 555 example (and `draw` on the layout file it saves, which must give
+the same files) and the cat-feeder round trip on every pull request.
 
 ## Adding a footprint
 

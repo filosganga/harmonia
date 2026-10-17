@@ -7,6 +7,7 @@
 //!     cargo run --release -- place my_sketch.diy  # read a rough DIYLC layout, score it, and fit it on the board
 //!     cargo run --release -- nets my_sketch.diy   # just show the parts and connections the program understood
 //!     cargo run --release -- check sketches/      # place, write and re-read every .diy: same connections?
+//!     cargo run --release -- draw out/rules.layout.json  # draw a saved layout again, without placing it
 //!     cargo run --release -- bench                # the benchmark: place a fixed set of circuits, record the costs
 
 mod bench;
@@ -15,6 +16,7 @@ mod constraints;
 mod diylc;
 mod diylc_import;
 mod kicad_pcb;
+mod layout;
 mod netlist;
 mod nn;
 mod place;
@@ -23,6 +25,7 @@ mod sexpr;
 mod svg;
 
 use board::{BoardSize, Circuit, Measures};
+use layout::{Layout, Made};
 use nn::Net;
 use svg::Side;
 use rand::{Rng, SeedableRng, rngs::StdRng, seq::SliceRandom};
@@ -63,7 +66,7 @@ fn parse_args() -> Args {
             "--board" => args.board = Some(it.next().and_then(|s| parse_size(&s)).expect("--board <width>x<height>, like 18x12")),
             "--power" => args.power = Some(it.next().expect("--power <net name>")),
             "--ground" => args.ground = Some(it.next().expect("--ground <net name>")),
-            "place" | "train" | "evolve" | "nets" | "check" | "bench" => args.command = a,
+            "place" | "train" | "evolve" | "nets" | "check" | "draw" | "bench" => args.command = a,
             path => args.circuit = path.into(),
         }
     }
@@ -81,6 +84,7 @@ fn main() {
     std::fs::create_dir_all("out").unwrap();
     match args.command.as_str() {
         "check" => return check_cmd(&args),
+        "draw" => return draw_cmd(&args.circuit),
         "bench" => return bench::run(),
         _ => {}
     }
@@ -96,7 +100,7 @@ fn main() {
         "train" => train(cases, args.seed),
         "evolve" => evolve(cases, args.seed),
         "nets" => print_nets(cases),
-        _ => place_cmd(cases, &args, loaded.sketch),
+        _ => place_cmd(cases, &args, loaded.sketch, loaded.board_file),
     }
 }
 
@@ -204,6 +208,8 @@ enum Outcome {
     Unfinished(usize),
     /// Nets in the file but not in what was written back, and the other way round.
     Different(Vec<Vec<String>>, Vec<Vec<String>>),
+    /// The layout file, read back, doesn't give the same layout file or the same drawings: what differs.
+    LayoutChanged(String),
     /// Something stopped after the file was read: the placer, the router, the writer, or reading
     /// back what was written.
     Crashed(String),
@@ -236,8 +242,19 @@ fn check_one(path: &str, args: &Args) -> Outcome {
         let mut rng = StdRng::seed_from_u64(args.seed);
         let (k, _, best) = place_cases(&loaded.cases, board::score, args.steps, &mut rng, Some(sketch), true);
         let c = &loaded.cases[k];
+        let made = made(args, path, loaded.board_file.clone(), "sketch", &loaded.cases, k);
+        let layout = Layout::new(c.clone(), best.clone(), "check", made);
         let written = "out/check.diy";
-        std::fs::write(written, diylc::write(c, &best, "check")).unwrap();
+        let diy = diylc::write(&layout);
+        std::fs::write(written, &diy).unwrap();
+        // The layout file must keep everything the drawings need: write it, read it back, and the
+        // file and the drawings from what was read must be the same as from the layout in memory.
+        let saved = layout::to_json(&layout);
+        std::fs::write("out/check.layout.json", &saved).unwrap();
+        let read = layout::from_json(&saved);
+        if let Some(why) = differences(&layout, &read, &saved, &diy) {
+            return Outcome::LayoutChanged(why);
+        }
         let after = connections(&load(written, args).cases[0]);
         if before == after {
             return Outcome::Same;
@@ -255,6 +272,20 @@ fn check_one(path: &str, args: &Args) -> Outcome {
         Outcome::Different(missing, extra)
     };
     caught(round_trip).unwrap_or_else(Outcome::Crashed)
+}
+
+/// What differs between a layout and the same layout written to a layout file (`saved`) and read
+/// back (`read`): the file it writes again, or any of the drawings. None if nothing does.
+fn differences(layout: &Layout, read: &Layout, saved: &str, diy: &str) -> Option<String> {
+    let checks = [
+        ("the layout file written again", saved.to_string(), layout::to_json(read)),
+        ("the .diy", diy.to_string(), diylc::write(read)),
+        ("the picture", svg::draw(layout, Side::Component), svg::draw(read, Side::Component)),
+        ("the solder-side picture", svg::draw(layout, Side::Solder), svg::draw(read, Side::Solder)),
+        ("the KiCad board", kicad_pcb::write(layout), kicad_pcb::write(read)),
+    ];
+    let differ: Vec<&str> = checks.iter().filter(|(_, from_memory, from_file)| from_memory != from_file).map(|(what, ..)| *what).collect();
+    (!differ.is_empty()).then(|| format!("read back from out/check.layout.json, {} came out different", differ.join(", ")))
 }
 
 /// Places every DIYLC file given (one file, or every .diy in a folder), writes it out the way
@@ -297,6 +328,10 @@ fn check_cmd(args: &Args) {
                 missing.iter().for_each(|n| println!("                only in the file:    {}", n.join(" ")));
                 extra.iter().for_each(|n| println!("                only in the written: {}", n.join(" ")));
             }
+            Outcome::LayoutChanged(why) => {
+                wrong += 1;
+                println!("  WRONG       {name}: {why}");
+            }
             Outcome::Crashed(why) => {
                 crashed += 1;
                 println!("  STOPPED     {name}: {why}");
@@ -335,7 +370,23 @@ fn print_nets(cases: &[Circuit]) {
     }
 }
 
-fn place_cmd(cases: &[Circuit], args: &Args, sketch: Option<board::Placement>) {
+/// How a layout was made, for its layout file: from `args`, the circuit at `path`, its board file,
+/// where the placer started, and which case `k` of `cases` won.
+fn made(args: &Args, path: &str, board_file: Option<String>, start: &str, cases: &[Circuit], k: usize) -> Made {
+    Made {
+        circuit: path.to_string(),
+        board_file,
+        judge: args.judge.clone(),
+        start: start.to_string(),
+        seed: args.seed,
+        steps: args.steps,
+        case: k + 1,
+        cases: cases.len(),
+        choices: cases[k].constraints.choices.clone(),
+    }
+}
+
+fn place_cmd(cases: &[Circuit], args: &Args, sketch: Option<board::Placement>, board_file: Option<String>) {
     let t0 = Instant::now();
     let mut rng = StdRng::seed_from_u64(args.seed);
     let net = (args.judge == "net").then(|| Net::load(MODEL));
@@ -344,7 +395,7 @@ fn place_cmd(cases: &[Circuit], args: &Args, sketch: Option<board::Placement>) {
         None => board::score(m),
     };
 
-    let start_label = if sketch.is_some() { "Your sketch" } else { "Random start" };
+    let (start_label, start_name) = if sketch.is_some() { ("Your sketch", "sketch") } else { ("Random start", "random") };
     let (k, start, best) = place_cases(cases, judge, args.steps, &mut rng, sketch.as_ref(), true);
     let c = &cases[k];
     if cases.len() > 1 {
@@ -367,24 +418,55 @@ fn place_cmd(cases: &[Circuit], args: &Args, sketch: Option<board::Placement>) {
         println!("  !! {problem}");
     }
 
+    // The finished board, routed and measured once: the layout file, and every drawing made from it.
+    let made = made(args, &args.circuit, board_file, start_name, cases, k);
+    let layout = Layout::new(c.clone(), best, &label, made.clone());
+    let saved = format!("out/{}.layout.json", args.judge);
+    std::fs::write(&saved, layout::to_json(&layout)).unwrap();
+    // The start, for the page that shows it next to the result. It isn't in the layout file.
+    let start = Layout::new(c.clone(), start, start_label, made);
     let path = format!("out/{}.html", args.judge);
     let html = format!(
         "<!doctype html><meta charset='utf-8'><title>Perfboard layout</title>\
          <body style='background:#eee;display:flex;gap:16px;flex-wrap:wrap;padding:16px'>{}{}</body>",
-        svg::draw(c, &start, start_label, Side::Component),
-        svg::draw(c, &best, &label, Side::Component)
+        svg::draw(&start, Side::Component),
+        svg::draw(&layout, Side::Component)
     );
     std::fs::write(&path, html).unwrap();
-    let picture = format!("out/{}.svg", args.judge);
-    std::fs::write(&picture, svg::draw(c, &best, &label, Side::Component)).unwrap();
-    let solder = format!("out/{}-solder.svg", args.judge);
-    std::fs::write(&solder, svg::draw(c, &best, &label, Side::Solder)).unwrap();
-    let kicad = format!("out/{}.kicad_pcb", args.judge);
-    std::fs::write(&kicad, kicad_pcb::write(c, &best)).unwrap();
-    let diy = format!("out/{}.diy", args.judge);
-    std::fs::write(&diy, diylc::write(c, &best, &label)).unwrap();
-    println!("\nPictures: {picture}, {solder} (turned over to solder), {path} (before and after)");
+    let [picture, solder, kicad, diy] = write_drawings(&layout, &format!("out/{}", args.judge));
+    println!("\nLayout: {saved} (`draw {saved}` draws it again)");
+    println!("Pictures: {picture}, {solder} (turned over to solder), {path} (before and after)");
     println!("For KiCad: {kicad}   For DIYLC: {diy}   ({:.2}s)", t0.elapsed().as_secs_f64());
+}
+
+/// Draws a layout as `<stem>.svg`, `<stem>-solder.svg`, `<stem>.kicad_pcb` and `<stem>.diy`, and
+/// returns those names.
+fn write_drawings(layout: &Layout, stem: &str) -> [String; 4] {
+    let picture = format!("{stem}.svg");
+    std::fs::write(&picture, svg::draw(layout, Side::Component)).unwrap();
+    let solder = format!("{stem}-solder.svg");
+    std::fs::write(&solder, svg::draw(layout, Side::Solder)).unwrap();
+    let kicad = format!("{stem}.kicad_pcb");
+    std::fs::write(&kicad, kicad_pcb::write(layout)).unwrap();
+    let diy = format!("{stem}.diy");
+    std::fs::write(&diy, diylc::write(layout)).unwrap();
+    [picture, solder, kicad, diy]
+}
+
+/// Reads a layout file (`place` writes one, like out/rules.layout.json) and draws it again next to
+/// it, as it was saved: nothing is placed or routed.
+fn draw_cmd(path: &str) {
+    let stem = path.strip_suffix(".layout.json").unwrap_or_else(|| panic!("draw reads a layout file, like out/rules.layout.json (place writes one), not {path}"));
+    let text = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("can't read {path}: {e}"));
+    let layout = layout::from_json(&text);
+    let (m, made) = (&layout.measures, &layout.made);
+    println!("{path}: {}, from {} (seed {}, {} steps)", layout.title, made.circuit, made.seed, made.steps);
+    println!("  score {:.0}/100, cost {:.1}", board::score(m), board::cost(m));
+    for problem in &layout.problems {
+        println!("  !! {problem}");
+    }
+    let [picture, solder, kicad, diy] = write_drawings(&layout, stem);
+    println!("Pictures: {picture}, {solder}   For KiCad: {kicad}   For DIYLC: {diy}");
 }
 
 /// Example boards for training: (to learn from, kept aside to test).
