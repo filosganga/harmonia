@@ -75,7 +75,8 @@ Releases are made with [release-plz](https://release-plz.dev) (`release-plz.toml
    release, and the same workflow builds the program for Linux, macOS and Windows and attaches it.
 
 So every release is a commit in the history, with its version written in `Cargo.toml`. Nothing is
-published on crates.io.
+published on crates.io. release-plz works as the maintainer's `filosganga-release` GitHub App (the
+`APP_CLIENT_ID` variable and `APP_PRIVATE_KEY` secret), so CI runs on release PRs like on any other.
 
 ## Working with an AI assistant
 

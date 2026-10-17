@@ -3,8 +3,9 @@
 # - release: when that PR has just been merged, tags vX.Y.Z and creates the GitHub release.
 # - binaries: builds the program for each system and attaches it to that release.
 #
-# The binaries are built here, not in a workflow started by the new tag, because GitHub doesn't
-# start workflows for tags created with the workflow's own token.
+# release-plz acts as the filosganga-release GitHub App (APP_CLIENT_ID variable, APP_PRIVATE_KEY
+# secret), not with the workflow's own token: GitHub doesn't run workflows, such as CI on the
+# release PR, for pull requests and tags made with the workflow's own token.
 name: Release
 
 on:
@@ -15,8 +16,7 @@ jobs:
   release:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
-      pull-requests: read
+      contents: read
     outputs:
       releases: ${{ steps.release-plz.outputs.releases }}
       releases_created: ${{ steps.release-plz.outputs.releases_created }}
@@ -26,12 +26,17 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
+      - id: app-token
+        uses: actions/create-github-app-token@v3.2.0
+        with:
+          client-id: ${{ vars.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
       - id: release-plz
         uses: release-plz/action@v0.5.139
         with:
           command: release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
 
   binaries:
     needs: release
@@ -82,8 +87,7 @@ jobs:
   release-pr:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
-      pull-requests: write
+      contents: read
     concurrency:
       group: release-plz-${{ github.ref }}
       cancel-in-progress: false
@@ -93,8 +97,13 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
+      - id: app-token
+        uses: actions/create-github-app-token@v3.2.0
+        with:
+          client-id: ${{ vars.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
       - uses: release-plz/action@v0.5.139
         with:
           command: release-pr
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
