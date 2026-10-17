@@ -20,6 +20,7 @@
 //!             { "kind": "within", "part": "R3", "from": [17, 0], "to": [17, 11] } ] } ] },
 //!         { "kind": "keepout", "name": "M3 screw", "from": [16, 0], "to": [17, 1] },
 //!         { "kind": "near",    "pins": ["C2.1", "U1.5"] },
+//!         { "kind": "close",   "pins": ["D1.2", "U1.3"] },
 //!         { "kind": "star",    "name": "ground at C1", "at": "C1.2", "runs": [["U1.1", "D1.1"]] }
 //!       ]
 //!     }
@@ -30,7 +31,9 @@
 //! all-of and one-of combine any rules: all-of holds when every rule in it does, one-of when at
 //! least one does. The board file is read as a list of cases, each a plain list of rules: a one-of
 //! makes one case per option, so "A, one-of (B1, B2), C" is two cases, (A, B1, C) and (A, B2, C).
-//! The placer places every case and keeps the best layout.
+//! The placer places every case and keeps the best layout. A one-of only about where one part goes
+//! (fixed, edge, orientation, within, about the same part) makes no cases: the part may take any
+//! place one of its options allows, in the same run.
 //!
 //! fixed, edge, orientation and within say where one part may go, and are hard limits. In each case,
 //! each part with such rules gets the list of places (x, y, rot) they allow, and the placer only
@@ -42,7 +45,8 @@
 //!
 //! near is a preference: the two pins, on the same net, should be joined by as little copper as
 //! possible. It costs per hole of copper between them, as routed (through the star point, for two
-//! runs of a star net).
+//! runs of a star net). close is the same for two pins of any nets, measured straight across the
+//! board: for a connection the board doesn't carry, like a wire from a module's underside.
 //!
 //! star says how a net (the one its `at` pin is on) is wired: every run starts at the `at` pin and
 //! goes its own way, never sharing copper with another run. Each run in `runs` joins its pins; any
@@ -101,6 +105,8 @@ enum Rule {
     },
     /// Two pins of the same net, like ["R1.2", "U1.8"], joined by as little copper as possible.
     Near { name: Option<String>, pins: [String; 2] },
+    /// Two pins of any nets as close together as possible, straight across the board.
+    Close { name: Option<String>, pins: [String; 2] },
     /// How the net of the `at` pin is wired.
     Star {
         name: Option<String>,
@@ -124,6 +130,7 @@ impl Rule {
             Rule::OneOf { name, .. } => ("one-of", name),
             Rule::Keepout { name, .. } => ("keepout", name),
             Rule::Near { name, .. } => ("near", name),
+            Rule::Close { name, .. } => ("close", name),
             Rule::Star { name, .. } => ("star", name),
         };
         (kind, name.as_deref())
@@ -137,9 +144,21 @@ impl Rule {
         }
     }
 
-    /// For a rule about where one part goes, that part; None for the others (keepout, near, star).
-    /// Also checks the rule makes sense on a w x h board, whatever the part. Only for the plain
-    /// rules of a case (no all-of or one-of).
+    /// The part a rule is only about where it goes: fixed, edge, orientation and within, and an
+    /// all-of or one-of of those about the same part. None for any other rule.
+    fn one_part(&self) -> Option<&str> {
+        match self {
+            Rule::Fixed { part, .. } | Rule::Edge { part, .. } | Rule::Orientation { part, .. } | Rule::Within { part, .. } => Some(part),
+            Rule::AllOf { rules, .. } | Rule::OneOf { rules, .. } => {
+                let first = rules.first()?.one_part()?;
+                rules.iter().all(|r| r.one_part() == Some(first)).then_some(first)
+            }
+            Rule::Keepout { .. } | Rule::Near { .. } | Rule::Close { .. } | Rule::Star { .. } => None,
+        }
+    }
+
+    /// For a rule about where one part goes (see `one_part`), that part; None for the others.
+    /// Also checks the rule makes sense on a w x h board, whatever the part.
     fn part(&self, w: i32, h: i32) -> Option<&str> {
         let rule = self.called();
         match self {
@@ -156,8 +175,11 @@ impl Rule {
                 }
                 Some(part)
             }
-            Rule::Keepout { .. } | Rule::Near { .. } | Rule::Star { .. } => None,
-            Rule::AllOf { .. } | Rule::OneOf { .. } => unreachable!("a case has no all-of or one-of"),
+            Rule::AllOf { rules, .. } | Rule::OneOf { rules, .. } => {
+                rules.iter().for_each(|r| _ = r.part(w, h));
+                self.one_part()
+            }
+            Rule::Keepout { .. } | Rule::Near { .. } | Rule::Close { .. } | Rule::Star { .. } => None,
         }
     }
 
@@ -178,6 +200,8 @@ impl Rule {
                 let (y0, y1) = (from.1.min(to.1), from.1.max(to.1));
                 p.x >= x0 && p.x + pw - 1 <= x1 && p.y >= y0 && p.y + ph - 1 <= y1
             }
+            Rule::AllOf { rules, .. } => rules.iter().all(|r| r.allows(comp, p, w, h)),
+            Rule::OneOf { rules, .. } => rules.iter().any(|r| r.allows(comp, p, w, h)),
             _ => unreachable!("not about where a part goes"),
         }
     }
@@ -191,7 +215,7 @@ pub struct Case<'a> {
     pub choices: Vec<String>,
 }
 
-/// The board file's rules as cases: one, unless there's a one-of.
+/// The board file's rules as cases: one, unless a one-of makes more (see `rule_cases`).
 pub fn cases(file: &BoardFile) -> Vec<Case<'_>> {
     every_case(&file.constraints)
 }
@@ -221,6 +245,9 @@ fn rule_cases(rule: &Rule) -> Vec<Case<'_>> {
         Rule::AllOf { rules, .. } | Rule::OneOf { rules, .. } if rules.is_empty() => {
             panic!("board file: {} has no rules in it", rule.called())
         }
+        // A one-of only about where one part goes makes no cases: the part may take any place one
+        // of its options allows (see `allows`), so its options are all tried in the same run.
+        Rule::OneOf { .. } if rule.one_part().is_some() => vec![Case { rules: vec![rule], choices: Vec::new() }],
         Rule::AllOf { rules, .. } => every_case(rules),
         Rule::OneOf { rules, .. } => {
             let mut out = Vec::new();
@@ -283,7 +310,7 @@ impl Keepout {
 /// One case of the board file's rules, matched up with the circuit's parts.
 #[derive(Default, Clone)]
 pub struct Constraints {
-    /// Which option of each one-of this case took, like `one-of "USB on an edge": option 2 of 4`.
+    /// Which option of each one-of this case took, like `one-of "Pads by the ESP32's back pads": "by GP5"`.
     pub choices: Vec<String>,
     /// allowed[component] = the only places it may take, if the board file has rules about where
     /// it goes (fixed, edge, orientation, within). Never empty.
@@ -293,6 +320,8 @@ pub struct Constraints {
     pub keepout_holes: HashSet<Point>,
     /// (net, two of its pins as (component, pin)): join them by as little copper as possible.
     pub near: Vec<(usize, [(usize, usize); 2])>,
+    /// Two pins as (component, pin), of any nets: as close together as possible.
+    pub close: Vec<[(usize, usize); 2]>,
     pub stars: Vec<StarRule>,
 }
 
@@ -342,6 +371,13 @@ pub fn resolve(case: &Case, c: &Circuit) -> Result<Constraints, String> {
                 let net = net_of(pa).filter(|&net| net_of(pb) == Some(net));
                 let net = net.unwrap_or_else(|| panic!("board file: {called}: {a} and {b} aren't on the same net, so no copper joins them"));
                 out.near.push((net, [pa, pb]));
+            }
+            Rule::Close { pins: [a, b], .. } => {
+                let (pa, pb) = (c.find_pin(a), c.find_pin(b));
+                if pa == pb {
+                    panic!("board file: {called}: both pins are {a}");
+                }
+                out.close.push([pa, pb]);
             }
             Rule::Star { at, runs, .. } => {
                 let at_pin = c.find_pin(at);

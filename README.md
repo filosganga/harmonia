@@ -5,8 +5,8 @@ Harmonia turns parts, fits them on a perfboard and wires them up.
 
 Rust, with four small crates (`rand`, `serde`, `serde_json`, and `roxmltree` to read DIYLC files).
 Every placer step routes the whole board, so commands take seconds: on the 555, `place` takes about
-0.7s, `train` 1.8s and `evolve` 2.9s; placing the bigger cat-feeder board about 2.7s. A board file
-with a `one-of` is placed once per case (below), so it takes that many times longer. Anything up to
+0.7s, `train` 1.8s and `evolve` 2.8s; placing the bigger cat-feeder board about 5s (its board file makes two cases). A board file
+whose `one-of`s make cases (below) is placed once per case, so it takes that many times longer. Anything up to
 the time to make and drink an espresso is fine.
 
 ```bash
@@ -29,8 +29,8 @@ ready-built for Linux (x86-64), macOS (Apple silicon) and Windows (x86-64). Unpa
 inside its folder, which also holds `footprints.json` and the example circuits: `./harmonia place`,
 `./harmonia place circuits/cat_feeder.diy`, and so on, the same commands without `cargo run --release --`.
 
-Each `place` run prints the board as text (with a `one-of` in the board file, first a line for each case
-and which was best) and writes, in `out/` (named `rules` or `net` after the judge):
+Each `place` run prints the board as text (when the board file's `one-of`s make cases, first a line
+for each case and which was best) and writes, in `out/` (named `rules` or `net` after the judge):
 
 - `rules.svg`: a picture of the result. Holes are coloured by net, with the copper traces and wires, the parts,
   header pin names and modules, and beside the board the score and every net. Hover a hole for its
@@ -116,6 +116,7 @@ Next to the netlist, a JSON file with the same name (`circuits/555_blinker.json`
         { "kind": "within", "part": "R3", "from": [17, 0], "to": [17, 11] } ] } ] },
     { "kind": "keepout", "name": "M3 screw", "from": [16, 0], "to": [17, 1] },
     { "kind": "near",    "name": "C2 by CTRL", "pins": ["C2.1", "U1.5"] },
+    { "kind": "close",   "pins": ["D1.2", "U1.3"] },
     { "kind": "star",    "at": "C1.2", "runs": [["U1.1", "C2.2"], ["D1.1"]] }
   ]
 }
@@ -133,10 +134,13 @@ Next to the netlist, a JSON file with the same name (`circuits/555_blinker.json`
   DIYLC, as you drew it; for a netlist, as its `footprints.json` entry is).
 - **within**: the whole part, its outline, is inside the rectangle from one corner to the other.
 - **all-of**: every rule in `rules` holds. **one-of**: at least one does. They hold any rules, about
-  any parts, and nest. A one-of makes cases: "A, one-of (B1, B2), C" is placed twice, as (A, B1, C)
+  any parts, and nest. A one-of makes cases (except the kind below): "A, one-of (B1, B2), C" is placed twice, as (A, B1, C)
   and as (A, B2, C), and the best layout is kept. A one-of inside a one-of just adds options, an
   all-of keeps its rules together in one option, and two one-ofs side by side multiply (2 and 3
   options make 6 cases). `nets` lists the cases; an option is named by its `name`, or its number.
+  A one-of only about where one part goes (its options are fixed, edge, orientation and within
+  rules, or all-ofs of them, about the same part) makes no cases: the part may take any place one
+  of its options allows, and the placer tries them all in the same run.
   The example says "R3 stands along the left or the right edge"; "a USB socket's side is on one of
   the board's edges" is a one-of of four all-ofs, each an orientation and a `within` strip as deep as
   the part. "One of these near rules" places each and keeps the cheaper.
@@ -147,6 +151,9 @@ Next to the netlist, a JSON file with the same name (`circuits/555_blinker.json`
   laid (traces, jumpers and wires), not in a straight line. On a star net, two pins in different
   runs are only joined through the star point, so that's the way it's measured. A preference: it
   costs per hole of copper.
+- **close**: two pins of any nets should be as close together as possible, straight across the
+  board. For a connection the board doesn't carry, like a wire from pads under a module to a header.
+  A preference, at the same cost per hole as near, and counted with it.
 - **star**: how the net of the `at` pin is wired. Every run starts at `at` and goes its own way, never
   sharing copper with another run, so one part's current doesn't shift the voltage another part sees.
   Each run in `runs` joins its pins in a chain; any other pin of the net gets a run of its own, straight
@@ -155,7 +162,8 @@ Next to the netlist, a JSON file with the same name (`circuits/555_blinker.json`
 fixed, edge, orientation and within are hard limits. In each case, each part they're about gets the
 list of places (position and turn) that meet all its rules, while staying on the board and off the
 keep-outs. After every move the placer puts the part back on the nearest of them, keeping its turn if
-it can. A case where some part has no such place is left out (the run says why); if every case is,
+it can; now and then it also jumps the part to any of them, so it can get across to another option
+of a one-of, like the other edge. A case where some part has no such place is left out (the run says why); if every case is,
 the program stops. A keep-out is, for any other part, a very expensive cost like a collision for now
 (see "Next steps"): if one can't be kept (no room left), the run ends with a `!!` line naming the
 part. Coordinates are holes, counted like the numbers around the
@@ -167,9 +175,9 @@ text board. Pins are named like the `nets` command prints them.
 |---|---|
 | `circuits/555_blinker.net` | The example circuit as a KiCad netlist: the parts, their footprints, and which pins connect (nets). |
 | `circuits/555_blinker.json` | Its board file: board size, power and ground, and the rules for this board. |
-| `circuits/cat_feeder.diy` | A copy of the cat-feeder's `pcb.diy` (2026-10-17), with `cat_feeder.json`: its star wiring on C1 and R1 near GPIO2. |
+| `circuits/cat_feeder.diy` | A copy of the cat-feeder's `pcb.diy` (2026-10-17), with `cat_feeder.json`: 5 V and ground starred from where the supply comes in (Q1's cathode, the cable's ground), the driver with its own runs and C1 near it, R1 near GPIO2, `Pads` close to GP5 or GP22 (the ESP32's back pads), the ESP32's USB side on one of the board's edges, and the two cable headers (`Inlet`, `Ext`) on an edge or one hole in. |
 | `TODO.md` | The maintainer's own list of ideas for later. |
-| `src/constraints.rs` | Reads the board file and keeps its rules: where parts may go (fixed, edge, orientation, within, all-of, one-of), keep-outs, near, star. |
+| `src/constraints.rs` | Reads the board file and keeps its rules: where parts may go (fixed, edge, orientation, within, all-of, one-of), keep-outs, near, close, star. |
 | `footprints.json` | Footprint name → size in holes and where each pad is. |
 | `src/sexpr.rs` | Reads KiCad's bracket format, `(comp (ref "R1") ...)`, into a tree. |
 | `src/netlist.rs` | Turns a KiCad netlist plus `footprints.json` into the circuit the placer works on. |
@@ -179,7 +187,7 @@ text board. Pins are named like the `nets` command prints them.
 | `src/kicad_pcb.rs` | Writes the layout as a KiCad board. |
 | `src/diylc_import.rs` | Reads a DIYLC sketch: its parts, its modules (groups), and which pins connect. |
 | `src/diylc.rs` | Writes the layout as a DIYLC project (your own parts, moved, if it came from one). |
-| `src/place.rs` | The auto-placer: keeps nudging/rotating/swapping parts and keeps changes the judge likes. |
+| `src/place.rs` | The auto-placer: keeps nudging/rotating/swapping parts (and jumping a part with placement rules to another place they allow) and keeps changes the judge likes. |
 | `src/nn.rs` | The neural network, written out by hand (8 hidden neurons, 81 weights). |
 | `src/main.rs` | The commands: `place`, `train`, `evolve`, `nets` and `check`; `place` and `check` place every case of the board file's rules and keep the best. `train` and `evolve` make ~1,200 example boards (going through the board file's cases in turn, up to 12), have the rules score them, and train the network to match. |
 
@@ -195,7 +203,8 @@ text board. Pins are named like the `nets` command prints them.
 - **power**: for every supply pin, the distance to the nearest ground pin (keeps supply and ground close).
 - **overlap**: holes where two parts collide, a part hangs off the board, sits on a keep-out, or sits under a module without being low enough (very expensive).
 - **area**: the size of the rectangle that holds all parts (keeps the board compact).
-- **near**: for each `near` rule in the board file, the length of copper between its two pins, as routed.
+- **near**: for each `near` rule in the board file, the length of copper between its two pins, as
+  routed; and for each `close` rule, the distance between its two pins, straight across the board.
 
 The weighted sum is the *cost*; the score is `100 * exp(-cost / 150)`, so 100 is perfect.
 The placer itself compares costs, not scores: for a big circuit the score is low and flat (a cost
@@ -249,8 +258,8 @@ boards it never saw and save it to `out/model.json` (so the last one you ran is 
   random, keep whichever of the 20 is least wrong, repeat 1,000 times. It never works out a
   direction; it only needs to know which copy did better.
 
-Typical result on the 555: `train` is off by about 0.8 points on unseen boards in 1.8s, `evolve` by
-1 to 1.5 points (it depends on the seed) in 2.9s, after trying 19,000 networks. When you have a right answer for every example,
+Typical result on the 555: `train` is off by about 0.6 points on unseen boards in 1.8s, `evolve` by
+about 1 point (0.9 to 1.2, depending on the seed) in 2.8s, after trying 19,000 networks. When you have a right answer for every example,
 gradient descent wins. Evolution is the tool when all you can say is "this one did better than that one",
 such as a network that proposes whole layouts.
 
@@ -266,7 +275,7 @@ cargo run --release -- check my_sketches/ --steps 2000          # every .diy in 
 ```
 
 `check` places each file as `place` does (every case, keeping the best, with a line for each case
-when there's a `one-of`), writes the `.diy` (to `out/check.diy`, overwritten for each
+when there are several), writes the `.diy` (to `out/check.diy`, overwritten for each
 file), reads it back and compares the connections. For each file it says one of:
 
 - **same**: passes (only counted).
@@ -286,13 +295,13 @@ measurements; one trained when a measurement meant something else loads silently
 
 ## Known limits
 
-- **Speed.** Every placer step routes the whole board, and each case of a `one-of` is placed in full,
-  one after the other (times at the top). Many one-ofs side by side multiply the cases. Re-routing
+- **Speed.** Every placer step routes the whole board, and each case is placed in full, one after
+  the other (times at the top). One-ofs that make cases, side by side, multiply them. Re-routing
   only what a move changes, or placing the cases at the same time, would make it quicker; neither is
   built.
-- **A case starts from your sketch.** With a `one-of`, a case that moves a part far from where you
-  drew it (to the other edge) starts with that part on top of others, and may still have collisions
-  when the steps run out; try more `--steps`.
+- **Layouts depend on the seed.** On the cat feeder, different seeds land on quite different layouts
+  and costs, and a part whose rules send it far from where you drew it starts on top of others. Try
+  more `--steps` and two or three `--seed`s, and compare the costs.
 - **The router is greedy.** It routes one run at a time, shortest first, and never undoes one. A
   different order can sometimes avoid a jumper it needed. A connection gets at most one wire; if that's
   not enough it gets one solder-side wire straight to the pin.
@@ -307,7 +316,7 @@ measurements; one trained when a measurement meant something else loads silently
 - **Angled parts from DIYLC.** A two-legged part drawn at an angle only takes its two leg holes, so the
   placer treats it like a module: low parts may go under it, and jumpers may pass over it.
 - **Scores of big circuits are low.** The weights were set on the 555; the cat-feeder board scores
-  about 5–15 even when it's good. Compare costs between layouts of the same circuit, not across circuits.
+  about 4–10 even when it's good. Compare costs between layouts of the same circuit, not across circuits.
 
 ## Principles
 
@@ -316,7 +325,7 @@ measurements; one trained when a measurement meant something else loads silently
 - **Hard rules, preferences, taste.** Facts about the hardware and limits of a board (fixed parts,
   edges, keep-outs, collisions) should be hard rules the placer enforces, never learned; fixed parts
   and the other placement rules already are, the rest is "Next steps" 1. What one board wants goes in its board file:
-  `near` with a fixed cost per hole, `star` as how its nets are split into runs. The network is for
+  `near` and `close` with a fixed cost per hole, `star` as how its nets are split into runs. The network is for
   taste among layouts that are already allowed.
 - **Model settings are the author's job.** Hidden neurons, learning rates, generations and the rule
   weights are constants in the code, not flags. Flags are for your problem: the circuit, the board,

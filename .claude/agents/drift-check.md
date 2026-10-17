@@ -78,8 +78,8 @@ touches, and every constant the diff changes, grep the whole repo for the old va
 - **No flags for model settings.** A new CLI flag for hidden neurons, learning rates, generations,
   rule weights or router costs is a finding. Flags are for the user's problem: circuit, board, power
   and ground, seed, steps.
-- **Hard rules are never learned.** Placement rules (fixed, edge, orientation, within; all-of and
-  one-of become cases, each placed on its own) are enforced by the placer (`Constraints::allowed`,
+- **Hard rules are never learned.** Placement rules (fixed, edge, orientation, within, and all-of
+  and one-of of them) are enforced by the placer (`Constraints::allowed`,
   kept by `constraints::apply`), and a
   part with them also stays on the board and off keep-outs. Otherwise collisions, hanging off the
   board and keep-outs are still a cost (the

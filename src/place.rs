@@ -36,7 +36,12 @@ pub fn anneal(
         let mut new = cur.clone();
         let k = movable[rng.random_range(0..movable.len())];
         let roll: f64 = rng.random();
-        if roll < 0.6 {
+        let allowed = c.constraints.allowed[k].as_ref();
+        if let Some(allowed) = allowed.filter(|_| rng.random::<f64>() < 0.1) {
+            // jump to any place the part's rules allow: the only way across to another option of
+            // a one-of that's far away (the other edge) or a half turn off
+            new[k] = allowed[rng.random_range(0..allowed.len())];
+        } else if roll < 0.6 {
             // nudge
             new[k].x = (new[k].x + rng.random_range(-2..=2)).clamp(0, w - 1);
             new[k].y = (new[k].y + rng.random_range(-2..=2)).clamp(0, h - 1);

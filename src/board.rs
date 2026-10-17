@@ -22,7 +22,7 @@ pub const WEIGHTS: [f64; 8] = [
     1.5,  // power: per hole between each 5V pin and its nearest GND pin
     40.0, // overlap: per hole where two parts collide or a part hangs off the board
     0.15, // area: per hole of the rectangle that encloses all parts
-    4.0,  // near: per hole of copper between two pins the board file wants near each other
+    4.0,  // near: per hole between two pins the board file wants near (along copper) or close (straight)
 ];
 
 /// Turns the cost into a 0-100 score (100 = perfect, about 37 at cost == SCORE_SCALE).
@@ -226,7 +226,13 @@ pub fn measure(c: &Circuit, placement: &[Place]) -> Measures {
     let area = (max_x - min_x + 1) * (max_y - min_y + 1);
 
     // For each "near" rule: holes of copper between its two pins, the way the router joined them.
-    let near: f64 = c.constraints.near.iter().map(|&(net, [(ca, pa), (cb, pb)])| routing.copper_between(c, net, g.pins[ca][pa], g.pins[cb][pb])).sum::<f64>() + 0.0; // + 0.0: no rules is 0, not -0
+    // For each "close" rule: holes between its two pins, straight across the board.
+    let along_copper = c.constraints.near.iter().map(|&(net, [(ca, pa), (cb, pb)])| routing.copper_between(c, net, g.pins[ca][pa], g.pins[cb][pb]));
+    let straight = c.constraints.close.iter().map(|&[(ca, pa), (cb, pb)]| {
+        let ((xa, ya), (xb, yb)) = (g.pins[ca][pa], g.pins[cb][pb]);
+        (((xa - xb).pow(2) + (ya - yb).pow(2)) as f64).sqrt()
+    });
+    let near: f64 = along_copper.chain(straight).sum::<f64>() + 0.0; // + 0.0: no rules is 0, not -0
 
     Measures([
         routing.trace_length(),

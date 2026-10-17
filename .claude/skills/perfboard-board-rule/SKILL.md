@@ -1,6 +1,6 @@
 ---
 name: perfboard-board-rule
-description: Procedure for adding or changing a rule in the perfboard board file (circuits/<name>.json, read by src/constraints.rs), deciding whether it is a hard limit or a preference and wiring it into the placer, router or score accordingly. Use when asked for a new constraint, a new kind of board-file rule, or a change to fixed, edge, orientation, within, all-of, one-of, keepout, near or star.
+description: Procedure for adding or changing a rule in the perfboard board file (circuits/<name>.json, read by src/constraints.rs), deciding whether it is a hard limit or a preference and wiring it into the placer, router or score accordingly. Use when asked for a new constraint, a new kind of board-file rule, or a change to fixed, edge, orientation, within, all-of, one-of, keepout, near, close or star.
 ---
 
 # Adding a board-file rule
@@ -13,15 +13,18 @@ description: Procedure for adding or changing a rule in the perfboard board file
 
 | Kind | Example | Where |
 |---|---|---|
-| Hard limit on where a part goes | fixed, edge, orientation, within | a `Rule` with a part: `Rule::part` (name the part, check the rule alone) and `Rule::allows` (does it allow this place). `resolve` lists each part's allowed places and `apply` keeps the part on them; nothing else to wire |
+| Hard limit on where a part goes | fixed, edge, orientation, within | a `Rule` with a part: `Rule::one_part` and `Rule::part` (name the part; `part` also checks the rule alone) and `Rule::allows` (does it allow this place). `resolve` lists each part's allowed places and `apply` keeps the part on them; nothing else to wire |
 | Hard limit on copper | keep-out holes, star separation | `src/route.rs` grid (`owner`, `keepout`), or `constraints::runs` for how a net splits |
-| Preference | near | a new measurement with a fixed weight: use the `perfboard-measurement` skill |
+| Preference | near, close | a measurement with a fixed weight (both count in `near`); a new one: use the `perfboard-measurement` skill |
 
   Hard limits are never learned by the network. A preference never makes a layout illegal.
 
   all-of and one-of are not kinds of rule to wire anywhere: when the board file is read, `cases`
   expands them into plain lists of rules (a one-of makes one case per option), and every case is
-  resolved and placed on its own. A new rule only ever sees one case, so it never deals with them.
+  resolved and placed on its own. The exception is a one-of only about where one part goes
+  (`Rule::one_part`): it stays whole, and `Rule::allows` lets the part take any place one of its
+  options allows. A new placement rule only needs `one_part`, `part` and `allows`; any other new rule only ever
+  sees one case.
 
 ## Code (`src/constraints.rs`)
 

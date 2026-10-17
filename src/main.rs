@@ -96,7 +96,7 @@ fn main() {
 
 /// A circuit and the board file next to it, as `load` reads them.
 struct Loaded {
-    /// The circuit once for each case of the board file's rules (one, unless there's a one-of).
+    /// The circuit once for each case of the board file's rules (one, unless a one-of makes more).
     cases: Vec<Circuit>,
     /// Cases left out because some part has no place meeting their rules, and why.
     left_out: Vec<String>,
@@ -168,7 +168,7 @@ fn place_cases(
     (k, start, layout)
 }
 
-/// Which option of each one-of a case took, like `one-of "USB on an edge": option 2 of 4`.
+/// Which option of each one-of a case took, like `one-of "Pads by the ESP32's back pads": "by GP5"`.
 fn case_name(c: &Circuit) -> String {
     c.constraints.choices.join("; ")
 }
