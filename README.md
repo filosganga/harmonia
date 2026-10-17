@@ -1,4 +1,7 @@
-# Perfboard layout + a tiny neural network
+# Harmonia: perfboard layout + a tiny neural network
+
+Before it meant harmony, the Greek ἁρμονία was a carpenter's word for a joint: things fitted together.
+Harmonia turns parts, fits them on a perfboard and wires them up.
 
 Rust, with four small crates (`rand`, `serde`, `serde_json`, and `roxmltree` to read DIYLC files).
 Every placer step routes the whole board, so commands take seconds: on the 555, `place` takes about
