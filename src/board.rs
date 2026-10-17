@@ -10,12 +10,13 @@ use std::fmt::Write;
 
 pub type Point = (i32, i32);
 
-/// The eight things the rules measure. They are also the network's inputs.
-pub const FEATURES: [&str; 8] = ["wire", "jumpers", "jumper_len", "bottom", "power", "overlap", "crowding", "near"];
+/// The nine things the rules measure. They are also the network's inputs.
+pub const FEATURES: [&str; 9] = ["wire", "turns", "jumpers", "jumper_len", "bottom", "power", "overlap", "crowding", "near"];
 
 /// How much each measurement costs, in the same order as FEATURES. Lower total cost = better board.
-pub const WEIGHTS: [f64; 8] = [
+pub const WEIGHTS: [f64; 9] = [
     1.0,  // wire: per hole of copper trace, as routed (see route.rs, whose costs match these)
+    1.0,  // turns: per right angle's worth of bending a trace (45° is 2, 135° is 3; see route::bend)
     5.0,  // jumpers: per jumper on the parts' side, where a trace couldn't get through
     2.0,  // jumper_len: per hole of jumper or solder-side wire: twice a trace, so they stay short
     30.0, // bottom: per wire on the solder side, the last resort
@@ -233,6 +234,7 @@ pub fn measure(c: &Circuit, placement: &[Place]) -> Measures {
 
     Measures([
         routing.trace_length(),
+        routing.turns(&g) as f64,
         routing.jumpers.len() as f64,
         routing.jumper_length(),
         routing.bottom.len() as f64,

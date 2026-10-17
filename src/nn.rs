@@ -14,7 +14,7 @@ use rand::{Rng, SeedableRng, rngs::StdRng};
 use serde::{Deserialize, Serialize};
 
 /// Rough size of each measurement, so all inputs land around 0..1. Same order as FEATURES.
-const SCALE: [f64; FEATURES.len()] = [100.0, 5.0, 20.0, 2.0, 20.0, 20.0, 20.0, 10.0];
+const SCALE: [f64; FEATURES.len()] = [100.0, 10.0, 5.0, 20.0, 2.0, 20.0, 20.0, 20.0, 10.0];
 
 pub fn inputs(m: &Measures) -> Vec<f64> {
     m.0.iter().zip(SCALE).map(|(v, s)| v / s).collect()

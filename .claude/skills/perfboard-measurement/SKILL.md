@@ -14,7 +14,7 @@ A measurement is in five places that the compiler only partly ties together.
 2. `src/nn.rs`: `SCALE`, one rough size per measurement so inputs land around 0..1, **same order as
    FEATURES**. The compiler checks the length, not the order.
 3. `src/route.rs`: the router's costs are the matching weights × 10 (`STRAIGHT`/`DIAGONAL` for wire,
-   `JUMPER_PER_HOLE` for jumper length). Change both together, or the router picks routes the score
+   `TURN` for turns, `JUMPER_PER_HOLE` for jumper length). Change both together, or the router picks routes the score
    doesn't prefer.
 4. The text report and the SVG legend print every measurement themselves; nothing to change there.
 
@@ -26,7 +26,7 @@ means something else with the same count, an old model loads silently and judges
 
 ## README
 
-- "How a board is judged": one bullet per measurement, and the count in words ("measures eight things").
+- "How a board is judged": one bullet per measurement, and the count in words ("measures N things").
 - "Two ways to train": "all N weights" with N = inputs × 8 + 8 + 8 + 1, and the typical errors and times.
 - "The pieces", the `src/nn.rs` row: the same weight count.
 - "Where the neural network fits": how many numbers the network gets.

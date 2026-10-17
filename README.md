@@ -5,7 +5,7 @@ Harmonia turns parts, fits them on a perfboard and wires them up.
 
 Rust, with four small crates (`rand`, `serde`, `serde_json`, and `roxmltree` to read DIYLC files).
 Every placer step routes the whole board, so commands take seconds: on the 555, `place` takes about
-0.7s, `train` 1.9s and `evolve` 3.0s; placing the bigger cat-feeder board about 5.5s (its board file makes two cases). A board file
+2.4s, `train` 6s and `evolve` 7s; placing the bigger cat-feeder board about 16s (its board file makes two cases). A board file
 whose `one-of`s make cases (below) is placed once per case, so it takes that many times longer. Anything up to
 the time to make and drink an espresso is fine.
 
@@ -188,14 +188,20 @@ text board. Pins are named like the `nets` command prints them.
 | `src/diylc_import.rs` | Reads a DIYLC sketch: its parts, its modules (groups), and which pins connect. |
 | `src/diylc.rs` | Writes the layout as a DIYLC project (your own parts, moved, if it came from one). |
 | `src/place.rs` | The auto-placer: keeps nudging/rotating/swapping parts (and jumping a part with placement rules to another place they allow) and keeps changes the judge likes. |
-| `src/nn.rs` | The neural network, written out by hand (8 hidden neurons, 81 weights). |
+| `src/nn.rs` | The neural network, written out by hand (8 hidden neurons, 89 weights). |
 | `src/main.rs` | The commands: `place`, `train`, `evolve`, `nets` and `check`; `place` and `check` place every case of the board file's rules and keep the best. `train` and `evolve` make ~1,200 example boards (going through the board file's cases in turn, up to 12), have the rules score them, and train the network to match. |
 
 ## How a board is judged
 
-`src/board.rs` measures eight things (weights in `WEIGHTS`):
+`src/board.rs` measures nine things (weights in `WEIGHTS`):
 
 - **wire**: total length of copper trace, in holes, as routed (below).
+- **turns**: how hard the traces' bends are to make. Traces are laid with copper wire, and each
+  bend is one more to make by hand, so a straight trace beats a zig-zag. A right angle, the easiest,
+  counts 1; a gentle 45° turn, onto or off a diagonal, counts 2, since it's harder to land on the
+  right hole; a sharp 135° turn counts 3. A pin or a wire's leg is free, since a trace starts
+  there, and so is a junction where three or more steps meet, which is soldered like a pin.
+  Jumpers never bend: each is one straight wire.
 - **jumpers**: how many jumpers (on the parts' side) the router needed where a trace couldn't get through.
 - **jumper_len**: total length of jumpers and solder-side wires. A hole of it costs twice a hole of
   trace, so they stay short.
@@ -225,7 +231,10 @@ two branches of the same star net.
 - A **copper trace** is on the solder side. It goes hole to neighbouring hole: across, down, or at 45°.
   It touches every hole it passes, so it can't pass a hole with another run's pin or trace, or a
   keep-out, and two diagonals can't cross between four holes. It can run under parts, since it's on
-  the other side.
+  the other side. A right angle costs as much as a hole of trace, a 45° turn two and a 135° turn three
+  (the `turns` weight), so the router takes a straight way over a slightly shorter zig-zag, and a
+  right angle over two 45° turns unless the diagonal saves a lot. Making turns dearer than that
+  was tried: the router then detours, boxes later runs in, and needs more jumpers.
 - A **jumper** is a wire on the parts' side, used where traces can't get through: traces run up to a
   free hole, the jumper hops over, and traces carry on from where it lands. It goes across, down or at
   45°, 2 to 10 holes long. It can't pass over a part, a pin or a keep-out (it can go under a module's
@@ -257,13 +266,13 @@ boards it never saw and save it to `out/model.json` (so the last one you ran is 
 
 - **`train` (gradient descent):** for each board, compare the network's guess with the rules'
   score and nudge every weight in the direction that makes it less wrong. One example points
-  all 81 weights the right way at once.
+  all 89 weights the right way at once.
 - **`evolve` (evolution):** make 19 copies of the network with every weight changed a little at
   random, keep whichever of the 20 is least wrong, repeat 1,000 times. It never works out a
   direction; it only needs to know which copy did better.
 
-Typical result on the 555: `train` is off by about 0.7 points on unseen boards in 1.9s, `evolve` by
-about 1 point (0.8 to 1.2, depending on the seed) in 3.0s, after trying 19,000 networks. When you have a right answer for every example,
+Typical result on the 555: `train` is off by about 0.9 points on unseen boards (0.7 to 1.0) in 6s, `evolve` by
+about 1.3 points (1.1 to 1.6, depending on the seed) in 7s, after trying 19,000 networks. When you have a right answer for every example,
 gradient descent wins. Evolution is the tool when all you can say is "this one did better than that one",
 such as a network that proposes whole layouts.
 
@@ -320,7 +329,7 @@ measurements; one trained when a measurement meant something else loads silently
 - **Angled parts from DIYLC.** A two-legged part drawn at an angle only takes its two leg holes, so the
   placer treats it like a module: low parts may go under it, and jumpers may pass over it.
 - **Scores of big circuits are low.** The weights were set on the 555; the cat-feeder board scores
-  about 4–10 even when it's good. Compare costs between layouts of the same circuit, not across circuits.
+  in single digits even when it's good. Compare costs between layouts of the same circuit, not across circuits.
 
 ## Principles
 
@@ -346,7 +355,7 @@ It becomes useful when the "right answers" come from something the rules can't e
 
 1. **Your taste.** Rate layouts yourself; the network learns what you like, including things
    that are hard to write down as a rule.
-2. **Richer input.** Feed it the board itself (which hole holds what) instead of eight numbers,
+2. **Richer input.** Feed it the board itself (which hole holds what) instead of nine numbers,
    so it can spot patterns no rule measures. That's when a library like Burn starts paying off.
 3. **Placing directly.** Train a network that proposes a layout in one shot instead of the
    placer trying thousands of moves.

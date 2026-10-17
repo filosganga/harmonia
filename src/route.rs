@@ -18,7 +18,8 @@
 //!
 //! Runs are routed one at a time, shortest first, and each one is grown like a tree: from the
 //! pins joined so far, find the cheapest way to the nearest pin not joined yet ("A*" search: try
-//! the most promising holes first, guided by the straight-line distance still to go).
+//! the most promising holes first, guided by the straight-line distance still to go). A trace
+//! pays for its length and for each turn, since every bend is one more to make in copper wire.
 
 use crate::board::{Circuit, Geometry, Point};
 use std::cmp::Reverse;
@@ -79,6 +80,30 @@ impl Routing {
         }
     }
 
+    /// How hard the traces' turns are to bend, in right angles (see `bend`): at holes where exactly
+    /// two steps of one run meet, not in a line. A pin or a wire's leg is free, since a trace starts
+    /// there, and so is a junction of three or more steps, which is soldered like a pin.
+    pub fn turns(&self, g: &Geometry) -> u32 {
+        let pins: HashSet<Point> = g.pins.iter().flatten().copied().collect();
+        let legs: HashSet<(usize, Point)> =
+            self.jumpers.iter().chain(&self.bottom).flat_map(|&(run, a, b)| [(run, a), (run, b)]).collect();
+        // For each hole of each run: the directions its steps leave in.
+        let mut out_of: HashMap<(usize, Point), Vec<Point>> = HashMap::new();
+        for &(run, a, b) in &self.traces {
+            let d = (b.0 - a.0, b.1 - a.1);
+            out_of.entry((run, a)).or_default().push(d);
+            out_of.entry((run, b)).or_default().push((-d.0, -d.1));
+        }
+        out_of
+            .iter()
+            .filter(|(at, _)| !pins.contains(&at.1) && !legs.contains(at))
+            .map(|(_, dirs)| match dirs[..] {
+                [a, b] => bend((-a.0, -a.1), b),
+                _ => 0,
+            })
+            .sum()
+    }
+
     /// The traces as straight runs: steps in a row, in the same direction, joined into one.
     pub fn straight_traces(&self) -> Vec<(usize, Point, Point)> {
         let mut out: Vec<(usize, Point, Point)> = Vec::new();
@@ -100,6 +125,59 @@ impl Routing {
 /// They match the score's weights (board::WEIGHTS) times ten, so the router and the score agree.
 const STRAIGHT: u32 = 10;
 const DIAGONAL: u32 = 14;
+/// What a trace pays for each right angle's worth of bending (see `bend`), except at a pin, where
+/// it starts anyway.
+const TURN: u32 = 10;
+/// How hard each turn is to bend in copper wire, counted in right angles, which are the easiest.
+/// A gentle 45° turn, onto or off a diagonal, is harder to bend so it lands on the right hole, and
+/// a sharp 135° turn harder still.
+const RIGHT: u32 = 1;
+const GENTLE: u32 = 2;
+const SHARP: u32 = 3;
+
+/// How hard it is to bend a trace arriving in direction `a` so it leaves in direction `b` (each a
+/// step across, down or diagonal), in right angles; 0 if it goes straight on.
+const fn bend(a: Point, b: Point) -> u32 {
+    // The dot product says how far apart the two directions are: positive below 90°, zero at 90°.
+    let dot = a.0 * b.0 + a.1 * b.1;
+    if a.0 == b.0 && a.1 == b.1 {
+        0
+    } else if dot > 0 {
+        GENTLE
+    } else if dot == 0 {
+        RIGHT
+    } else {
+        SHARP
+    }
+}
+
+/// `AHEAD[h][g]`: at most how much more bending, in right angles, a trace that came into a hole
+/// heading `h` may need from there than one that came in heading `g`, whichever way it goes on.
+/// So once a hole was reached heading `h` at cost c, reaching it heading `g` at c + AHEAD[h][g] *
+/// TURN or more can't lead anywhere cheaper. (START, a search's own start, turns free.)
+const AHEAD: [[u32; HEADINGS]; HEADINGS] = {
+    const fn bend_from(h: usize, x: usize) -> u32 {
+        if h == START { 0 } else { bend(DIRS[h], DIRS[x]) }
+    }
+    let mut table = [[0; HEADINGS]; HEADINGS];
+    let mut h = 0;
+    while h < HEADINGS {
+        let mut g = 0;
+        while g < HEADINGS {
+            let mut x = 0;
+            while x < DIRS.len() {
+                let (from_h, from_g) = (bend_from(h, x), bend_from(g, x));
+                if from_h > from_g && from_h - from_g > table[h][g] {
+                    table[h][g] = from_h - from_g;
+                }
+                x += 1;
+            }
+            g += 1;
+        }
+        h += 1;
+    }
+    table
+};
 /// Each hole of a jumper or solder-side wire costs twice a hole of trace. What each wire costs on
 /// top of its length (the "jumpers" and "bottom" weights) doesn't change the router's choice: it
 /// takes a jumper whenever one fits and a solder-side wire only when none does, and compares wires
@@ -392,32 +470,46 @@ fn octile(a: Point, b: Point) -> u32 {
     STRAIGHT * dx.max(dy) + (DIAGONAL - STRAIGHT) * dx.min(dy)
 }
 
+/// The search doesn't just go from hole to hole: it remembers which way it came in, so that a
+/// step in another direction can pay for the turn. Each hole is HEADINGS places to be: arrived
+/// along one of the eight DIRS, or not arrived at all (where a search starts), which turns free.
+const HEADINGS: usize = DIRS.len() + 1;
+const START: usize = DIRS.len();
+
 /// Memory for `spread`, kept between searches so each one doesn't start by allocating and
-/// clearing its own. `seen[i] == round` says `cost[i]` and `prev[i]` belong to this search.
+/// clearing its own. Indexed by state: hole * HEADINGS + heading. `seen[s] == round` says
+/// `cost[s]` and `prev[s]` belong to this search; `popped[i] == round` says hole `i` was handled,
+/// and `first[i]` is the state it was first handled in, its cheapest.
 struct Scratch {
     cost: Vec<u32>,
     prev: Vec<usize>,
     seen: Vec<u32>,
+    popped: Vec<u32>,
+    first: Vec<usize>,
     round: u32,
     queue: BinaryHeap<Reverse<(u32, u32, usize)>>,
 }
 
 impl Scratch {
     fn new(holes: usize) -> Scratch {
-        Scratch { cost: vec![0; holes], prev: vec![0; holes], seen: vec![0; holes], round: 0, queue: BinaryHeap::new() }
+        let states = holes * HEADINGS;
+        Scratch { cost: vec![0; states], prev: vec![0; states], seen: vec![0; states], popped: vec![0; holes], first: vec![0; holes], round: 0, queue: BinaryHeap::new() }
     }
 
-    /// Cost to reach hole `i` in the last search, if it was reached.
+    /// Cost to reach hole `i` in the last search, coming in from any direction, if it was reached.
+    /// (The search handles every hole it reaches, unless it stopped early: then only those.)
     fn reached(&self, i: usize) -> Option<u32> {
-        (self.seen[i] == self.round).then_some(self.cost[i])
+        (self.popped[i] == self.round).then(|| self.cost[self.first[i]])
     }
 
-    /// The holes from where the last search started to hole `i`.
-    fn path_to(&self, grid: &Grid, mut i: usize) -> Vec<Point> {
-        let mut path = vec![grid.hole(i)];
-        while self.prev[i] != usize::MAX {
-            i = self.prev[i];
-            path.push(grid.hole(i));
+    /// The holes from where the last search started to hole `i`, the cheapest way.
+    fn path_to(&self, grid: &Grid, i: usize) -> Vec<Point> {
+        assert!(self.popped[i] == self.round, "path_to a hole the search didn't reach");
+        let mut s = self.first[i];
+        let mut path = vec![grid.hole(s / HEADINGS)];
+        while self.prev[s] != usize::MAX {
+            s = self.prev[s];
+            path.push(grid.hole(s / HEADINGS));
         }
         path.reverse();
         path
@@ -425,36 +517,48 @@ impl Scratch {
 }
 
 /// Spreads traces out from `from`, cheapest hole first, calling `done(hole, cost)` on each hole
-/// as it gets there; stops when `done` says so (then returns true) or when it runs out of holes
-/// it can reach. `mem` then holds the cheapest cost to every hole reached, and the way back.
+/// the first (cheapest) time it gets there; stops when `done` says so (then returns true) or when
+/// it runs out of holes it can reach. `mem` then holds the cheapest cost to every hole reached,
+/// and the way back. A trace pays TURN per right angle of bending (`bend`), except at a pin.
 /// With `towards`, it tries holes in that direction first ("A*"), which finds it sooner.
 fn spread(grid: &Grid, mem: &mut Scratch, from: &[Point], towards: Option<Point>, run: usize, net: usize, mut done: impl FnMut(Point, u32) -> bool) -> bool {
     let guess = |p: Point| towards.map_or(0, |t| octile(p, t));
     mem.round += 1;
     mem.queue.clear();
-    let Scratch { cost, prev, seen, round, queue } = mem;
+    let Scratch { cost, prev, seen, popped, first, round, queue } = mem;
     let round = *round;
     for &p in from {
-        let i = grid.at(p);
-        (cost[i], prev[i], seen[i]) = (0, usize::MAX, round);
-        queue.push(Reverse((guess(p), 0, i)));
+        let s = grid.at(p) * HEADINGS + START;
+        (cost[s], prev[s], seen[s]) = (0, usize::MAX, round);
+        queue.push(Reverse((guess(p), 0, s)));
     }
-    while let Some(Reverse((_, so_far, i))) = queue.pop() {
-        if so_far > cost[i] {
-            continue; // already reached this hole more cheaply
+    while let Some(Reverse((_, so_far, s))) = queue.pop() {
+        if so_far > cost[s] {
+            continue; // already got here, the same way in, more cheaply
         }
+        let (i, heading) = (s / HEADINGS, s % HEADINGS);
         let p = grid.hole(i);
-        if done(p, so_far) {
-            return true;
+        if popped[i] != round {
+            (popped[i], first[i]) = (round, s);
+            if done(p, so_far) {
+                return true;
+            }
+        } else if grid.pin[i] || so_far >= cost[first[i]] + AHEAD[first[i] % HEADINGS][heading] * TURN {
+            // Coming in the cheapest way and turning would do as well: nothing new from here.
+            continue;
         }
-        for (dx, dy) in DIRS {
+        for (k, (dx, dy)) in DIRS.into_iter().enumerate() {
             let q = (p.0 + dx, p.1 + dy);
             let diagonal = dx != 0 && dy != 0;
             if grid.on_board(q) && grid.open(q, run, net) && (!diagonal || grid.diagonal_free(p, q, run)) {
-                let (j, c) = (grid.at(q), so_far + if diagonal { DIAGONAL } else { STRAIGHT });
-                if seen[j] != round || c < cost[j] {
-                    (cost[j], prev[j], seen[j]) = (c, i, round);
-                    queue.push(Reverse((c + guess(q), c, j)));
+                let turn = if heading == START || grid.pin[i] { 0 } else { bend(DIRS[heading], DIRS[k]) * TURN };
+                let c = so_far + if diagonal { DIAGONAL } else { STRAIGHT } + turn;
+                let j = grid.at(q);
+                let t = j * HEADINGS + k;
+                let beaten = popped[j] == round && (grid.pin[j] || c >= cost[first[j]] + AHEAD[first[j] % HEADINGS][k] * TURN);
+                if !beaten && (seen[t] != round || c < cost[t]) {
+                    (cost[t], prev[t], seen[t]) = (c, s, round);
+                    queue.push(Reverse((c + guess(q), c, t)));
                 }
             }
         }

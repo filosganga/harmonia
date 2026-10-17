@@ -61,9 +61,9 @@ touches, and every constant the diff changes, grep the whole repo for the old va
   It went stale twice, each time a measurement was added.
 - `SCALE` in `src/nn.rs` must list one scale per measurement **in the same order as `FEATURES`**.
   The compiler checks the length, not the order.
-- `STRAIGHT`, `DIAGONAL`, `JUMPER_PER_HOLE`, `MAX_JUMP` in `src/route.rs` against README "How it
+- `STRAIGHT`, `DIAGONAL`, `TURN`, `JUMPER_PER_HOLE`, `MAX_JUMP` in `src/route.rs` against README "How it
   routes" ("2 to 10 holes long") and against `WEIGHTS`: the router's costs are the matching weights
-  times ten (wire, jumper_len), so the router and the score agree on what's cheaper. The jumpers and
+  times ten (wire, turns, jumper_len), so the router and the score agree on what's cheaper. The jumpers and
   bottom weights have no router constant on purpose: the router takes a jumper whenever one fits.
 - `SCORE_SCALE` against the score formula in README.
 - Timings and errors (README intro, "Two ways to train", "Known limits", CLAUDE.md). You can't run
