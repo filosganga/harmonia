@@ -1,0 +1,16 @@
+# How Harmonia is released (see CONTRIBUTING.md "Releasing").
+#
+# After each push to main, release-plz opens or updates a "release PR" that bumps the version in
+# Cargo.toml and adds the changes to CHANGELOG.md. Merging that PR is the release: release-plz
+# tags the merge commit vX.Y.Z and creates the GitHub release, and .github/workflows/release.yml
+# attaches the programs built for each system.
+
+[workspace]
+# The last released version comes from the git tags, not from crates.io.
+git_only = true
+# Not published on crates.io (yet).
+publish = false
+# A program, not a library: there's no public API whose compatibility to check.
+semver_check = false
+# Release only when a release PR is merged, not on every push.
+release_always = false
