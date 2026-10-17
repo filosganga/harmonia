@@ -10,20 +10,96 @@
     },
     {
       "kind": "star",
-      "name": "5v from C1",
-      "at": "C1.+",
+      "name": "5v from the diode-OR",
+      "at": "Q1.2",
       "runs": [
-        ["DRV8833.DRV8833-L.Vcc", "Ext.5V"],
+        ["DRV8833.DRV8833-L.Vcc", "C1.+", "Ext.5V"],
         ["ESP32C6.ESP32C6-L.5v"]
       ]
     },
     {
       "kind": "star",
-      "name": "GND from C1",
-      "at": "C1.-",
+      "name": "GND from the cable",
+      "at": "Inlet.In.GND",
       "runs": [
-        ["DRV8833.DRV8833-L.GND", "Ext.GND"],
+        ["DRV8833.DRV8833-L.GND", "C1.-", "Ext.GND"],
         ["ESP32C6.ESP32C6-L.GND", "DS3231.DS3231.GND"]
+      ]
+    },
+    {
+      "kind": "near",
+      "name": "C1 + at the driver",
+      "pins": ["C1.+", "DRV8833.DRV8833-L.Vcc"]
+    },
+    {
+      "kind": "near",
+      "name": "C1 - at the driver",
+      "pins": ["C1.-", "DRV8833.DRV8833-L.GND"]
+    },
+    {
+      "kind": "one-of",
+      "name": "Pads by the ESP32's back pads",
+      "rules": [
+        { "kind": "close", "name": "by GP5", "pins": ["Pads.GP8", "ESP32C6.ESP32C6-L.GP5"] },
+        { "kind": "close", "name": "by GP22", "pins": ["Pads.GP8", "ESP32C6.ESP32C6-R.GP22"] }
+      ]
+    },
+    {
+      "kind": "one-of",
+      "name": "USB on a board edge",
+      "rules": [
+        {
+          "kind": "all-of",
+          "name": "USB right",
+          "rules": [
+            { "kind": "orientation", "part": "ESP32C6", "rot": 0 },
+            { "kind": "within", "part": "ESP32C6", "from": [13, 0], "to": [23, 17] }
+          ]
+        },
+        {
+          "kind": "all-of",
+          "name": "USB bottom",
+          "rules": [
+            { "kind": "orientation", "part": "ESP32C6", "rot": 1 },
+            { "kind": "within", "part": "ESP32C6", "from": [0, 7], "to": [23, 17] }
+          ]
+        },
+        {
+          "kind": "all-of",
+          "name": "USB left",
+          "rules": [
+            { "kind": "orientation", "part": "ESP32C6", "rot": 2 },
+            { "kind": "within", "part": "ESP32C6", "from": [0, 0], "to": [10, 17] }
+          ]
+        },
+        {
+          "kind": "all-of",
+          "name": "USB top",
+          "rules": [
+            { "kind": "orientation", "part": "ESP32C6", "rot": 3 },
+            { "kind": "within", "part": "ESP32C6", "from": [0, 0], "to": [23, 10] }
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "one-of",
+      "name": "Inlet at an edge, for the feeder's cable",
+      "rules": [
+        { "kind": "within", "name": "left", "part": "Inlet", "from": [0, 0], "to": [1, 17] },
+        { "kind": "within", "name": "right", "part": "Inlet", "from": [22, 0], "to": [23, 17] },
+        { "kind": "within", "name": "top", "part": "Inlet", "from": [0, 0], "to": [23, 1] },
+        { "kind": "within", "name": "bottom", "part": "Inlet", "from": [0, 16], "to": [23, 17] }
+      ]
+    },
+    {
+      "kind": "one-of",
+      "name": "Ext at an edge, for the LED and BOOT cable",
+      "rules": [
+        { "kind": "within", "name": "left", "part": "Ext", "from": [0, 0], "to": [1, 17] },
+        { "kind": "within", "name": "right", "part": "Ext", "from": [22, 0], "to": [23, 17] },
+        { "kind": "within", "name": "top", "part": "Ext", "from": [0, 0], "to": [23, 1] },
+        { "kind": "within", "name": "bottom", "part": "Ext", "from": [0, 16], "to": [23, 17] }
       ]
     }
   ]
