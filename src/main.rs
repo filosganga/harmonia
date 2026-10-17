@@ -11,6 +11,7 @@
 //!     cargo run --release -- bench                # the benchmark: place a fixed set of circuits, record the costs
 //!     cargo run --release -- data                 # add a batch of placed random circuits to learn from
 //!     cargo run --release -- learn                # train the placing network on them, test it on unseen circuits
+//!     cargo run --release -- round                # one round of expert iteration: re-place with the network, keep the better, retrain
 
 mod bench;
 mod board;
@@ -25,6 +26,7 @@ mod parallel;
 mod place;
 mod placing;
 mod random_circuit;
+mod round;
 mod route;
 mod sexpr;
 mod svg;
@@ -74,7 +76,7 @@ fn parse_args() -> Args {
             "--board" => args.board = Some(it.next().and_then(|s| parse_size(&s)).expect("--board <width>x<height>, like 18x12")),
             "--power" => args.power = Some(it.next().expect("--power <net name>")),
             "--ground" => args.ground = Some(it.next().expect("--ground <net name>")),
-            "place" | "train" | "evolve" | "nets" | "check" | "bench" | "data" | "learn" => args.command = a,
+            "place" | "train" | "evolve" | "nets" | "check" | "bench" | "data" | "learn" | "round" => args.command = a,
             path => args.circuit = path.into(),
         }
     }
@@ -92,9 +94,16 @@ fn main() {
     std::fs::create_dir_all("out").unwrap();
     match args.command.as_str() {
         "check" => return check_cmd(&args),
-        "bench" => return bench::run(args.start == "net"),
+        "bench" => {
+            bench::run(args.start == "net");
+            return;
+        }
         "data" => return data::run(),
-        "learn" => return placing::learn(),
+        "learn" => {
+            placing::learn();
+            return;
+        }
+        "round" => return round::run(),
         _ => {}
     }
     let loaded = load(&args.circuit, &args);

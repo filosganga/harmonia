@@ -32,7 +32,7 @@ const MODEL: &str = "out/placer.bpk";
 /// Every circuit whose number is a multiple of this is kept aside to test on, never learned from.
 const HELD_OUT: u64 = 10;
 /// The kinds of thing drawn, one grid each (see `draw`).
-const CHANNELS: usize = 8;
+const CHANNELS: usize = 9;
 /// How many grids each convolution makes from the ones before it.
 const FILTERS: [usize; 3] = [16, 32, 32];
 /// Wrong places compared with the placer's choice in each training step, picked at random each
@@ -247,6 +247,7 @@ const RATSNEST: usize = 4; // straight lines from each new pin to the nearest pl
 const SUPPLY: usize = 5; // supply pins, placed and new
 const GROUND: usize = 6; // ground pins, placed and new
 const OUTSIDE: usize = 7; // off the board (a border one hole wide) and keep-outs
+const UNDER: usize = 8; // under a module's board (placed, or the new part if it's one): only low parts fit
 
 /// A picture's height and width: the board and a one-hole border around it.
 fn picture_size(c: &Circuit) -> (usize, usize) {
@@ -272,6 +273,7 @@ fn background(c: &Circuit, part: usize, scene: &Scene, nets: &[Vec<Option<usize>
     }
     c.constraints.keepout_holes.iter().for_each(|&hole| set(OUTSIDE, hole));
     scene.taken.iter().for_each(|&hole| set(TAKEN, hole));
+    scene.under.iter().for_each(|&hole| set(UNDER, hole));
     scene.supply.iter().for_each(|&hole| set(SUPPLY, hole));
     scene.ground.iter().for_each(|&hole| set(GROUND, hole));
     for net in nets[part].iter().flatten() {
@@ -291,6 +293,7 @@ fn draw(c: &Circuit, part: usize, scene: &Scene, background: &[f32], nets: &[Vec
     };
     let s = shape(&c.components[part], p);
     s.body.iter().for_each(|&hole| set(BODY, hole));
+    s.outline.iter().filter(|h| !s.body.contains(h)).for_each(|&hole| set(UNDER, hole));
     let (supply_net, ground_net) = (net_index(c, &c.power), net_index(c, &c.ground));
     for (pin, &hole) in s.pins.iter().enumerate() {
         set(PINS, hole);
@@ -376,9 +379,16 @@ fn loss(scores: Tensor<1>, sizes: &[usize]) -> Tensor<1> {
     Tensor::cat(losses, 0).mean()
 }
 
+/// How often the network's first choice is the placer's (top-1) and the placer's choice is among its
+/// first five (top-5), from 0 to 1, on the circuits kept aside and on the benchmark circuits.
+pub struct Tested {
+    pub held_out: [f64; 2],
+    pub benchmark: [f64; 2],
+}
+
 /// Trains the placing network on out/data/layouts.jsonl, tests it on the circuits kept aside and
 /// on the benchmark, and saves it to out/placer.bpk.
-pub fn learn() {
+pub fn learn() -> Tested {
     let t0 = Instant::now();
     let records = data::read();
     if records.is_empty() {
@@ -442,9 +452,10 @@ pub fn learn() {
 
     let model = net.valid();
     println!("\nHow often the placer's choice is the first choice (top-1) or among the first five (top-5):");
-    report("random circuits kept aside", &model, &test);
-    report("benchmark circuits", &model, &benchmark);
+    let held_out = report("random circuits kept aside", &model, &test);
+    let benchmark = report("benchmark circuits", &model, &benchmark);
     println!("\nSaved to {MODEL} in {:.0}s.", t0.elapsed().as_secs_f64());
+    Tested { held_out, benchmark }
 }
 
 /// The loss on the circuits kept aside, each decision against NEGATIVES other places (the same
@@ -521,8 +532,9 @@ pub fn propose(c: &Circuit, model: &Net, rng: &mut impl Rng) -> (board::Placemen
     (layout, stuck)
 }
 
-/// Prints top-1 and top-5 on some lessons, for the network and the simple rules to beat.
-fn report(what: &str, model: &Net, lessons: &[Lesson]) {
+/// Prints top-1 and top-5 on some lessons, for the network and the simple rules to beat, and
+/// returns the network's.
+fn report(what: &str, model: &Net, lessons: &[Lesson]) -> [f64; 2] {
     let device = Device::flex();
     // [network, shortest ratsnest, next to the part sharing most nets, random] x [top-1, top-5]
     let mut hits = [[0.0; 2]; 4];
@@ -547,6 +559,7 @@ fn report(what: &str, model: &Net, lessons: &[Lesson]) {
     for (name, [one, five]) in names.iter().zip(hits) {
         println!("    {name:<36} {:>5.1}%  {:>5.1}%", 100.0 * one / count as f64, 100.0 * five / count as f64);
     }
+    [hits[0][0] / count as f64, hits[0][1] / count as f64]
 }
 
 /// A simple rule to beat: the total straight-line distance from each of the new part's pins to the

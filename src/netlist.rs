@@ -30,6 +30,10 @@ struct Footprint {
     /// Low enough to sit under a module on headers. Leave out if it isn't.
     #[serde(default)]
     low: bool,
+    /// A module on headers (an Arduino Nano, a motor driver breakout): only its pin holes are
+    /// taken, and low parts can go under its board, like a DIYLC group with pins in it.
+    #[serde(default)]
+    module: bool,
 }
 
 pub struct Options {
@@ -93,7 +97,7 @@ fn component(part: &Part, library: &HashMap<String, Footprint>) -> Component {
     });
     let pins = fp.pins.iter().map(|(name, &at)| Pin { name: name.clone(), at, off_grid: false }).collect();
     let value = part.value.clone();
-    let body = Component::full_body(fp.w, fp.h);
+    let body = if fp.module { fp.pins.values().copied().collect() } else { Component::full_body(fp.w, fp.h) };
     Component { reference, value, footprint: footprint.to_string(), diylc: fp.diylc.clone(), w: fp.w, h: fp.h, pins, body, source: None, low: fp.low }
 }
 

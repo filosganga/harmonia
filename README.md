@@ -9,8 +9,9 @@ clean `cargo build --release` takes about 40s instead of 7s.
 Every placer step routes the whole board, so commands take seconds: on the 555, `place` takes about
 2.4s, `train` 6s and `evolve` 7s; placing the bigger cat-feeder board about 16s (its board file makes two cases). A board file
 whose `one-of`s make cases (below) is placed once per case, so it takes that many times longer. Anything up to
-the time to make and drink an espresso is fine. One exception: `learn`, training the placing network,
-takes about 14 minutes; for training, accuracy matters more than speed.
+the time to make and drink an espresso is fine. The exceptions are training the placing network,
+where accuracy matters more than speed: `learn` takes about 20 minutes, and `round` (placing every
+training circuit again, then `learn`) about 40.
 
 ```bash
 cargo run --release -- place                # auto-place the 555 blinker using the hand-written rules
@@ -24,6 +25,7 @@ cargo run --release -- check my_sketches/   # place, write and re-read every .di
 cargo run --release -- bench                # the benchmark: place a fixed set of circuits, record the costs (see below)
 cargo run --release -- data                 # add a batch of placed random circuits, to train a placing network on (see below)
 cargo run --release -- learn                # train the placing network on them and test it on circuits it never saw
+cargo run --release -- round                # one round of the network and the placer teaching each other (see below)
 ```
 
 Options: `--steps 50000` (placer effort), `--seed 7` (a different random start), `--start net` (start
@@ -71,6 +73,9 @@ DIYLC's first leg: that's + on a capacitor but the anode on an LED, which is KiC
 `"diylc"` entry the part is drawn as a labelled box.
 
 `"low": true` marks a part low enough to sit under a module on headers (see below); leave it out otherwise.
+`"module": true` marks a module on headers (an Arduino Nano, a Pico, a motor driver breakout): only its
+pins take holes, and low parts can go under its board, like a DIYLC group (below). `footprints.json`
+has five, from KiCad's `Module` library.
 
 ## Or sketch it in DIYLC
 
@@ -206,7 +211,8 @@ text board. Pins are named like the `nets` command prints them.
 | `src/nn.rs` | The neural network, written out by hand (8 hidden neurons, 89 weights). |
 | `src/bench.rs` | The benchmark: places every circuit of `circuits/bench.txt` with three seeds, several runs at once, and records the best costs and layouts and how the cost fell; `--start net` starts from the placing network and compares with the plain placer. |
 | `src/placing.rs` | The placing network (Burn): draws the board with the next part at each place it may take, scores each picture with a small convolutional network, and the `learn` command that trains and tests it; and `propose`, the network's whole layout, for `place --start net`. |
-| `src/main.rs` | The commands: `place`, `train`, `evolve`, `nets`, `check`, `bench`, `data` and `learn`; `place` and `check` place every case of the board file's rules and keep the best. `train` and `evolve` make ~1,200 example boards (going through the board file's cases in turn, up to 12), have the rules score them, and train the network to match. |
+| `src/round.rs` | The `round` command: one round of expert iteration (the network and the placer teaching each other), recorded in `out/rounds.json`. |
+| `src/main.rs` | The commands: `place`, `train`, `evolve`, `nets`, `check`, `bench`, `data`, `learn` and `round`; `place` and `check` place every case of the board file's rules and keep the best. `train` and `evolve` make ~1,200 example boards (going through the board file's cases in turn, up to 12), have the rules score them, and train the network to match. |
 
 ## How a board is judged
 
@@ -303,16 +309,19 @@ cargo run --release -- data
 ```
 
 Each run makes a batch of random circuits (parts from `footprints.json`: a supply header, chips with
-a supply and a ground pin, capacitors and LEDs to ground, small signal nets, all joined up, on a board
-about as crowded as the benchmark's, with some connectors on edges; the sizes are constants in
+a supply and a ground pin, in about half the circuits a module or two, capacitors and LEDs to
+ground, small signal nets, all joined up, on a board about as crowded as the benchmark's, with some connectors on
+edges; the sizes are constants in
 `src/random_circuit.rs` and `src/data.rs`), places each from a random start with
 `place`'s default steps, and appends them to `out/data/layouts.jsonl`, one circuit per line: its
-parts, nets and board file, and the best layout and its cost. A run takes about 75s on an 18-core Mac and
+parts, nets and board file, and the best layout and its cost. A run takes about 90s on an 18-core Mac and
 carries on from the circuits already there. It takes no options, so circuit number n is always the
 same circuit, placed the same way, as long as the code is the same: after a change to the placer,
 the router, the score's weights, `footprints.json` or `src/random_circuit.rs`, delete `out/data/`
 and make it again, or the file mixes layouts (and costs) from before and after; then `bench` and
-`learn` again, since the placing network's numbers below came from the old layouts. It prints how many circuits and training examples there are (one per part) and what
+`learn` again, since the placing network's numbers below came from the old layouts, and delete
+`out/rounds.json`. `round` (below) rewrites the file with better layouts, so after a round the
+layouts are no longer the plain placer's, and `data` adds plainly placed circuits next to them. It prints how many circuits and training examples there are (one per part) and what
 they're like, and writes the batch's first circuit as `out/data/sample.net` (with its board file) so
 you can `place` it and look.
 
@@ -327,7 +336,7 @@ with the most connected pins, then the bigger ones). For each place the next par
 by the board file, on the board, off the parts already there and the keep-outs), the board is drawn
 as it would be with the part there: a stack of grids, one per kind of thing (holes taken, the new
 part's body and pins, placed pins on its nets, a "ratsnest" line from each new pin to the nearest
-placed pin of its net, supply and ground pins, off the board and keep-outs). A small convolutional
+placed pin of its net, supply and ground pins, off the board and keep-outs, and under modules). A small convolutional
 network gives each picture a score: three layers of 3 x 3 filters, each sliding the same small grid of
 weights over the whole board to find local patterns, then what they found added up and its strongest
 value, into one number. The highest score wins.
@@ -344,19 +353,23 @@ is kept aside and never learned from. It then tests on those and on the benchmar
 layouts `bench` saved in `out/bench.json` are their right answers): how often the placer's choice is
 its first choice (top-1) or among its first five (top-5), next to simple rules: the shortest total
 ratsnest, next to the placed part it shares the most nets with, and a random guess. The network is
-saved to `out/placer.bpk`. Like `bench` and `data`, it takes no options.
+saved to `out/placer.bpk`. Like `bench` and `data`, it takes no options. After a change to what the
+network sees (its channels) or its settings, run `learn` again before `place --start net`: an old
+`out/placer.bpk` doesn't fit.
 
 Its settings are constants in `src/placing.rs` (`FILTERS`, `NEGATIVES`, `EPOCHS`, `LEARNING_RATE`),
 chosen on the circuits kept aside; the benchmark row is only reported, never tuned on, so it stays
-a test on circuits nothing was fitted to. The numbers (2026-10-17, 1,000 circuits from `data`, 5 epochs, about 14 minutes on an
-18-core Mac's CPU):
+a test on circuits nothing was fitted to. The numbers (2026-10-18, 1,100 circuits from `data`, half with modules, 5 epochs, about 20 minutes
+of training on an 18-core Mac's CPU):
 
 | unseen circuits | network top-1 / top-5 | shortest ratsnest | next to the part sharing most nets | random guess |
 |---|---|---|---|---|
-| random circuits kept aside (1,326 decisions) | 12.4% / 30.2% | 1.6% / 10.7% | 0.2% / 1.3% | 0.4% / 1.9% |
-| benchmark circuits (148 decisions) | 9.5% / 28.4% | 2.6% / 10.0% | 0.5% / 2.2% | 0.5% / 2.5% |
+| random circuits kept aside (1,467 decisions) | 8.1% / 21.7% | 1.5% / 8.2% | 0.2% / 1.2% | 0.3% / 1.6% |
+| benchmark circuits (148 decisions) | 11.5% / 29.7% | 2.6% / 10.0% | 0.5% / 2.2% | 0.5% / 2.5% |
 
-Learning from random circuits carries over to the real ones: nearly as good on the benchmark.
+Learning from random circuits carries over to the real ones: better on the benchmark than on the
+random circuits kept aside, which are harder now (circuits with modules have bigger boards and many
+more places to choose from).
 
 **Placing with it.** `place --start net` starts the placer
 from the network's layout instead of a random one (or your DIYLC sketch: the network wins over it): each part, in the placing order, goes where the
@@ -364,16 +377,24 @@ network scores best, with the parts before it where it put them (under a second)
 room left starts at random. The placer still has the last word, so the result is always polished,
 but it starts cooler (`place::NETWORK_START_TEMPERATURE`, 5 against the usual 20), since a hot
 start shakes a good layout up; 5 was the best of 20, 5, 2 and 0.5 on the benchmark circuits, so for
-this one setting the benchmark isn't quite unseen. `bench --start net` measures it against the plain placer (below). On 2026-10-17, with the network
-above: the network's layout alone costs 2.5 to 6 times less than a random start (not on the cat
-feeder), and after the same
-20,000 steps the mean cost is lower on 7 of the 12 benchmark circuits, 4.8% lower on average without
-the cat feeder. Where it helps it gets there sooner: within 0.3k to 12k steps on the 555, the LM386
-amp and the transistor flasher, where the plain placer takes 18k to 20k or never does, and a few
-thousand steps sooner on the others. It does worse on the cat feeder, the ATtiny85 board, the LM317
-supply, and (by 1 to 2%) the LED chaser and the PWM controller. The cat feeder has
-modules (an ESP32 on headers), which the random training circuits don't have: the network places the
-big modules badly, and one ends up with no room.
+this one setting the benchmark isn't quite unseen. `bench --start net` measures it against the plain placer (below). With the network above: its
+layout alone costs 1.5 to 7 times less than a random start, and after the same 20,000 steps the mean
+cost is lower on 9 of the 12 benchmark circuits, 5.2% lower on average (8.6% without the cat feeder),
+usually reached thousands of steps sooner than the plain placer does (on the 555, from the start). It
+does worse on the cat feeder (595 against 420: its three modules are still placed badly), the LED
+chaser and the NPN switch (by 2 to 3%). Before the random circuits had modules it was 7 of 12 and
+4.8% without the cat feeder (682 on it).
+
+**The loop.** `round` is one round of "expert iteration", where the network and the placer teach each
+other: it places every circuit in `out/data` again, starting from the network (new random numbers
+each round), keeps whichever layout is cheaper, the new one or the one there, so the examples only
+get better, trains the network again on them, and measures it with `bench --start net`. Each round
+is added to `out/rounds.json` and printed with the ones before. A round takes about 40 minutes (half
+placing, half training). Round 1 (2026-10-18): 731 of the 1,100 circuits got a cheaper layout, the
+examples 11.9% cheaper on average; the benchmark from the new network was mixed, -1.1% against the
+plain placer (round 0: -5.2%): much better on the cat feeder (471) and the LM358 preamp, worse on
+the ATtiny85 board (199 against the plain 170) and much worse on the LED chaser (399 against 241),
+where the new network crams every part into one corner.
 
 ## Checking a change
 

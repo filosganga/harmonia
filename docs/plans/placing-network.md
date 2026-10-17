@@ -1,6 +1,6 @@
 # Plan: a network that places parts
 
-Status: stages 0 to 3 done (2026-10-17); stage 4 next (the maintainer said go on before seeing stage 3's numbers). Written 2026-10-17.
+Status: stages 0 to 3 done (2026-10-17), modules added to the training data and stage 4 started (2026-10-18): stopped after round 1 for the maintainer. Written 2026-10-17.
 
 ## Goal
 
@@ -244,12 +244,64 @@ With 5, per circuit (mean of 3 seeds; steps to reach the plain placer's mean, ea
   The mean is the typical result.
 - Using the network costs well under a second per circuit; `bench --start net` takes about 27s.
 
+### Between stages 3 and 4: modules in the training data
+
+**Done (2026-10-18), the maintainer's choice before stage 4.** The cat feeder lost in stage 3 because
+the random circuits had no modules. Now:
+
+- `footprints.json` has `"module": true` (only the pins take holes, low parts go under its board, as
+  for a DIYLC group) and five real modules from KiCad's `Module` library: Arduino Nano, a Pololu
+  16-pin breakout (DRV8833-style), Adafruit Feather, Raspberry Pi Pico, Adafruit HUZZAH ESP8266.
+- `data` puts 0 to 2 modules in a circuit (about half have one or two); a module wires one pin to
+  the supply, one or two to ground, and a quarter of the rest to signals. A module's board counts
+  half towards the board's crowding, and the board leaves room for all modules' boards.
+  Bigger boards made a batch take ~175s, so a batch is now 100 circuits (62-105s).
+- The network gets a 9th channel: holes under a module's board, placed or new.
+- New data: 1,100 circuits (the old 1,000 set aside), 14,355 examples; 515
+  circuits (47%) have a module; retrained: 5 epochs, ~210s each (~20 minutes; bigger boards).
+
+Round 0 (the network trained on this data, before any loop):
+
+| unseen circuits | network top-1 / top-5 | shortest ratsnest | random guess |
+|---|---|---|---|
+| random circuits kept aside (1,467 decisions) | 8.1% / 21.7% | 1.5% / 8.2% | 0.3% / 1.6% |
+| benchmark circuits (148 decisions) | 11.5% / 29.7% | 2.6% / 10.0% | 0.5% / 2.5% |
+
+The kept-aside circuits are harder now (bigger boards, more places); the benchmark got better.
+`bench --start net`: mean cost after 20,000 steps lower on **9 of 12** circuits (was 7), **-5.2%**
+on average over all 12 (was -0.5%), **-8.6% without the cat feeder** (was -4.8%). The cat feeder:
+595 (was 682; the plain placer 420): better, still its modules placed badly.
+
 ### Stage 4: the loop (expert iteration)
 
 - Round n: place the training circuits starting from network n, polish with the placer, keep the
   better of the new layout and the old label, retrain into network n+1.
 - After each round, rerun the benchmark. Stop when a round no longer helps.
 - Report the curve: benchmark cost per round, against the plain placer's.
+
+**Under way (2026-10-18).** `cargo run --release -- round` (`src/round.rs`) does one round:
+re-places every circuit in `out/data` from the network (seed n + round x 2^40, start temperature 5),
+keeps the cheaper of the new and the old layout (circuits kept aside too: they're never trained on,
+and their test answers improve with the rest), retrains from scratch as `learn` does, runs
+`bench --start net`, and appends the round to `out/rounds.json`. About 38 minutes a round (relabel
+1,158s, training 1,109s, bench 30s); 7.1 GB of memory at most.
+
+| round | improved | examples | held-out top-1 / top-5 | benchmark top-1 / top-5 | bench vs plain |
+|---:|---:|---:|---|---|---:|
+| 0 | | | 8.1% / 21.7% | 11.5% / 29.7% | -5.2% |
+| 1 | 731 / 1100 | -11.9% | 11.8% / 28.9% | 9.5% / 29.1% | -1.1% |
+
+(Round 1's held-out numbers are against relabelled answers, so they don't compare with round 0's.)
+
+Round 1, per circuit (mean cost from the network; plain / round 0 / round 1): cat feeder 420 / 595
+/ **471**, LM358 129 / 119 / **105**, flasher 101 / 85 / 82, 555 91 / 79 / 77, PWM 178 / 166 / 164,
+but LED chaser 241 / 249 / **399** and ATtiny85 170 / 158 / 199. On the chaser the round-1 network
+crams all 19 parts into one corner (24 solder-side wires in its own layout), which the cool start
+can't undo. The loop can feed its own habits back to itself: the new examples come from runs that
+started at the network's layout.
+
+**Stopped for the maintainer**: by the plan's rule round 1 didn't help (on the benchmark average),
+but one round is noisy.
 
 ## Rules for the work (from CLAUDE.md and README)
 

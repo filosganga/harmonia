@@ -68,7 +68,7 @@ pub struct Saved {
 /// Places every circuit of the benchmark with every seed, prints a table and saves out/bench.json;
 /// or, `from_network`, starts from the placing network's layouts, saves out/bench-net.json and
 /// compares with out/bench.json.
-pub fn run(from_network: bool) {
+pub fn run(from_network: bool) -> Saved {
     let t0 = Instant::now();
     let plain = if from_network { Some(saved().unwrap_or_else(|why| panic!("{why}"))) } else { None };
     // An out/bench.json from before `bench` recorded how the cost falls has nothing to compare with.
@@ -143,6 +143,22 @@ pub fn run(from_network: bool) {
          so a run alone is quicker. Saved to {path} in {:.1}s.",
         t0.elapsed().as_secs_f64()
     );
+    saved
+}
+
+impl Found {
+    /// The mean of the seeds' best costs.
+    pub fn mean_cost(&self) -> f64 {
+        self.costs.iter().sum::<f64>() / self.costs.len() as f64
+    }
+}
+
+/// How much lower (negative) or higher the mean costs in `net` are than in `plain`, as one number:
+/// the geometric mean over the circuits of net / plain, minus 1. Each circuit counts the same,
+/// whatever its costs' size.
+pub fn change(plain: &[Found], net: &[Found]) -> f64 {
+    let logs: f64 = plain.iter().zip(net).map(|(p, n)| (n.mean_cost() / p.mean_cost()).ln()).sum();
+    (logs / net.len() as f64).exp() - 1.0
 }
 
 /// Starting from the network (`net`) against the plain placer (`plain`), circuit by circuit: the

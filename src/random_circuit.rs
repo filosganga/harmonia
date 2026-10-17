@@ -1,8 +1,8 @@
 //! Random circuits to learn from: parts from footprints.json, wired like a small hobby board.
 //!
 //! They aren't real circuits (nothing here would work), but they're meant to look like one to the
-//! placer: a supply header, chips with a supply and a ground pin, decoupling capacitors from supply
-//! to ground, LEDs and transistors with a leg on ground, and small signal nets of two to four pins
+//! placer: a supply header, chips with a supply and a ground pin, modules on headers (an Arduino
+//! Nano, a Pico) in about half of them, decoupling capacitors from supply to ground, LEDs and transistors with a leg on ground, and small signal nets of two to four pins
 //! joining different parts, all joined up into one circuit. The same number always makes the same
 //! circuit.
 
@@ -65,9 +65,17 @@ const SMALL_PARTS: [(&Kind, u32); 9] = [
     (&TO220, 4),
 ];
 const CONNECTORS: [&Kind; 5] = [&HEADER2, &HEADER3, &HEADER4, &HEADER2X3, &TERMINAL];
+// Modules on headers ("module": true in footprints.json): only their pins take holes.
+const NANO: Kind = kind("Module:Arduino_Nano", "M", &["Arduino Nano"], 30);
+const BREAKOUT: Kind = kind("Module:Pololu_Breakout-16_15.2x20.3mm", "M", &["DRV8833", "A4988", "TB6612"], 16);
+const FEATHER: Kind = kind("Module:Adafruit_Feather", "M", &["Feather M0", "Feather ESP32"], 28);
+const PICO: Kind = kind("Module:RaspberryPi_Pico_Common_THT", "M", &["Pico"], 40);
+const HUZZAH: Kind = kind("Module:Adafruit_HUZZAH_ESP8266_breakout", "M", &["HUZZAH ESP8266"], 20);
+const MODULES: [&Kind; 5] = [&NANO, &BREAKOUT, &FEATHER, &PICO, &HUZZAH];
 const PARTS: std::ops::RangeInclusive<usize> = 6..=20;
 /// How much of the board the parts' outlines cover, picked at random in this range (the benchmark
 /// circuits cover 19 to 31%). Boards are at least 12 x 8 holes, so a small circuit may cover less.
+/// A module's board counts half, since low parts can go under it.
 const DENSITY: std::ops::Range<f64> = 0.18..0.32;
 const EDGES: [&str; 4] = ["left", "right", "top", "bottom"];
 
@@ -146,6 +154,17 @@ fn try_wiring(kinds: &[&'static Kind], rng: &mut StdRng) -> Option<Spec> {
                 on(ground, 3); // an emitter or source, or a trimmer's end
                 take(3, &mut rest);
             }
+        } else if MODULES.iter().any(|m| m.footprint == footprint) {
+            // A module: a pin to the supply, one or two to ground, and only some of the others
+            // used (a microcontroller board has far more pins than a small circuit needs).
+            let mut pins = rest.clone();
+            pins.shuffle(rng);
+            on(supply, pins[0]);
+            on(ground, pins[1]);
+            if rng.random_bool(0.5) {
+                on(ground, pins[2]);
+            }
+            rest = pins[3..].iter().copied().filter(|_| rng.random_bool(0.25)).collect();
         } else if CONNECTORS.iter().any(|c| c.footprint == footprint) && k.pins > 2 && rng.random_bool(0.6) {
             on(ground, k.pins);
             take(k.pins, &mut rest);
@@ -202,8 +221,8 @@ fn try_wiring(kinds: &[&'static Kind], rng: &mut StdRng) -> Option<Spec> {
     Some(spec(kinds, &nets, rng))
 }
 
-/// The kinds of part in the circuit: a supply connector first, then chips, other connectors and
-/// small parts.
+/// The kinds of part in the circuit: a supply connector first, then chips, modules, other
+/// connectors and small parts.
 fn pick_parts(rng: &mut StdRng) -> Vec<&'static Kind> {
     let count = rng.random_range(PARTS);
     let mut kinds: Vec<&Kind> = vec![if rng.random_bool(0.7) { &HEADER2 } else { &TERMINAL }];
@@ -218,6 +237,14 @@ fn pick_parts(rng: &mut StdRng) -> Vec<&'static Kind> {
             6..8 => &DIP14,
             _ => &DIP16,
         });
+    }
+    let modules = match rng.random_range(0..100) {
+        0..55 => 0,
+        55..90 => 1,
+        _ => 2,
+    };
+    for _ in 0..modules {
+        kinds.push(MODULES[rng.random_range(0..MODULES.len())]);
     }
     for _ in 0..rng.random_range(0..=2) {
         kinds.push(CONNECTORS[rng.random_range(0..CONNECTORS.len())]);
@@ -293,9 +320,13 @@ fn spec(kinds: &[&Kind], nets: &[Vec<Port>], rng: &mut StdRng) -> Spec {
     // Board size: the parts' outlines cover DENSITY of it, about 3:2, and the longest part fits.
     let sizes = crate::netlist::sizes();
     let size = |k: &Kind| sizes[k.footprint.rsplit(':').next().unwrap()];
-    let area: i32 = kinds.iter().map(|k| size(k).0 * size(k).1).sum();
+    let is_module = |k: &Kind| MODULES.iter().any(|m| m.footprint == k.footprint);
+    let outline = |k: &Kind| (size(k).0 * size(k).1) as f64;
+    let area: f64 = kinds.iter().map(|k| if is_module(k) { outline(k) / 2.0 } else { outline(k) }).sum();
     let longest = kinds.iter().map(|k| size(k).0.max(size(k).1)).max().unwrap();
-    let board_area = area as f64 / rng.random_range(DENSITY);
+    // Two modules can't overlap, so leave room for their whole boards too.
+    let modules_area: f64 = kinds.iter().filter(|k| is_module(k)).map(|k| outline(k)).sum();
+    let board_area = (area / rng.random_range(DENSITY)).max(1.5 * modules_area);
     let width = ((board_area * 1.5).sqrt().round() as i32).max(longest + 2).max(12);
     let height = ((board_area / width as f64).round() as i32).max(longest.min(width) / 2 + 2).max(8);
 

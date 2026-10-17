@@ -3,7 +3,8 @@
 //! `data` makes a batch of random circuits (src/random_circuit.rs), places each the way `bench`
 //! does (from a random start, `place`'s default steps), and appends it with the placer's best
 //! layout to out/data/layouts.jsonl, one JSON object per line. Each run carries on from the
-//! circuits already there, so circuit number n is always the same circuit.
+//! circuits already there, so circuit number n is always the same circuit. `round` later replaces
+//! layouts with cheaper ones found from the placing network's start.
 //!
 //! A layout gives one training example per part, "with these parts down, this one went here",
 //! taking the parts in `placing_order`.
@@ -20,8 +21,8 @@ use std::time::Instant;
 
 const DIR: &str = "out/data";
 const LAYOUTS: &str = "out/data/layouts.jsonl";
-/// Circuits added per run: about 75s on an 18-core Mac.
-const BATCH: u64 = 200;
+/// Circuits added per run: about 90s on an 18-core Mac (circuits with modules need bigger boards).
+const BATCH: u64 = 100;
 const STEPS: usize = crate::DEFAULT_STEPS;
 /// The placer's random numbers for circuit n come from seed n + this, so they're not the same
 /// numbers that made the circuit.
@@ -94,6 +95,15 @@ pub fn run() {
     summary(&read());
     println!("\nCircuit #{start} is in {DIR}/sample.net, with its board file: cargo run --release -- place {DIR}/sample.net");
     println!("Its placing order: {}", order.join(" "));
+}
+
+/// Replaces out/data/layouts.jsonl with `records` (written to a new file first, so a stop halfway
+/// leaves the old one).
+pub fn write_all(records: &[Record]) {
+    let new = format!("{LAYOUTS}.new");
+    let lines: String = records.iter().map(|r| serde_json::to_string(r).unwrap() + "\n").collect();
+    std::fs::write(&new, lines).unwrap();
+    std::fs::rename(&new, LAYOUTS).unwrap();
 }
 
 /// Every record in out/data/layouts.jsonl (none if it isn't there yet).
