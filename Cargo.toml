@@ -2,6 +2,10 @@
 name = "harmonia"
 version = "0.1.0"
 edition = "2024"
+description = "Turns parts, fits them on a perfboard and wires them up, with a tiny neural network as a judge"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/filosganga/harmonia"
+readme = "README.md"
 
 [dependencies]
 rand = "0.9"

@@ -1,0 +1,34 @@
+# Builds, lints, and runs the checks from README "Checking a change" on every push and pull request.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release
+
+      # Lints are shown but don't fail the build: two old warnings are known (CONTRIBUTING.md).
+      - name: Clippy
+        run: cargo clippy --release
+
+      - name: Place the 555 example
+        run: cargo run --release -- place
+
+      # Place, write and re-read the DIYLC example: the written file must have the same connections.
+      - name: Round trip the cat feeder
+        run: |
+          for seed in 1 2 3; do
+            cargo run --release -- check circuits/cat_feeder.diy --seed "$seed"
+          done

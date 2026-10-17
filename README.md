@@ -163,7 +163,7 @@ text board. Pins are named like the `nets` command prints them.
 | `circuits/555_blinker.net` | The example circuit as a KiCad netlist: the parts, their footprints, and which pins connect (nets). |
 | `circuits/555_blinker.json` | Its board file: board size, power and ground, and the rules for this board. |
 | `circuits/cat_feeder.diy` | A copy of the cat-feeder's `pcb.diy` (2026-10-17), with `cat_feeder.json`: its star wiring on C1 and R1 near GPIO2. |
-| `TODO.md` | Ideas for later, in Filippo's words: mostly a richer board-file format. |
+| `TODO.md` | The maintainer's own list of ideas for later. |
 | `src/constraints.rs` | Reads the board file and keeps its rules: where parts may go (fixed, edge, orientation, within, all-of, one-of), keep-outs, near, star. |
 | `footprints.json` | Footprint name → size in holes and where each pad is. |
 | `src/sexpr.rs` | Reads KiCad's bracket format, `(comp (ref "R1") ...)`, into a tree. |
@@ -343,4 +343,10 @@ In order:
    from those picks ("Your taste" above). Then more circuits to learn from.
 3. **Faster routing**, if waits grow past an espresso (see Known limits).
 
-Smaller ideas, in Filippo's words, are in [TODO.md](TODO.md).
+Smaller ideas, in the maintainer's words, are in [TODO.md](TODO.md).
+
+## Contributing and license
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for how to build, check a change, and how the project is shaped.
+
+Harmonia is licensed under either of [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.

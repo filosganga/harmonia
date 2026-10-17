@@ -6,11 +6,13 @@ close together, short wiring, few jumpers, no collisions, compact board, and the
 
 README.md is the documentation for people and for you: commands, files, rules, how a change is
 checked, known limits, principles and next steps. Read it first. This file is only what you need on
-top; what depends on this machine (sibling repos, tool paths) is in CLAUDE.local.md.
+top; what depends on one machine (sibling repos, tool paths) goes in a git-ignored CLAUDE.local.md,
+if there is one. CONTRIBUTING.md is the same for people.
 
-## Working with Filippo
+## How to work here
 
-- He is learning Rust and new to neural networks: explain in plain language, keep the code readable.
+- The project is also a way to learn Rust and neural networks: explain in plain language, and keep
+  the code readable.
 - The program is Rust only: everything `cargo run` does, including any machine learning (Burn or
   Candle if a library is needed). Python is fine for dev tools around it (a checker, a converter, a
   plotting script), as long as the program never needs them to run.
@@ -21,8 +23,8 @@ top; what depends on this machine (sibling repos, tool paths) is in CLAUDE.local
   `measure`, time `place circuits/cat_feeder.diy` and say how long it took.
 - When README.md's facts change (timings, what an output contains, the measurements), update it in the
   same change.
-- TODO.md is Filippo's own list of ideas, in his words. Read it before designing anything in the board
-  file. Don't rewrite his notes; when one is done, ask whether to remove it.
+- TODO.md is the maintainer's own list of ideas, in their words. Read it before designing anything in
+  the board file. Don't rewrite those notes; when one is done, ask whether to remove it.
 
 ## Checking your work
 
