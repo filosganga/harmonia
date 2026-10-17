@@ -22,8 +22,9 @@ const EPS: f64 = 0.005;
 /// DIYLC uses a 4 x 4 pixel square at 200 pixels per inch, so 0.01" each way.
 const PIN_REACH: f64 = 0.01;
 
-/// The original drawing of a part, kept so it can be written back to DIYLC moved and turned.
-#[derive(Clone)]
+/// The original drawing of a part, kept so it can be written back to DIYLC moved and turned
+/// (the layout file keeps it too, as the part's "diylc_drawing").
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct Source {
     /// The XML of each DIYLC item the part is made of, exactly as in the file.
     pub xml: Vec<String>,

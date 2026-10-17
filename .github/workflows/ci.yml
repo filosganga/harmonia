@@ -26,6 +26,14 @@ jobs:
       - name: Place the 555 example
         run: cargo run --release -- place
 
+      # Draw the layout file it saved again: the same four files, byte for byte.
+      - name: Draw the 555's layout again
+        run: |
+          mkdir -p out/again
+          cp out/rules.layout.json out/again/rules.layout.json
+          cargo run --release -- draw out/again/rules.layout.json
+          for f in rules.svg rules-solder.svg rules.kicad_pcb rules.diy; do cmp "out/$f" "out/again/$f"; done
+
       # Place, write and re-read the DIYLC example: the written file must have the same connections.
       - name: Round trip the cat feeder
         run: |
