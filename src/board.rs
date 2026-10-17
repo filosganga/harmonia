@@ -5,13 +5,13 @@
 //! rotation (0..3, in 90 degree steps).
 
 use rand::Rng;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 
 pub type Point = (i32, i32);
 
 /// The eight things the rules measure. They are also the network's inputs.
-pub const FEATURES: [&str; 8] = ["wire", "jumpers", "jumper_len", "bottom", "power", "overlap", "area", "near"];
+pub const FEATURES: [&str; 8] = ["wire", "jumpers", "jumper_len", "bottom", "power", "overlap", "crowding", "near"];
 
 /// How much each measurement costs, in the same order as FEATURES. Lower total cost = better board.
 pub const WEIGHTS: [f64; 8] = [
@@ -21,7 +21,7 @@ pub const WEIGHTS: [f64; 8] = [
     30.0, // bottom: per wire on the solder side, the last resort
     1.5,  // power: per hole between each 5V pin and its nearest GND pin
     40.0, // overlap: per hole where two parts collide or a part hangs off the board
-    0.15, // area: per hole of the rectangle that encloses all parts
+    2.0,  // crowding: per pair of neighbouring holes taken by two parts (twice for pins of two nets)
     4.0,  // near: per hole between two pins the board file wants near (along copper) or close (straight)
 ];
 
@@ -220,10 +220,7 @@ pub fn measure(c: &Circuit, placement: &[Place]) -> Measures {
     overlap += g.outlines.iter().flatten().filter(|&&(x, y)| x < 0 || x >= w || y < 0 || y >= h).count() as i32;
     overlap += under_modules(c, &g).len() as i32;
 
-    let outline = || g.outlines.iter().flatten();
-    let (min_x, max_x) = (outline().map(|p| p.0).min().unwrap(), outline().map(|p| p.0).max().unwrap());
-    let (min_y, max_y) = (outline().map(|p| p.1).min().unwrap(), outline().map(|p| p.1).max().unwrap());
-    let area = (max_x - min_x + 1) * (max_y - min_y + 1);
+    let crowding = crowding(c, &g);
 
     // For each "near" rule: holes of copper between its two pins, the way the router joined them.
     // For each "close" rule: holes between its two pins, straight across the board.
@@ -239,7 +236,42 @@ pub fn measure(c: &Circuit, placement: &[Place]) -> Measures {
         routing.jumpers.len() as f64,
         routing.jumper_length(),
         routing.bottom.len() as f64,
-        power as f64, overlap as f64, area as f64, near])
+        power as f64, overlap as f64, crowding as f64, near])
+}
+
+/// How crowded the parts are, for soldering: pairs of neighbouring holes (across or down) taken by
+/// two different parts, where the iron has no room. A pair of pins a solder blob would wrongly join
+/// (on different nets, or one on a net and one unused) counts twice. Parts may be as far apart as they like beyond that;
+/// wire length keeps them from drifting.
+fn crowding(c: &Circuit, g: &Geometry) -> i32 {
+    // Which part takes each hole (the first one, if two collide: that's `overlap`'s business).
+    let mut part_at: HashMap<Point, usize> = HashMap::new();
+    for (i, body) in g.bodies.iter().enumerate() {
+        for &hole in body {
+            part_at.entry(hole).or_insert(i);
+        }
+    }
+    // The net of the pin in each hole; a pin on no net is None.
+    let mut net_at: HashMap<Point, Option<usize>> = g.pins.iter().flatten().map(|&hole| (hole, None)).collect();
+    for (net, pins) in c.net_pins.iter().enumerate() {
+        for &(ci, pi) in pins {
+            net_at.insert(g.pins[ci][pi], Some(net));
+        }
+    }
+    let mut crowding = 0;
+    for (&(x, y), &i) in &part_at {
+        for next in [(x + 1, y), (x, y + 1)] {
+            if part_at.get(&next).is_some_and(|&j| j != i) {
+                crowding += 1;
+                if let (Some(a), Some(b)) = (net_at.get(&(x, y)), net_at.get(&next))
+                    && a != b
+                {
+                    crowding += 1;
+                }
+            }
+        }
+    }
+    crowding
 }
 
 /// Holes where something that doesn't fit sits under a module: (part, hole). Only low parts

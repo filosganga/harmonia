@@ -5,7 +5,7 @@ Harmonia turns parts, fits them on a perfboard and wires them up.
 
 Rust, with four small crates (`rand`, `serde`, `serde_json`, and `roxmltree` to read DIYLC files).
 Every placer step routes the whole board, so commands take seconds: on the 555, `place` takes about
-0.7s, `train` 1.8s and `evolve` 2.8s; placing the bigger cat-feeder board about 5s (its board file makes two cases). A board file
+0.7s, `train` 1.9s and `evolve` 3.0s; placing the bigger cat-feeder board about 5.5s (its board file makes two cases). A board file
 whose `one-of`s make cases (below) is placed once per case, so it takes that many times longer. Anything up to
 the time to make and drink an espresso is fine.
 
@@ -202,7 +202,11 @@ text board. Pins are named like the `nets` command prints them.
 - **bottom**: how many wires on the solder side, the last resort. Each costs as much as six jumpers.
 - **power**: for every supply pin, the distance to the nearest ground pin (keeps supply and ground close).
 - **overlap**: holes where two parts collide, a part hangs off the board, sits on a keep-out, or sits under a module without being low enough (very expensive).
-- **area**: the size of the rectangle that holds all parts (keeps the board compact).
+- **crowding**: pairs of neighbouring holes (across or down) taken by two different parts, where the
+  soldering iron has no room. A pair of pins a solder blob would wrongly join (on different nets, or
+  one on a net and one unused) counts twice. So parts get room around them and spread over the board. Beyond that, being far
+  apart earns nothing, and wire length keeps them from drifting. If you want a smaller layout, give
+  it a smaller board.
 - **near**: for each `near` rule in the board file, the length of copper between its two pins, as
   routed; and for each `close` rule, the distance between its two pins, straight across the board.
 
@@ -258,8 +262,8 @@ boards it never saw and save it to `out/model.json` (so the last one you ran is 
   random, keep whichever of the 20 is least wrong, repeat 1,000 times. It never works out a
   direction; it only needs to know which copy did better.
 
-Typical result on the 555: `train` is off by about 0.6 points on unseen boards in 1.8s, `evolve` by
-about 1 point (0.9 to 1.2, depending on the seed) in 2.8s, after trying 19,000 networks. When you have a right answer for every example,
+Typical result on the 555: `train` is off by about 0.7 points on unseen boards in 1.9s, `evolve` by
+about 1 point (0.8 to 1.2, depending on the seed) in 3.0s, after trying 19,000 networks. When you have a right answer for every example,
 gradient descent wins. Evolution is the tool when all you can say is "this one did better than that one",
 such as a network that proposes whole layouts.
 
