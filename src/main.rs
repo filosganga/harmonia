@@ -4,6 +4,7 @@
 //!     cargo run --release -- train                # teach the network to score boards like the rules do
 //!     cargo run --release -- evolve               # the same job as train, done by evolution (1 parent + 19 children)
 //!     cargo run --release -- place --judge net    # auto-place again, with the network as the judge
+//!     cargo run --release -- place --start net    # start the placer from the placing network's layout
 //!     cargo run --release -- place my_sketch.diy  # read a rough DIYLC layout, score it, and fit it on the board
 //!     cargo run --release -- nets my_sketch.diy   # just show the parts and connections the program understood
 //!     cargo run --release -- check sketches/      # place, write and re-read every .diy: same connections?
@@ -42,6 +43,8 @@ struct Args {
     command: String,
     circuit: String,
     judge: String,
+    /// Where the placer starts: "" (at random, or from your sketch) or "net" (the placing network).
+    start: String,
     steps: usize,
     seed: u64,
     board: Option<BoardSize>,
@@ -54,6 +57,7 @@ fn parse_args() -> Args {
         command: "place".into(),
         circuit: "circuits/555_blinker.net".into(),
         judge: "rules".into(),
+        start: String::new(),
         steps: DEFAULT_STEPS,
         seed: 1,
         board: None,
@@ -64,6 +68,7 @@ fn parse_args() -> Args {
     while let Some(a) = it.next() {
         match a.as_str() {
             "--judge" => args.judge = it.next().expect("--judge rules|net"),
+            "--start" => args.start = it.next().filter(|s| s == "net").expect("--start net"),
             "--steps" => args.steps = it.next().and_then(|s| s.parse().ok()).expect("--steps <number>"),
             "--seed" => args.seed = it.next().and_then(|s| s.parse().ok()).expect("--seed <number>"),
             "--board" => args.board = Some(it.next().and_then(|s| parse_size(&s)).expect("--board <width>x<height>, like 18x12")),
@@ -87,7 +92,7 @@ fn main() {
     std::fs::create_dir_all("out").unwrap();
     match args.command.as_str() {
         "check" => return check_cmd(&args),
-        "bench" => return bench::run(),
+        "bench" => return bench::run(args.start == "net"),
         "data" => return data::run(),
         "learn" => return placing::learn(),
         _ => {}
@@ -163,22 +168,44 @@ fn cases_of(circuit: &Circuit, board_file: &constraints::BoardFile) -> (Vec<Circ
     (cases, left_out)
 }
 
-/// Places every case of the board file's rules, from the sketch if there is one, and keeps the
-/// layout the judge likes best. Returns which case it was, where it started, and the layout.
-/// With `report`, prints a line for each case when there are several.
+/// Where `place_cases` starts the placer for each case.
+enum StartFrom<'a> {
+    Random,
+    /// Where you drew things in a DIYLC sketch.
+    Sketch(&'a board::Placement),
+    /// The placing network's layout (`placing::propose`).
+    Network(&'a placing::Net),
+}
+
+/// Places every case of the board file's rules, starting from `from`, and keeps the layout the
+/// judge likes best. Returns which case it was, where it started, and the layout. With `report`,
+/// prints a line for each case when there are several. `on_step` sees every step of the placer,
+/// with the case it's placing.
 fn place_cases(
     cases: &[Circuit],
     judge: impl Fn(&Measures) -> f64,
     steps: usize,
     rng: &mut StdRng,
-    sketch: Option<&board::Placement>,
+    from: &StartFrom,
     report: bool,
+    mut on_step: impl FnMut(usize, &place::Step),
 ) -> (usize, board::Placement, board::Placement) {
     let mut best: Option<(usize, board::Placement, board::Placement, f64)> = None;
     for (k, c) in cases.iter().enumerate() {
-        let mut start = sketch.cloned().unwrap_or_else(|| board::random_placement(c, rng));
+        let (mut start, from_network) = match from {
+            StartFrom::Random => (board::random_placement(c, rng), false),
+            StartFrom::Sketch(sketch) => ((*sketch).clone(), false),
+            StartFrom::Network(net) => {
+                let (layout, stuck) = placing::propose(c, net, rng);
+                if report && stuck > 0 {
+                    println!("The placing network found no room for {stuck} part(s); they start at random.");
+                }
+                (layout, true)
+            }
+        };
         constraints::apply(c, &mut start);
-        let layout = place::anneal(c, &judge, steps, rng, Some(start.clone()), |_| {});
+        let given = if from_network { place::Start::Network(start.clone()) } else { place::Start::Given(start.clone()) };
+        let layout = place::anneal(c, &judge, steps, rng, given, |s| on_step(k, s));
         if report && cases.len() > 1 {
             println!("{}", board::report(c, &layout, &format!("Case {} of {} ({})", k + 1, cases.len(), case_name(c))));
         }
@@ -249,7 +276,7 @@ fn check_one(path: &str, args: &Args) -> Outcome {
     let round_trip = || {
         let sketch = loaded.sketch.as_ref().expect("a .diy file has a sketch");
         let mut rng = StdRng::seed_from_u64(args.seed);
-        let (k, _, best) = place_cases(&loaded.cases, board::score, args.steps, &mut rng, Some(sketch), true);
+        let (k, _, best) = place_cases(&loaded.cases, board::score, args.steps, &mut rng, &StartFrom::Sketch(sketch), true, |_, _| {});
         let c = &loaded.cases[k];
         let written = "out/check.diy";
         std::fs::write(written, diylc::write(c, &best, "check")).unwrap();
@@ -359,8 +386,13 @@ fn place_cmd(cases: &[Circuit], args: &Args, sketch: Option<board::Placement>) {
         None => board::score(m),
     };
 
-    let start_label = if sketch.is_some() { "Your sketch" } else { "Random start" };
-    let (k, start, best) = place_cases(cases, judge, args.steps, &mut rng, sketch.as_ref(), true);
+    let placer = (args.start == "net").then(placing::load);
+    let (from, start_label) = match (&placer, &sketch) {
+        (Some(placer), _) => (StartFrom::Network(placer), "The placing network's layout"),
+        (None, Some(sketch)) => (StartFrom::Sketch(sketch), "Your sketch"),
+        (None, None) => (StartFrom::Random, "Random start"),
+    };
+    let (k, start, best) = place_cases(cases, judge, args.steps, &mut rng, &from, true, |_, _| {});
     let c = &cases[k];
     if cases.len() > 1 {
         println!("\nBest: case {} of {}\n", k + 1, cases.len());
@@ -410,9 +442,9 @@ fn make_examples(cases: &[Circuit], rng: &mut StdRng) -> (Vec<Measures>, Vec<Mea
     for i in 0..12 {
         let c = &cases[i % cases.len()];
         let mut snap_rng = StdRng::seed_from_u64(rng.random());
-        place::anneal(c, board::score, 4000, rng, None, |p| {
+        place::anneal(c, board::score, 4000, rng, place::Start::Random, |s| {
             if snap_rng.random::<f64>() < 0.02 {
-                examples.push(board::measure(c, p));
+                examples.push(board::measure(c, s.current));
             }
         });
     }

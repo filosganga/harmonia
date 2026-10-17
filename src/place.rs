@@ -7,20 +7,51 @@ use crate::board::{Circuit, Measures, Placement, SCORE_SCALE, measure, random_pl
 use crate::constraints;
 use rand::Rng;
 
-/// `judge` scores a board 0-100. `on_step` sees every accepted-or-not current board
-/// (used by training to collect examples). Returns the best placement found.
+/// How much worse (in cost) a move may be and still get accepted now and then, at the start. It
+/// falls to almost 0 by the end.
+const START_TEMPERATURE: f64 = 20.0;
+/// The same, when the placer starts from the placing network's layout: a good start is worth
+/// keeping, and a hot start shakes it up.
+pub const NETWORK_START_TEMPERATURE: f64 = 5.0;
+
+/// Where the placer starts.
+pub enum Start {
+    /// Anywhere at random.
+    Random,
+    /// This layout: your sketch, say.
+    Given(Placement),
+    /// The placing network's layout (see `NETWORK_START_TEMPERATURE`).
+    Network(Placement),
+}
+
+/// What the placer is doing, for `on_step` to look at after every step.
+pub struct Step<'a> {
+    /// Which step, from 0.
+    pub step: usize,
+    /// The current board, whether this step's move was kept or not.
+    pub current: &'a Placement,
+    /// The lowest cost found so far.
+    pub best_cost: f64,
+}
+
+/// `judge` scores a board 0-100. `on_step` sees every step (training uses it to collect example
+/// boards, the benchmark to see how fast the cost falls). Returns the best placement found.
 pub fn anneal(
     c: &Circuit,
     judge: impl Fn(&Measures) -> f64,
     steps: usize,
     rng: &mut impl Rng,
-    start: Option<Placement>,
-    mut on_step: impl FnMut(&Placement),
+    start: Start,
+    mut on_step: impl FnMut(&Step),
 ) -> Placement {
     let (w, h) = (c.board.width, c.board.height);
     // Parts the placer may touch: everything except the ones the board file allows only one place.
     let movable: Vec<usize> = (0..c.components.len()).filter(|&i| c.constraints.allowed[i].as_ref().is_none_or(|a| a.len() > 1)).collect();
-    let mut cur = start.unwrap_or_else(|| random_placement(c, rng));
+    let (mut cur, start_temperature) = match start {
+        Start::Random => (random_placement(c, rng), START_TEMPERATURE),
+        Start::Given(p) => (p, START_TEMPERATURE),
+        Start::Network(p) => (p, NETWORK_START_TEMPERATURE),
+    };
     // Compare boards by cost, not by the 0-100 score: the score flattens out for big circuits
     // (at cost 400 a much worse move barely changes it), which would make the placer accept anything.
     let cost_of = |p: &Placement| -SCORE_SCALE * (judge(&measure(c, p)).max(1e-9) / 100.0).ln();
@@ -31,8 +62,7 @@ pub fn anneal(
     }
 
     for i in 0..steps {
-        // How much worse (in cost) a move may be and still get accepted now and then; falls to almost 0.
-        let temp = 20.0 * (1.0 - i as f64 / steps as f64) + 0.1;
+        let temp = start_temperature * (1.0 - i as f64 / steps as f64) + 0.1;
         let mut new = cur.clone();
         let k = movable[rng.random_range(0..movable.len())];
         let roll: f64 = rng.random();
@@ -62,7 +92,7 @@ pub fn anneal(
                 (best, best_s) = (cur.clone(), cur_s);
             }
         }
-        on_step(&cur);
+        on_step(&Step { step: i, current: &cur, best_cost: best_s });
     }
     best
 }

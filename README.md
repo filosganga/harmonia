@@ -17,6 +17,7 @@ cargo run --release -- place                # auto-place the 555 blinker using t
 cargo run --release -- train                # teach the tiny network to score boards like the rules do
 cargo run --release -- evolve               # the same, by evolution instead (1 parent + 19 children)
 cargo run --release -- place --judge net    # auto-place again, but let the network be the judge
+cargo run --release -- place --start net    # start the placer from the placing network's layout (see below)
 cargo run --release -- place my_sketch.diy  # score a rough DIYLC layout, then fit it on the board
 cargo run --release -- nets my_sketch.diy   # just list the parts and connections it understood
 cargo run --release -- check my_sketches/   # place, write and re-read every .diy: same connections? (see below)
@@ -25,7 +26,8 @@ cargo run --release -- data                 # add a batch of placed random circu
 cargo run --release -- learn                # train the placing network on them and test it on circuits it never saw
 ```
 
-Options: `--steps 50000` (placer effort), `--seed 7` (a different random start), `--board 24x16`
+Options: `--steps 50000` (placer effort), `--seed 7` (a different random start), `--start net` (start
+from the placing network's layout instead, below), `--board 24x16`
 (perfboard size in holes, default 18x12), `--power +12V` / `--ground GND` (which nets are supply and
 ground, guessed from common names like `+5V`, `VCC` and `GND` if left out), or a path to another netlist.
 Board size, power and ground can also live in the board file (below); a flag wins over it.
@@ -43,7 +45,7 @@ for each case and which was best) and writes, in `out/` (named `rules` or `net` 
   position, pin and net. Hole numbers are the text board's.
 - `rules-solder.svg`: the same board turned over to solder it: mirrored (column 0 on the right), copper
   in front, the parts faint behind.
-- `rules.html`: the start (random, or your sketch) and the result side by side, drawn the same way.
+- `rules.html`: the start (random, your sketch, or the placing network's layout with `--start net`) and the result side by side, drawn the same way.
 - `rules.kicad_pcb`: the layout for KiCad's PCB editor (KiCad 10 opens it). Every pad is on its net, so
   KiCad shows the connections still to wire (the routed traces aren't in it yet). The footprints are
   simple stand-ins built from `footprints.json`; Tools → Update Footprints from Library swaps in KiCad's
@@ -200,10 +202,10 @@ text board. Pins are named like the `nets` command prints them.
 | `src/random_circuit.rs` | Makes random circuits from the parts in `footprints.json`, wired like a small hobby board, with a board file. The same number always makes the same circuit. |
 | `src/data.rs` | The `data` command: places random circuits and keeps their layouts, the training data for a placing network; and the order that network places parts in. |
 | `src/parallel.rs` | Runs independent jobs (placing several circuits) on every processor core at once. |
-| `src/place.rs` | The auto-placer: keeps nudging/rotating/swapping parts (and jumping a part with placement rules to another place they allow) and keeps changes the judge likes. |
+| `src/place.rs` | The auto-placer: keeps nudging/rotating/swapping parts (and jumping a part with placement rules to another place they allow) and keeps changes the judge likes. Starts at random, from a given layout, or from the placing network's (cooler, so it keeps the good start). |
 | `src/nn.rs` | The neural network, written out by hand (8 hidden neurons, 89 weights). |
-| `src/bench.rs` | The benchmark: places every circuit of `circuits/bench.txt` with three seeds, several runs at once, and records the best costs and layouts. |
-| `src/placing.rs` | The placing network (Burn): draws the board with the next part at each place it may take, scores each picture with a small convolutional network, and the `learn` command that trains and tests it. |
+| `src/bench.rs` | The benchmark: places every circuit of `circuits/bench.txt` with three seeds, several runs at once, and records the best costs and layouts and how the cost fell; `--start net` starts from the placing network and compares with the plain placer. |
+| `src/placing.rs` | The placing network (Burn): draws the board with the next part at each place it may take, scores each picture with a small convolutional network, and the `learn` command that trains and tests it; and `propose`, the network's whole layout, for `place --start net`. |
 | `src/main.rs` | The commands: `place`, `train`, `evolve`, `nets`, `check`, `bench`, `data` and `learn`; `place` and `check` place every case of the board file's rules and keep the best. `train` and `evolve` make ~1,200 example boards (going through the board file's cases in turn, up to 12), have the rules score them, and train the network to match. |
 
 ## How a board is judged
@@ -354,8 +356,24 @@ a test on circuits nothing was fitted to. The numbers (2026-10-17, 1,000 circuit
 | random circuits kept aside (1,326 decisions) | 12.4% / 30.2% | 1.6% / 10.7% | 0.2% / 1.3% | 0.4% / 1.9% |
 | benchmark circuits (148 decisions) | 9.5% / 28.4% | 2.6% / 10.0% | 0.5% / 2.2% | 0.5% / 2.5% |
 
-Learning from random circuits carries over to the real ones: nearly as good on the benchmark. Nothing
-uses the network to place yet; that's next (docs/plans/placing-network.md, stage 3).
+Learning from random circuits carries over to the real ones: nearly as good on the benchmark.
+
+**Placing with it.** `place --start net` starts the placer
+from the network's layout instead of a random one (or your DIYLC sketch: the network wins over it): each part, in the placing order, goes where the
+network scores best, with the parts before it where it put them (under a second). A part with no
+room left starts at random. The placer still has the last word, so the result is always polished,
+but it starts cooler (`place::NETWORK_START_TEMPERATURE`, 5 against the usual 20), since a hot
+start shakes a good layout up; 5 was the best of 20, 5, 2 and 0.5 on the benchmark circuits, so for
+this one setting the benchmark isn't quite unseen. `bench --start net` measures it against the plain placer (below). On 2026-10-17, with the network
+above: the network's layout alone costs 2.5 to 6 times less than a random start (not on the cat
+feeder), and after the same
+20,000 steps the mean cost is lower on 7 of the 12 benchmark circuits, 4.8% lower on average without
+the cat feeder. Where it helps it gets there sooner: within 0.3k to 12k steps on the 555, the LM386
+amp and the transistor flasher, where the plain placer takes 18k to 20k or never does, and a few
+thousand steps sooner on the others. It does worse on the cat feeder, the ATtiny85 board, the LM317
+supply, and (by 1 to 2%) the LED chaser and the PWM controller. The cat feeder has
+modules (an ESP32 on headers), which the random training circuits don't have: the network places the
+big modules badly, and one ends up with no room.
 
 ## Checking a change
 
@@ -368,8 +386,8 @@ cargo run --release -- check circuits/cat_feeder.diy --seed 2   # one file
 cargo run --release -- check my_sketches/ --steps 2000          # every .diy in a folder
 ```
 
-`check` places each file as `place` does (every case, keeping the best, with a line for each case
-when there are several), writes the `.diy` (to `out/check.diy`, overwritten for each
+`check` places each file as `place` does from the sketch (every case, keeping the best, with a line
+for each case when there are several; it ignores `--start`), writes the `.diy` (to `out/check.diy`, overwritten for each
 file), reads it back and compares the connections. For each file it says one of:
 
 - **same**: passes (only counted).
@@ -401,7 +419,11 @@ It places each circuit listed in `circuits/bench.txt` (the 555, the cat feeder a
 circuits in `circuits/bench/`) from a random start, with three seeds and `place`'s default steps,
 the way `place` does, and prints each seed's best cost, the best and mean of the three, and the time
 per run; `out/bench.json` keeps them, with each circuit's best layout (the right answers `learn`
-tests the placing network on). It takes no options, so every run measures the same thing. The runs go several at a time,
+tests the placing network on). It takes no options but one: `bench --start net` starts every run
+from the placing network's layout, saves to `out/bench-net.json` (`out/bench.json` stays the plain
+placer's), and prints a comparison with the plain placer's last run: the starting layouts' cost, the
+mean and best cost after the same steps, and the step at which each run got down to the plain
+placer's mean cost. Otherwise every run measures the same thing. The runs go several at a time,
 one per processor core (about 21s on an 18-core Mac); each has its own random numbers from its seed,
 so the costs are the same as running them one by one. Costs only compare within a circuit, and only
 under the same weights: a change to a measurement or a weight changes what a cost means, so run the
@@ -443,7 +465,7 @@ benchmark before and after it and compare the layouts, not the old numbers.
   taste among layouts that are already allowed.
 - **Model settings are the author's job.** Hidden neurons, learning rates, generations and the rule
   weights are constants in the code, not flags. Flags are for your problem: the circuit, the board,
-  power and ground, the seed, how hard the placer tries.
+  power and ground, the seed, how hard the placer tries, which judge and where it starts.
 - **Plain code over clever code**, with comments that explain why in plain words.
 
 ## Where the neural network fits

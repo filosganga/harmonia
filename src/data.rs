@@ -63,7 +63,7 @@ pub fn run() {
     jobs.sort_by_key(|&i| Reverse(circuits[i][0].components.len()));
     let placed = parallel::map(&jobs, |&i| {
         let mut rng = StdRng::seed_from_u64(indices[i] + PLACER_SEED);
-        let (k, _, layout) = crate::place_cases(&circuits[i], board::score, STEPS, &mut rng, None, false);
+        let (k, _, layout) = crate::place_cases(&circuits[i], board::score, STEPS, &mut rng, &crate::StartFrom::Random, false, |_, _| {});
         let cost = board::cost(&board::measure(&circuits[i][k], &layout));
         (k, layout, cost)
     });

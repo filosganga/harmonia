@@ -24,7 +24,7 @@ use burn::nn::{Linear, LinearConfig, PaddingConfig2d, Relu};
 use burn::optim::{AdamConfig, GradientsParams};
 use burn::prelude::*;
 use burn::tensor::{TensorData, activation::log_softmax};
-use rand::{SeedableRng, rngs::StdRng, seq::SliceRandom};
+use rand::{Rng, SeedableRng, rngs::StdRng, seq::SliceRandom};
 use std::collections::HashSet;
 use std::time::Instant;
 
@@ -99,6 +99,7 @@ struct Decision {
 }
 
 /// The board so far: what the parts already placed take and where their pins are.
+#[derive(Clone)]
 struct Scene {
     /// Holes taken by placed parts' bodies.
     taken: HashSet<Point>,
@@ -156,17 +157,8 @@ fn net_index(c: &Circuit, name: &Option<String>) -> Option<usize> {
 /// (on another one), which the placer sometimes can't avoid.
 fn decisions(lesson: &Lesson) -> Vec<Decision> {
     let c = &lesson.circuit;
-    let g = board::geometry(c, &lesson.layout);
     let nets = pin_nets(c);
-    let (supply_net, ground_net) = (net_index(c, &c.power), net_index(c, &c.ground));
-    let mut scene = Scene {
-        taken: HashSet::new(),
-        under: HashSet::new(),
-        tall: HashSet::new(),
-        net_pins: vec![Vec::new(); c.nets.len()],
-        supply: Vec::new(),
-        ground: Vec::new(),
-    };
+    let mut scene = Scene::new(c);
     let mut out = Vec::new();
     for part in data::placing_order(c) {
         let candidates = candidates(c, &scene, part);
@@ -175,38 +167,45 @@ fn decisions(lesson: &Lesson) -> Vec<Decision> {
         {
             out.push(Decision { part, scene: scene.clone(), candidates, answer });
         }
-        // Now put the part down where the layout has it.
-        scene.taken.extend(&g.bodies[part]);
-        if g.bodies[part].len() < g.outlines[part].len() {
-            scene.under.extend(g.outlines[part].iter().filter(|h| !g.bodies[part].contains(h)));
-        }
-        if !c.components[part].low {
-            scene.tall.extend(&g.outlines[part]);
-        }
-        for (pin, &hole) in g.pins[part].iter().enumerate() {
-            if let Some(net) = nets[part][pin] {
-                scene.net_pins[net].push(hole);
-                if Some(net) == supply_net {
-                    scene.supply.push(hole);
-                }
-                if Some(net) == ground_net {
-                    scene.ground.push(hole);
-                }
-            }
-        }
+        scene.put(c, &nets, part, lesson.layout[part]);
     }
     out
 }
 
-impl Clone for Scene {
-    fn clone(&self) -> Scene {
+impl Scene {
+    /// An empty board.
+    fn new(c: &Circuit) -> Scene {
         Scene {
-            taken: self.taken.clone(),
-            under: self.under.clone(),
-            tall: self.tall.clone(),
-            net_pins: self.net_pins.clone(),
-            supply: self.supply.clone(),
-            ground: self.ground.clone(),
+            taken: HashSet::new(),
+            under: HashSet::new(),
+            tall: HashSet::new(),
+            net_pins: vec![Vec::new(); c.nets.len()],
+            supply: Vec::new(),
+            ground: Vec::new(),
+        }
+    }
+
+    /// Puts `part` down at `p`.
+    fn put(&mut self, c: &Circuit, nets: &[Vec<Option<usize>>], part: usize, p: Place) {
+        let s = shape(&c.components[part], p);
+        self.taken.extend(&s.body);
+        if s.body.len() < s.outline.len() {
+            self.under.extend(s.outline.iter().filter(|h| !s.body.contains(h)));
+        }
+        if !c.components[part].low {
+            self.tall.extend(&s.outline);
+        }
+        let (supply_net, ground_net) = (net_index(c, &c.power), net_index(c, &c.ground));
+        for (pin, &hole) in s.pins.iter().enumerate() {
+            if let Some(net) = nets[part][pin] {
+                self.net_pins[net].push(hole);
+                if Some(net) == supply_net {
+                    self.supply.push(hole);
+                }
+                if Some(net) == ground_net {
+                    self.ground.push(hole);
+                }
+            }
         }
     }
 }
@@ -255,7 +254,7 @@ fn picture_size(c: &Circuit) -> (usize, usize) {
 }
 
 /// The channels that don't depend on where the new part goes.
-fn background(c: &Circuit, d: &Decision, nets: &[Vec<Option<usize>>]) -> Vec<f32> {
+fn background(c: &Circuit, part: usize, scene: &Scene, nets: &[Vec<Option<usize>>]) -> Vec<f32> {
     let (ph, pw) = picture_size(c);
     let mut grid = vec![0.0; CHANNELS * ph * pw];
     let mut set = |channel: usize, (x, y): Point| {
@@ -272,17 +271,17 @@ fn background(c: &Circuit, d: &Decision, nets: &[Vec<Option<usize>>]) -> Vec<f32
         set(OUTSIDE, (c.board.width, y));
     }
     c.constraints.keepout_holes.iter().for_each(|&hole| set(OUTSIDE, hole));
-    d.scene.taken.iter().for_each(|&hole| set(TAKEN, hole));
-    d.scene.supply.iter().for_each(|&hole| set(SUPPLY, hole));
-    d.scene.ground.iter().for_each(|&hole| set(GROUND, hole));
-    for net in nets[d.part].iter().flatten() {
-        d.scene.net_pins[*net].iter().for_each(|&hole| set(NET_PINS, hole));
+    scene.taken.iter().for_each(|&hole| set(TAKEN, hole));
+    scene.supply.iter().for_each(|&hole| set(SUPPLY, hole));
+    scene.ground.iter().for_each(|&hole| set(GROUND, hole));
+    for net in nets[part].iter().flatten() {
+        scene.net_pins[*net].iter().for_each(|&hole| set(NET_PINS, hole));
     }
     grid
 }
 
 /// Appends the picture of the board so far with the new part at `p` to `out`.
-fn draw(c: &Circuit, d: &Decision, background: &[f32], nets: &[Vec<Option<usize>>], p: Place, out: &mut Vec<f32>) {
+fn draw(c: &Circuit, part: usize, scene: &Scene, background: &[f32], nets: &[Vec<Option<usize>>], p: Place, out: &mut Vec<f32>) {
     let (ph, pw) = picture_size(c);
     let start = out.len();
     out.extend_from_slice(background);
@@ -290,19 +289,19 @@ fn draw(c: &Circuit, d: &Decision, background: &[f32], nets: &[Vec<Option<usize>
     let mut set = |channel: usize, (x, y): Point| {
         grid[channel * ph * pw + (y + 1) as usize * pw + (x + 1) as usize] = 1.0;
     };
-    let s = shape(&c.components[d.part], p);
+    let s = shape(&c.components[part], p);
     s.body.iter().for_each(|&hole| set(BODY, hole));
     let (supply_net, ground_net) = (net_index(c, &c.power), net_index(c, &c.ground));
     for (pin, &hole) in s.pins.iter().enumerate() {
         set(PINS, hole);
-        let Some(net) = nets[d.part][pin] else { continue };
+        let Some(net) = nets[part][pin] else { continue };
         if Some(net) == supply_net {
             set(SUPPLY, hole);
         }
         if Some(net) == ground_net {
             set(GROUND, hole);
         }
-        if let Some(&to) = nearest(hole, &d.scene.net_pins[net]) {
+        if let Some(&to) = nearest(hole, &scene.net_pins[net]) {
             line(hole, to).into_iter().for_each(|h| set(RATSNEST, h));
         }
     }
@@ -352,12 +351,12 @@ fn training_batch(lesson: &Lesson, rng: &mut StdRng) -> Batch {
     let (height, width) = picture_size(c);
     let mut batch = Batch { pictures: Vec::new(), height, width, sizes: Vec::new() };
     for d in decisions(lesson) {
-        let background = background(c, &d, &nets);
+        let background = background(c, d.part, &d.scene, &nets);
         let mut others: Vec<usize> = (0..d.candidates.len()).filter(|&i| i != d.answer).collect();
         others.shuffle(rng);
         others.truncate(NEGATIVES);
         for i in std::iter::once(d.answer).chain(others.iter().copied()) {
-            draw(c, &d, &background, &nets, d.candidates[i], &mut batch.pictures);
+            draw(c, d.part, &d.scene, &background, &nets, d.candidates[i], &mut batch.pictures);
         }
         batch.sizes.push(1 + others.len());
     }
@@ -473,6 +472,55 @@ fn top(scores: &[f32], answer: usize, k: usize) -> f64 {
     (k.saturating_sub(better) as f64 / tied as f64).min(1.0)
 }
 
+/// The network's score for each candidate place of `part` on the board so far.
+fn scores(model: &Net, c: &Circuit, part: usize, scene: &Scene, nets: &[Vec<Option<usize>>], candidates: &[Place], device: &Device) -> Vec<f32> {
+    let (height, width) = picture_size(c);
+    let background = background(c, part, scene, nets);
+    let mut out = Vec::with_capacity(candidates.len());
+    for chunk in candidates.chunks(1024) {
+        let mut batch = Batch { pictures: Vec::new(), height, width, sizes: vec![chunk.len()] };
+        for &p in chunk {
+            draw(c, part, scene, &background, nets, p, &mut batch.pictures);
+        }
+        out.extend(model.forward(batch.tensor(device)).try_to_vec_as::<f32>().expect("the scores can be read"));
+    }
+    out
+}
+
+/// The network saved by `learn`, for placing.
+pub fn load() -> Net {
+    if !std::path::Path::new(MODEL).exists() {
+        panic!("no placing network yet ({MODEL}): run `cargo run --release -- learn` first");
+    }
+    Net::new(&Device::flex()).load_file(MODEL)
+}
+
+/// The network's layout for a circuit: each part in the placing order goes where the network scores
+/// best, with the parts before it where it put them. A part with nowhere left to go (the parts
+/// before it took the room) stays where `random_placement` put it, for the placer to sort out.
+/// Returns the layout and how many parts that happened to.
+pub fn propose(c: &Circuit, model: &Net, rng: &mut impl Rng) -> (board::Placement, usize) {
+    let device = Device::flex();
+    let nets = pin_nets(c);
+    let mut layout = board::random_placement(c, rng);
+    let mut scene = Scene::new(c);
+    let mut stuck = 0;
+    for part in data::placing_order(c) {
+        let candidates = candidates(c, &scene, part);
+        match candidates.len() {
+            0 => stuck += 1,
+            1 => layout[part] = candidates[0],
+            _ => {
+                let scores = scores(model, c, part, &scene, &nets, &candidates, &device);
+                let best = (0..candidates.len()).max_by(|&a, &b| scores[a].total_cmp(&scores[b])).unwrap();
+                layout[part] = candidates[best];
+            }
+        }
+        scene.put(c, &nets, part, layout[part]);
+    }
+    (layout, stuck)
+}
+
 /// Prints top-1 and top-5 on some lessons, for the network and the simple rules to beat.
 fn report(what: &str, model: &Net, lessons: &[Lesson]) {
     let device = Device::flex();
@@ -482,18 +530,8 @@ fn report(what: &str, model: &Net, lessons: &[Lesson]) {
     for lesson in lessons {
         let c = &lesson.circuit;
         let nets = pin_nets(c);
-        let (height, width) = picture_size(c);
         for d in decisions(lesson) {
-            let background = background(c, &d, &nets);
-            let mut network = Vec::with_capacity(d.candidates.len());
-            for chunk in d.candidates.chunks(1024) {
-                let mut batch = Batch { pictures: Vec::new(), height, width, sizes: vec![chunk.len()] };
-                for &p in chunk {
-                    draw(c, &d, &background, &nets, p, &mut batch.pictures);
-                }
-                let scores = model.forward(batch.tensor(&device));
-                network.extend(scores.try_to_vec_as::<f32>().expect("the scores can be read"));
-            }
+            let network = scores(model, c, d.part, &d.scene, &nets, &d.candidates, &device);
             let ratsnest: Vec<f32> = d.candidates.iter().map(|&p| -ratsnest_length(c, &d, &nets, p)).collect();
             let neighbour: Vec<f32> = d.candidates.iter().map(|&p| -distance_to_partner(c, lesson, &d, &nets, p)).collect();
             let random = vec![0.0; d.candidates.len()];

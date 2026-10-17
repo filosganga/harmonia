@@ -2,7 +2,11 @@
 //!
 //! It places each circuit listed in `circuits/bench.txt` from a random start, once per seed, the
 //! way `place` does (every case of its board file, keeping the best), and records the best cost, the
-//! time, and each circuit's best layout (the right answers `learn` tests the placing network on). Its settings are constants, so every run measures the same thing.
+//! time, how the cost fell, and each circuit's best layout (the right answers `learn` tests the
+//! placing network on). Its settings are constants, so every run measures the same thing.
+//!
+//! `bench --start net` does the same starting from the placing network's layout, and compares it
+//! with the plain placer's last run.
 //!
 //! The runs don't depend on each other, so several go at once, one per processor core. Each run has
 //! its own random numbers, made from its seed, so the costs are the same as running them one by one.
@@ -17,8 +21,10 @@ const LIST: &str = "circuits/bench.txt";
 const SEEDS: [u64; 3] = [1, 2, 3];
 const STEPS: usize = crate::DEFAULT_STEPS;
 const RESULTS: &str = "out/bench.json";
+/// Where `bench --start net` saves its results (out/bench.json stays the plain placer's).
+const NETWORK_RESULTS: &str = "out/bench-net.json";
 
-/// What `bench` found for one circuit, as saved in out/bench.json.
+/// What `bench` found for one circuit, as saved in out/bench.json (or out/bench-net.json).
 #[derive(Serialize, Deserialize)]
 pub struct Found {
     pub circuit: String,
@@ -32,6 +38,24 @@ pub struct Found {
     /// for: the right answers when testing the placing network (`learn`).
     pub best_case: usize,
     pub best_layout: Vec<[i32; 3]>,
+    /// The cost of each seed's starting layout (random, or the network's).
+    #[serde(default)]
+    start_costs: Vec<f64>,
+    /// How each seed's best cost fell: (step, new lowest cost), the steps counted on through the
+    /// board file's cases one after the other.
+    #[serde(default)]
+    progress: Vec<Vec<(usize, f64)>>,
+}
+
+/// One run: the best layout's cost, its case and the layout, how long it took, the start's cost,
+/// and how the cost fell.
+struct Run {
+    cost: f64,
+    case: usize,
+    layout: board::Placement,
+    seconds: f64,
+    start_cost: f64,
+    progress: Vec<(usize, f64)>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -41,9 +65,17 @@ pub struct Saved {
     pub results: Vec<Found>,
 }
 
-/// Places every circuit of the benchmark with every seed, prints a table and saves out/bench.json.
-pub fn run() {
+/// Places every circuit of the benchmark with every seed, prints a table and saves out/bench.json;
+/// or, `from_network`, starts from the placing network's layouts, saves out/bench-net.json and
+/// compares with out/bench.json.
+pub fn run(from_network: bool) {
     let t0 = Instant::now();
+    let plain = if from_network { Some(saved().unwrap_or_else(|why| panic!("{why}"))) } else { None };
+    // An out/bench.json from before `bench` recorded how the cost falls has nothing to compare with.
+    if plain.as_ref().is_some_and(|p| p.results.iter().any(|r| r.progress.is_empty() || r.start_costs.is_empty())) {
+        panic!("{RESULTS} is from an older `bench`, without the start costs and progress to compare with: run `bench` again");
+    }
+    let placer = from_network.then(crate::placing::load);
     let list = std::fs::read_to_string(LIST).unwrap_or_else(|e| panic!("can't read {LIST}: {e}"));
     let paths: Vec<&str> = list.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')).collect();
     let circuits: Vec<Vec<Circuit>> = paths.iter().map(|path| load(path)).collect();
@@ -53,16 +85,19 @@ pub fn run() {
     let mut jobs: Vec<(usize, usize)> = (0..circuits.len()).flat_map(|c| (0..SEEDS.len()).map(move |s| (c, s))).collect();
     jobs.sort_by_key(|&(c, _)| std::cmp::Reverse(circuits[c].len() * circuits[c][0].components.len()));
     let workers = crate::parallel::workers().min(jobs.len());
+    let from = if from_network { "the placing network's layout" } else { "a random start" };
     println!(
-        "Benchmark: {} circuits x {} seeds, {STEPS} steps each, from a random start ({workers} runs at a time)\n",
+        "Benchmark: {} circuits x {} seeds, {STEPS} steps each, from {from} ({workers} runs at a time)\n",
         circuits.len(),
         SEEDS.len()
     );
 
-    let done = crate::parallel::map(&jobs, |&(c, s)| {
-        let started = Instant::now();
-        let (cost, case, layout) = place(&circuits[c], SEEDS[s]);
-        (cost, case, layout, started.elapsed().as_secs_f64())
+    let runs = crate::parallel::map(&jobs, |&(c, s)| {
+        let from = match &placer {
+            Some(net) => crate::StartFrom::Network(net),
+            None => crate::StartFrom::Random,
+        };
+        place(&circuits[c], SEEDS[s], &from)
     });
 
     let mut results: Vec<Found> = paths
@@ -76,13 +111,18 @@ pub fn run() {
             seconds: vec![0.0; SEEDS.len()],
             best_case: 0,
             best_layout: Vec::new(),
+            start_costs: vec![0.0; SEEDS.len()],
+            progress: vec![Vec::new(); SEEDS.len()],
         })
         .collect();
     let mut layouts = vec![vec![(0, Vec::new()); SEEDS.len()]; circuits.len()];
-    for (&(c, s), (cost, case, layout, seconds)) in jobs.iter().zip(done) {
-        results[c].costs[s] = cost;
-        results[c].seconds[s] = seconds;
-        layouts[c][s] = (case, layout);
+    for (&(c, s), run) in jobs.iter().zip(runs) {
+        let r = &mut results[c];
+        r.costs[s] = run.cost;
+        r.seconds[s] = run.seconds;
+        r.start_costs[s] = run.start_cost;
+        r.progress[s] = run.progress;
+        layouts[c][s] = (run.case, run.layout);
     }
     for (r, layouts) in results.iter_mut().zip(layouts) {
         // The first seed with the lowest cost.
@@ -92,13 +132,57 @@ pub fn run() {
         r.best_layout = layout.iter().map(|p| [p.x, p.y, p.rot as i32]).collect();
     }
     print_table(&results);
+    if let Some(plain) = &plain {
+        compare(&plain.results, &results);
+    }
+    let path = if from_network { NETWORK_RESULTS } else { RESULTS };
     let saved = Saved { steps: STEPS, seeds: SEEDS.to_vec(), results };
-    std::fs::write(RESULTS, serde_json::to_string_pretty(&saved).unwrap()).unwrap();
+    std::fs::write(path, serde_json::to_string_pretty(&saved).unwrap()).unwrap();
     println!(
         "\nCosts compare only within a circuit. Times are per run, with up to {workers} runs sharing the machine,\n\
-         so a run alone is quicker. Saved to {RESULTS} in {:.1}s.",
+         so a run alone is quicker. Saved to {path} in {:.1}s.",
         t0.elapsed().as_secs_f64()
     );
+}
+
+/// Starting from the network (`net`) against the plain placer (`plain`), circuit by circuit: the
+/// starting layout's cost, the cost after the same steps, and how many steps each took to reach the
+/// plain placer's mean cost.
+fn compare(plain: &[Found], net: &[Found]) {
+    let mean = |v: &[f64]| v.iter().sum::<f64>() / v.len() as f64;
+    let best = |v: &[f64]| v.iter().copied().fold(f64::INFINITY, f64::min);
+    // The first step at which a run's lowest cost got down to `target`, in thousands, or "-" never.
+    let steps_to = |progress: &[Vec<(usize, f64)>], target: f64| -> String {
+        let one = |p: &Vec<(usize, f64)>| p.iter().find(|&&(_, cost)| cost <= target + 1e-9).map_or("-".to_string(), |&(step, _)| format!("{:.1}k", step as f64 / 1000.0));
+        progress.iter().map(one).collect::<Vec<_>>().join(" ")
+    };
+    println!("\nStarting from the placing network, against the plain placer (out/bench.json):\n");
+    println!(
+        "{:<38} {:>17} {:>17} {:>17}   steps to the plain placer's mean cost, each seed",
+        "", "start cost", "mean after", "best after"
+    );
+    println!("{:<38} {:>8} {:>8} {:>8} {:>8} {:>8} {:>8}   {:<18} network", "circuit", "random", "network", "plain", "network", "plain", "network", "plain");
+    let mut better = 0;
+    for (p, n) in plain.iter().zip(net) {
+        assert_eq!(p.circuit, n.circuit, "out/bench.json is from another benchmark set: run `bench` again");
+        let target = mean(&p.costs);
+        if mean(&n.costs) < target {
+            better += 1;
+        }
+        println!(
+            "{:<38} {:>8.1} {:>8.1} {:>8.1} {:>8.1} {:>8.1} {:>8.1}   {:<18} {}",
+            n.circuit,
+            mean(&p.start_costs),
+            mean(&n.start_costs),
+            target,
+            mean(&n.costs),
+            best(&p.costs),
+            best(&n.costs),
+            steps_to(&p.progress, target),
+            steps_to(&n.progress, target)
+        );
+    }
+    println!("\nStarting from the network, the mean cost after {STEPS} steps is lower on {better} of {} circuits.", net.len());
 }
 
 /// The circuit once for each case of its board file's rules, read as `place` reads it, ignoring
@@ -108,6 +192,7 @@ pub fn load(path: &str) -> Vec<Circuit> {
         command: "bench".into(),
         circuit: path.into(),
         judge: "rules".into(),
+        start: String::new(),
         steps: STEPS,
         seed: 1,
         board: None,
@@ -117,13 +202,19 @@ pub fn load(path: &str) -> Vec<Circuit> {
     crate::load(path, &args).cases
 }
 
-/// Places every case from a random start, as `place --seed <seed>` does, and returns the best
-/// layout's cost, its case and the layout. A DIYLC sketch starts from random too, not from where it
-/// was drawn: so will the network.
-fn place(cases: &[Circuit], seed: u64) -> (f64, usize, board::Placement) {
+/// Places every case as `place --seed <seed>` does (with `--start net` if `from` is the network).
+/// A DIYLC sketch starts from random too, not from where it was drawn.
+fn place(cases: &[Circuit], seed: u64, from: &crate::StartFrom) -> Run {
+    let started = Instant::now();
     let mut rng = StdRng::seed_from_u64(seed);
-    let (k, _, layout) = crate::place_cases(cases, board::score, STEPS, &mut rng, None, false);
-    (board::cost(&board::measure(&cases[k], &layout)), k, layout)
+    let mut progress: Vec<(usize, f64)> = Vec::new();
+    let (case, start, layout) = crate::place_cases(cases, board::score, STEPS, &mut rng, from, false, |k, step| {
+        if progress.last().is_none_or(|&(_, lowest)| step.best_cost < lowest) {
+            progress.push((k * STEPS + step.step, step.best_cost));
+        }
+    });
+    let cost_of = |p: &board::Placement| board::cost(&board::measure(&cases[case], p));
+    Run { cost: cost_of(&layout), case, start_cost: cost_of(&start), layout, seconds: started.elapsed().as_secs_f64(), progress }
 }
 
 /// What the last `bench` saved (out/bench.json), or why it can't be read.

@@ -1,6 +1,6 @@
 # Plan: a network that places parts
 
-Status: stages 0, 1 and 2 done (2026-10-17); stage 3 next. Written 2026-10-17.
+Status: stages 0 to 3 done (2026-10-17); stage 4 next (the maintainer said go on before seeing stage 3's numbers). Written 2026-10-17.
 
 ## Goal
 
@@ -190,6 +190,60 @@ network, fewer wrong places, epochs carried over between runs, Metal through `wg
   needed to reach today's best cost.
 - **Decision:** is it worth going on to stage 4?
 
+**Done (2026-10-17).** `place --start net` and `bench --start net` (saves `out/bench-net.json` and
+compares with `out/bench.json`). `placing::propose` places the parts in the placing order, each where
+the network scores best (a part with no room left starts at random; the placer sorts it out).
+`anneal` now takes a `Start` and reports every step, so `bench` records how the best cost falls.
+The plain placer's results are unchanged (the same costs to the decimal, `place` on the 555 84.6,
+`place circuits/cat_feeder.diy` 454.3 in 16.6s).
+
+**The hot start, as feared, then fixed.** At the usual starting temperature (20) the network's
+head start was thrown away: lower mean cost on only 4 of 12 circuits, and both starts reached the
+plain placer's mean only at step 18-19k. Starting cooler from the network
+(`place::NETWORK_START_TEMPERATURE`), geometric mean of (mean cost from the network / plain mean
+cost) over the 12 circuits, and without the cat feeder:
+
+| start temperature | all 12 | without the cat feeder | lower mean on |
+|---:|---:|---:|---:|
+| 20 | +3.5% | +1.4% | 4 of 12 |
+| **5** | **-0.5%** | **-4.8%** | **7 of 12** |
+| 2 | 0.0% | -3.9% | 7 of 12 |
+| 0.5 | +11.3% | +7.6% | 3 of 12 |
+
+5 is kept. (It was chosen on the benchmark, as this plan says; the benchmark is no longer quite
+unseen for this one setting.)
+
+With 5, per circuit (mean of 3 seeds; steps to reach the plain placer's mean, each seed, "-" never):
+
+| circuit | start: random / network | mean after 20k: plain / network | steps: plain | steps: network |
+|---|---:|---:|---|---|
+| 555_blinker | 420 / 95 | 90.7 / **73.1** | 18.3k - 18.6k | 6.8k 0.3k 9.2k |
+| cat_feeder | 8297 / 7182 | **419.6** / 682.4 | - 33.0k 36.7k | - - - |
+| lm7805_supply | 483 / 81 | 66.9 / **60.8** | - 19.6k - | 14.3k 16.6k 13.5k |
+| astable_flasher | 606 / 144 | 101.4 / **90.1** | 18.2k - 19.9k | 11.7k 7.7k 6.0k |
+| lm386_amp | 531 / 115 | 87.5 / **76.5** | 19.1k - 18.0k | 8.3k 0.6k 7.5k |
+| lm358_preamp | 1147 / 356 | 128.6 / **122.4** | - 18.6k 19.8k | - 17.8k 12.5k |
+| attiny85_board | 992 / 346 | **170.1** / 198.0 | - 18.7k 18.0k | - - - |
+| led_chaser_4017 | 2178 / 763 | **241.2** / 246.3 | - 18.7k - | 13.2k - 13.8k |
+| pwm_motor_555 | 1463 / 390 | **177.7** / 179.2 | 19.3k - - | 19.1k 14.1k - |
+| npn_load_switch | 487 / 196 | 73.4 / **71.0** | 18.6k 19.8k - | 16.0k 16.7k 15.4k |
+| lm317_adjustable | 713 / 171 | **114.5** / 117.4 | 18.9k - - | - 14.3k - |
+| h_bridge_bjt | 654 / 192 | 127.1 / **114.6** | 19.1k - - | 17.7k 13.7k 11.3k |
+
+(The cat feeder's steps count on through its two cases, 20k each.)
+
+- The network's layout alone costs 2.5 to 6 times less than a random start, except on the cat
+  feeder: it has modules (the ESP32 and two others on headers), the random training circuits have
+  none, and the network places the big modules so that one has no room left and starts on top of
+  the others. Modules in the training data are the obvious next fix (stage 1's risk).
+- Where it helps it gets there sooner: within 0.3k to 12k steps on the 555, the LM386 amp and the
+  transistor flasher (the plain placer: 18k to 20k, or never), a few thousand steps sooner on the
+  others.
+- Steps are counted to the plain placer's **mean** cost, not its best as asked above: the best is
+  the luckiest of three seeds, which a single run rarely reaches, so it would mostly print "never".
+  The mean is the typical result.
+- Using the network costs well under a second per circuit; `bench --start net` takes about 27s.
+
 ### Stage 4: the loop (expert iteration)
 
 - Round n: place the training circuits starting from network n, polish with the placer, keep the
@@ -219,5 +273,5 @@ network, fewer wrong places, epochs carried over between runs, Metal through `wg
 - **Burn makes the build much slower** and adds many crates. Accepted by the maintainer. Say how
   long a clean `cargo build --release` takes before and after.
 - **The head start may not help.** Annealing starts hot and shakes the layout up, so a good start
-  can get thrown away early. If stage 3 shows that, try starting the placer cooler when it starts
+  can get thrown away early. (Stage 3: it did, at the usual temperature; starting at 5 fixed it.) If stage 3 shows that, try starting the placer cooler when it starts
   from the network. That's a constant in `place.rs`, justified by the benchmark.
