@@ -32,6 +32,7 @@ A new class is supported only when its connections are proven to match.
 ## Prove it
 
 1. A sketch containing the part: `cargo run --release -- nets <file>` lists the pins and nets you expect.
-2. `cargo run --release -- check <file>` and the corpus run in CLAUDE.local.md: 0 wrong.
-3. Against DIYLC itself: the Java checker in CLAUDE.local.md, comparing DIYLC's netlist with `nets`.
+2. `cargo run --release -- check <file>`, and on a folder of real sketches if there is one
+   (CLAUDE.local.md says where): 0 wrong.
+3. Against DIYLC itself, if a checker is set up (CLAUDE.local.md): compare DIYLC's netlist with `nets`.
 4. Add the part to README's "Supported DIYLC parts" list, then run the `drift-check` agent.

@@ -1,13 +1,13 @@
 ---
 name: perfboard-board-rule
-description: Procedure for adding or changing a rule in the perfboard board file (circuits/<name>.json, read by src/constraints.rs), deciding whether it is a hard limit or a preference and wiring it into the placer, router or score accordingly. Use when Filippo asks for a new constraint, a new kind of board-file rule, or a change to fixed, edge, orientation, within, all-of, one-of, keepout, near or star.
+description: Procedure for adding or changing a rule in the perfboard board file (circuits/<name>.json, read by src/constraints.rs), deciding whether it is a hard limit or a preference and wiring it into the placer, router or score accordingly. Use when asked for a new constraint, a new kind of board-file rule, or a change to fixed, edge, orientation, within, all-of, one-of, keepout, near or star.
 ---
 
 # Adding a board-file rule
 
 ## First
 
-- Read `TODO.md`: Filippo writes there how he wants the board file to grow. Every rule is an entry of the `constraints` list with a `kind` and an optional
+- Read `TODO.md`: the maintainer writes there how they want the board file to grow. Every rule is an entry of the `constraints` list with a `kind` and an optional
   `name`; follow that format or ask, don't invent a parallel one.
 - Decide what kind of rule it is (README "Principles"). This decides where the code goes:
 
@@ -34,7 +34,7 @@ description: Procedure for adding or changing a rule in the perfboard board file
    left with no allowed place. Other repeats that
    make no sense (two stars on one net) stop with a message, since the list allows them.
 3. Prefer a new simple rule that composes with all-of / one-of over a bigger special-purpose one
-   (Filippo's choice: consistency and composability before convenience).
+   (the maintainer's choice: consistency and composability before convenience).
 4. Other rules (not about where a part goes): `Constraints` gets the rule resolved to indexes
    (component index, `(component, pin)` via `c.find_pin`), so the placer never looks names up.
 5. `resolve` (or `Rule::part`, for a placement rule): check everything that is a mistake in the
@@ -58,5 +58,5 @@ description: Procedure for adding or changing a rule in the perfboard board file
    pictures; say the time.
 2. A deliberately wrong board file (typo'd key, unknown part, wrong pin) stops with a clear message.
 3. If the rule touches routing: `cargo run --release -- check circuits/cat_feeder.diy` with two or
-   three seeds, and the corpus run in CLAUDE.local.md.
+   three seeds, and on a folder of real sketches if there is one (CLAUDE.local.md says where).
 4. Run the `drift-check` agent before committing.

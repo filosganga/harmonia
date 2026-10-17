@@ -47,8 +47,8 @@ Places that restate the code and drift with it:
 - The legend notes in `src/svg.rs` against what the picture now draws.
 - The checklists in `.claude/skills/perfboard-*/SKILL.md`: they name files, functions, constants and
   README sections. A change that renames, moves or adds one of those makes a checklist wrong.
-- `TODO.md` is Filippo's own list: a change that does one of its items should say so (he decides
-  whether to remove it), but don't report his wording.
+- `TODO.md` is the maintainer's own list: a change that does one of its items should say so (they
+  decide whether to remove it), but don't report its wording.
 
 ### 2. A number in prose that duplicates a constant
 
@@ -116,7 +116,7 @@ calling a number stale.
 
 ## Reporting
 
-Findings only, worst first, each with file and line and the concrete consequence: what Filippo would
-see, or be misled into doing, when he follows the README.
+Findings only, worst first, each with file and line and the concrete consequence: what a reader would
+see, or be misled into doing, when they follow the README.
 
 Say plainly if you found nothing. A short honest report beats a padded one.
