@@ -7,8 +7,17 @@
 //!       "board": "18x12",
 //!       "power": "+5V", "ground": "GND",
 //!       "constraints": [
-//!         { "kind": "fixed",   "part": "U1", "at": [6, 3], "rot": 0 },
-//!         { "kind": "edge",    "part": "J1", "edge": "left" },
+//!         { "kind": "fixed",       "part": "U1", "at": [6, 3], "rot": 0 },
+//!         { "kind": "edge",        "part": "J1", "edge": "left" },
+//!         { "kind": "orientation", "part": "C1", "rot": 1 },
+//!         { "kind": "within",      "part": "C1", "from": [0, 6], "to": [5, 11] },
+//!         { "kind": "one-of", "name": "R3 on the left or right edge", "rules": [
+//!           { "kind": "all-of", "rules": [
+//!             { "kind": "orientation", "part": "R3", "rot": 1 },
+//!             { "kind": "within", "part": "R3", "from": [0, 0], "to": [0, 11] } ] },
+//!           { "kind": "all-of", "rules": [
+//!             { "kind": "orientation", "part": "R3", "rot": 3 },
+//!             { "kind": "within", "part": "R3", "from": [17, 0], "to": [17, 11] } ] } ] },
 //!         { "kind": "keepout", "name": "M3 screw", "from": [16, 0], "to": [17, 1] },
 //!         { "kind": "near",    "pins": ["C2.1", "U1.5"] },
 //!         { "kind": "star",    "name": "ground at C1", "at": "C1.2", "runs": [["U1.1", "D1.1"]] }
@@ -18,9 +27,18 @@
 //! Every rule says its "kind", and may have a "name": it's in the messages about that rule (and a
 //! keep-out's is written on it in the pictures).
 //!
-//! fixed and edge are hard limits: the placer never moves a fixed part and always keeps an edge
-//! part touching its edge. A keep-out counts like a collision (the "overlap" measurement): very
-//! expensive, but for now a cost, not a limit.
+//! all-of and one-of combine any rules: all-of holds when every rule in it does, one-of when at
+//! least one does. The board file is read as a list of cases, each a plain list of rules: a one-of
+//! makes one case per option, so "A, one-of (B1, B2), C" is two cases, (A, B1, C) and (A, B2, C).
+//! The placer places every case and keeps the best layout.
+//!
+//! fixed, edge, orientation and within say where one part may go, and are hard limits. In each case,
+//! each part with such rules gets the list of places (x, y, rot) they allow, and the placer only
+//! ever puts the part on one of them. Those places are all on the board and off the keep-outs too.
+//! A case where some part has no such place is left out.
+//!
+//! A keep-out counts like a collision (the "overlap" measurement): very expensive, but for now a
+//! cost, not a limit, except for a part with placement rules (above).
 //!
 //! near is a preference: the two pins, on the same net, should be joined by as little copper as
 //! possible. It costs per hole of copper between them, as routed (through the star point, for two
@@ -30,7 +48,7 @@
 //! goes its own way, never sharing copper with another run. Each run in `runs` joins its pins; any
 //! other pin of the net gets a run of its own, straight from `at`.
 
-use crate::board::{self, Circuit, Place, Placement, Point, Run};
+use crate::board::{self, Circuit, Component, Place, Placement, Point, Run};
 use serde::Deserialize;
 use std::collections::HashSet;
 
@@ -58,8 +76,23 @@ enum Rule {
         #[serde(default)]
         rot: u8,
     },
-    /// The part always touches that edge of the board.
+    /// The part touches that edge of the board.
     Edge { name: Option<String>, part: String, edge: Edge },
+    /// The part is turned this way: quarter turns clockwise from how it's drawn, 0-3.
+    Orientation { name: Option<String>, part: String, rot: u8 },
+    /// Every hole of the part's outline is in this rectangle, `from` one corner `to` the other.
+    Within {
+        name: Option<String>,
+        part: String,
+        from: Point,
+        to: Point,
+    },
+    /// Every rule in `rules` holds.
+    #[serde(rename = "all-of")]
+    AllOf { name: Option<String>, rules: Vec<Rule> },
+    /// At least one rule in `rules` holds: each is a case of its own.
+    #[serde(rename = "one-of")]
+    OneOf { name: Option<String>, rules: Vec<Rule> },
     /// Holes no part may cover.
     Keepout {
         name: Option<String>,
@@ -79,7 +112,137 @@ enum Rule {
     },
 }
 
+impl Rule {
+    /// The rule's kind, as in the JSON, and its name if it has one.
+    fn kind_and_name(&self) -> (&'static str, Option<&str>) {
+        let (kind, name) = match self {
+            Rule::Fixed { name, .. } => ("fixed", name),
+            Rule::Edge { name, .. } => ("edge", name),
+            Rule::Orientation { name, .. } => ("orientation", name),
+            Rule::Within { name, .. } => ("within", name),
+            Rule::AllOf { name, .. } => ("all-of", name),
+            Rule::OneOf { name, .. } => ("one-of", name),
+            Rule::Keepout { name, .. } => ("keepout", name),
+            Rule::Near { name, .. } => ("near", name),
+            Rule::Star { name, .. } => ("star", name),
+        };
+        (kind, name.as_deref())
+    }
+
+    /// How messages name a rule: `near "R1 guards GP2"`, or just `near` if it has no name.
+    fn called(&self) -> String {
+        match self.kind_and_name() {
+            (kind, Some(n)) => format!("{kind} \"{n}\""),
+            (kind, None) => kind.to_string(),
+        }
+    }
+
+    /// For a rule about where one part goes, that part; None for the others (keepout, near, star).
+    /// Also checks the rule makes sense on a w x h board, whatever the part. Only for the plain
+    /// rules of a case (no all-of or one-of).
+    fn part(&self, w: i32, h: i32) -> Option<&str> {
+        let rule = self.called();
+        match self {
+            Rule::Fixed { part, rot, .. } | Rule::Orientation { part, rot, .. } => {
+                if *rot > 3 {
+                    panic!("board file: {rule}: {part}'s \"rot\" should be 0-3 (quarter turns clockwise)");
+                }
+                Some(part)
+            }
+            Rule::Edge { part, .. } => Some(part),
+            Rule::Within { part, from, to, .. } => {
+                if rectangle(*from, *to).any(|(x, y)| x < 0 || x >= w || y < 0 || y >= h) {
+                    panic!("board file: {rule}: {from:?} to {to:?} goes off the {w}x{h} board");
+                }
+                Some(part)
+            }
+            Rule::Keepout { .. } | Rule::Near { .. } | Rule::Star { .. } => None,
+            Rule::AllOf { .. } | Rule::OneOf { .. } => unreachable!("a case has no all-of or one-of"),
+        }
+    }
+
+    /// Does this rule let `comp` sit at `p` on a w x h board? Only for rules with a part (see `part`).
+    fn allows(&self, comp: &Component, p: Place, w: i32, h: i32) -> bool {
+        let (pw, ph) = board::size(comp, p.rot);
+        match self {
+            Rule::Fixed { at, rot, .. } => (p.x, p.y, p.rot) == (at.0, at.1, *rot),
+            Rule::Edge { edge, .. } => match edge {
+                Edge::Left => p.x == 0,
+                Edge::Right => p.x + pw == w,
+                Edge::Top => p.y == 0,
+                Edge::Bottom => p.y + ph == h,
+            },
+            Rule::Orientation { rot, .. } => p.rot == *rot,
+            Rule::Within { from, to, .. } => {
+                let (x0, x1) = (from.0.min(to.0), from.0.max(to.0));
+                let (y0, y1) = (from.1.min(to.1), from.1.max(to.1));
+                p.x >= x0 && p.x + pw - 1 <= x1 && p.y >= y0 && p.y + ph - 1 <= y1
+            }
+            _ => unreachable!("not about where a part goes"),
+        }
+    }
+}
+
+/// One way for all the board file's rules to hold: a plain list of rules (no all-of or one-of), and
+/// for messages, the option it took in each one-of on the way.
+#[derive(Default)]
+pub struct Case<'a> {
+    rules: Vec<&'a Rule>,
+    pub choices: Vec<String>,
+}
+
+/// The board file's rules as cases: one, unless there's a one-of.
+pub fn cases(file: &BoardFile) -> Vec<Case<'_>> {
+    every_case(&file.constraints)
+}
+
+/// Every way a list of rules can all hold: each case of the first rule with each case of the rest.
+/// (Two one-ofs of 2 and 3 options make 2 x 3 = 6 cases.)
+fn every_case(rules: &[Rule]) -> Vec<Case<'_>> {
+    let mut cases = vec![Case::default()];
+    for rule in rules {
+        let options = rule_cases(rule);
+        cases = cases
+            .iter()
+            .flat_map(|case| {
+                options.iter().map(|option| Case {
+                    rules: case.rules.iter().chain(&option.rules).copied().collect(),
+                    choices: case.choices.iter().chain(&option.choices).cloned().collect(),
+                })
+            })
+            .collect();
+    }
+    cases
+}
+
+/// The cases of one rule: itself, unless it's an all-of or a one-of.
+fn rule_cases(rule: &Rule) -> Vec<Case<'_>> {
+    match rule {
+        Rule::AllOf { rules, .. } | Rule::OneOf { rules, .. } if rules.is_empty() => {
+            panic!("board file: {} has no rules in it", rule.called())
+        }
+        Rule::AllOf { rules, .. } => every_case(rules),
+        Rule::OneOf { rules, .. } => {
+            let mut out = Vec::new();
+            for (k, option) in rules.iter().enumerate() {
+                // Name the option by its own name if it has one, else by its number.
+                let which = match option.kind_and_name().1 {
+                    Some(name) => format!("\"{name}\""),
+                    None => format!("option {} of {}", k + 1, rules.len()),
+                };
+                for mut case in rule_cases(option) {
+                    case.choices.insert(0, format!("{}: {which}", rule.called()));
+                    out.push(case);
+                }
+            }
+            out
+        }
+        _ => vec![Case { rules: vec![rule], choices: Vec::new() }],
+    }
+}
+
 /// A star rule, matched up with the circuit: pins are (component, pin) indexes.
+#[derive(Clone)]
 pub struct StarRule {
     pub net: usize,
     pub at: (usize, usize),
@@ -88,11 +251,18 @@ pub struct StarRule {
 
 #[derive(Deserialize, Clone, Copy, PartialEq)]
 #[serde(rename_all = "lowercase")]
-pub enum Edge {
+enum Edge {
     Left,
     Right,
     Top,
     Bottom,
+}
+
+/// Every hole of a rectangle, `from` one corner `to` the other (both included).
+fn rectangle(from: Point, to: Point) -> impl Iterator<Item = Point> {
+    let (x0, x1) = (from.0.min(to.0), from.0.max(to.0));
+    let (y0, y1) = (from.1.min(to.1), from.1.max(to.1));
+    (x0..=x1).flat_map(move |x| (y0..=y1).map(move |y| (x, y)))
 }
 
 /// A rectangle of holes no part may cover, `from` one corner `to` the other (both included).
@@ -106,19 +276,18 @@ pub struct Keepout {
 
 impl Keepout {
     pub fn holes(&self) -> impl Iterator<Item = Point> {
-        let (x0, x1) = (self.from.0.min(self.to.0), self.from.0.max(self.to.0));
-        let (y0, y1) = (self.from.1.min(self.to.1), self.from.1.max(self.to.1));
-        (x0..=x1).flat_map(move |x| (y0..=y1).map(move |y| (x, y)))
+        rectangle(self.from, self.to)
     }
 }
 
-/// The board file's rules, matched up with the circuit's parts.
-#[derive(Default)]
+/// One case of the board file's rules, matched up with the circuit's parts.
+#[derive(Default, Clone)]
 pub struct Constraints {
-    /// fixed[component] = where it must be, if it's fixed
-    pub fixed: Vec<Option<Place>>,
-    /// edge[component] = the edge it must touch, if any
-    pub edge: Vec<Option<Edge>>,
+    /// Which option of each one-of this case took, like `one-of "USB on an edge": option 2 of 4`.
+    pub choices: Vec<String>,
+    /// allowed[component] = the only places it may take, if the board file has rules about where
+    /// it goes (fixed, edge, orientation, within). Never empty.
+    pub allowed: Vec<Option<Vec<Place>>>,
     pub keepout: Vec<Keepout>,
     /// Every hole of every keep-out, for quick lookups.
     pub keepout_holes: HashSet<Point>,
@@ -136,16 +305,9 @@ pub fn read_board_file(netlist_path: &str) -> Option<(String, BoardFile)> {
     Some((path, file))
 }
 
-/// How messages name a rule: `near "R1 guards GP2"`, or just `near` if it has no name.
-fn called(kind: &str, name: &Option<String>) -> String {
-    match name {
-        Some(n) => format!("{kind} \"{n}\""),
-        None => kind.to_string(),
-    }
-}
-
-/// Matches the board file's part names to the circuit and checks the rules make sense.
-pub fn resolve(file: &BoardFile, c: &Circuit) -> Constraints {
+/// Matches one case's part names to the circuit and checks its rules make sense. Stops on a mistake
+/// in the board file; returns why if the rules are fine but some part has no place meeting them.
+pub fn resolve(case: &Case, c: &Circuit) -> Result<Constraints, String> {
     let index = |name: &str| {
         c.components.iter().position(|comp| comp.reference == name).unwrap_or_else(|| panic!("board file: there's no part called {name}"))
     };
@@ -153,58 +315,45 @@ pub fn resolve(file: &BoardFile, c: &Circuit) -> Constraints {
     let net_of = |p: (usize, usize)| c.net_pins.iter().position(|pins| pins.contains(&p));
     let n = c.components.len();
     let (w, h) = (c.board.width, c.board.height);
-    let mut out = Constraints { fixed: vec![None; n], edge: vec![None; n], ..Default::default() };
-    for rule in &file.constraints {
+    let mut out = Constraints { choices: case.choices.clone(), allowed: vec![None; n], ..Default::default() };
+    // rules_for[component] = the rules about where it goes
+    let mut rules_for: Vec<Vec<&Rule>> = vec![Vec::new(); n];
+    for &rule in &case.rules {
+        if let Some(part) = rule.part(w, h) {
+            rules_for[index(part)].push(rule);
+            continue;
+        }
+        let called = rule.called();
         match rule {
-            Rule::Fixed { name, part, at, rot } => {
-                let rule = called("fixed", name);
-                if *rot > 3 {
-                    panic!("board file: {rule}: {part}'s \"rot\" should be 0-3 (quarter turns clockwise)");
-                }
-                let i = index(part);
-                if out.fixed[i].is_some() {
-                    panic!("board file: {rule}: {part} is already fixed by another rule");
-                }
-                out.fixed[i] = Some(Place { x: at.0, y: at.1, rot: *rot });
-            }
-            Rule::Edge { name, part, edge } => {
-                let i = index(part);
-                if out.edge[i].is_some() {
-                    panic!("board file: {}: {part} already has an edge rule", called("edge", name));
-                }
-                out.edge[i] = Some(*edge);
-            }
             Rule::Keepout { name, from, to } => {
                 let k = Keepout { from: *from, to: *to, name: name.clone().unwrap_or_default() };
                 if k.holes().any(|(x, y)| x < 0 || x >= w || y < 0 || y >= h) {
-                    panic!("board file: {}: {from:?} to {to:?} goes off the {w}x{h} board", called("keepout", name));
+                    panic!("board file: {called}: {from:?} to {to:?} goes off the {w}x{h} board");
                 }
                 out.keepout_holes.extend(k.holes());
                 out.keepout.push(k);
             }
-            Rule::Near { name, pins: [a, b] } => {
-                let rule = called("near", name);
+            Rule::Near { pins: [a, b], .. } => {
                 let (pa, pb) = (c.find_pin(a), c.find_pin(b));
                 if pa == pb {
-                    panic!("board file: {rule}: both pins are {a}");
+                    panic!("board file: {called}: both pins are {a}");
                 }
                 // Near is measured along the copper, so there has to be copper between them.
                 let net = net_of(pa).filter(|&net| net_of(pb) == Some(net));
-                let net = net.unwrap_or_else(|| panic!("board file: {rule}: {a} and {b} aren't on the same net, so no copper joins them"));
+                let net = net.unwrap_or_else(|| panic!("board file: {called}: {a} and {b} aren't on the same net, so no copper joins them"));
                 out.near.push((net, [pa, pb]));
             }
-            Rule::Star { name, at, runs } => {
-                let rule = called("star", name);
+            Rule::Star { at, runs, .. } => {
                 let at_pin = c.find_pin(at);
-                let net = net_of(at_pin).unwrap_or_else(|| panic!("board file: {rule}: {at} isn't connected to anything"));
+                let net = net_of(at_pin).unwrap_or_else(|| panic!("board file: {called}: {at} isn't connected to anything"));
                 let net_name = &c.nets[net].name;
                 if out.stars.iter().any(|s| s.net == net) {
-                    panic!("board file: {rule}: {net_name} already has a star rule");
+                    panic!("board file: {called}: {net_name} already has a star rule");
                 }
                 let on_net = |pin: &str| {
                     let p = c.find_pin(pin);
                     if !c.net_pins[net].contains(&p) {
-                        panic!("board file: {rule}: {pin} isn't on {net_name}, the net of {at}");
+                        panic!("board file: {called}: {pin} isn't on {net_name}, the net of {at}");
                     }
                     p
                 };
@@ -212,33 +361,41 @@ pub fn resolve(file: &BoardFile, c: &Circuit) -> Constraints {
                 let mut seen = HashSet::from([at_pin]);
                 for (pin, p) in runs.iter().flatten().zip(resolved.iter().flatten()) {
                     if !seen.insert(*p) {
-                        panic!("board file: {rule}: {pin} is the star point or in two runs");
+                        panic!("board file: {called}: {pin} is the star point or in two runs");
                     }
                 }
                 out.stars.push(StarRule { net, at: at_pin, runs: resolved });
             }
+            _ => unreachable!("rules about where a part goes were handled above"),
         }
     }
-    for i in 0..n {
-        if out.fixed[i].is_some() && out.edge[i].is_some() {
-            panic!("board file: {} is both fixed and on an edge; pick one", c.components[i].reference);
+    // Every place a part's rules allow, out of all of them (each hole, each quarter turn). A part
+    // with rules also stays on the board and off the keep-outs, so a rule never pushes it there.
+    for (i, rules) in rules_for.iter().enumerate().filter(|(_, rules)| !rules.is_empty()) {
+        let comp = &c.components[i];
+        let fits = |p: Place| {
+            let (pw, ph) = board::size(comp, p.rot);
+            let on_keepout = comp.body.iter().any(|&hole| {
+                let (dx, dy) = board::turn(hole, comp.w, comp.h, p.rot);
+                out.keepout_holes.contains(&(p.x + dx, p.y + dy))
+            });
+            p.x + pw <= w && p.y + ph <= h && !on_keepout
+        };
+        let places: Vec<Place> = (0..4)
+            .flat_map(|rot| (0..w).flat_map(move |x| (0..h).map(move |y| Place { x, y, rot })))
+            .filter(|&p| fits(p) && rules.iter().all(|r| r.allows(comp, p, w, h)))
+            .collect();
+        if places.is_empty() {
+            let names: Vec<String> = rules.iter().map(|r| r.called()).collect();
+            return Err(format!(
+                "no place for {} meets all its rules ({}) while staying on the {w}x{h} board and off the keep-outs",
+                comp.reference,
+                names.join(", ")
+            ));
         }
+        out.allowed[i] = Some(places);
     }
-    // A fixed part that doesn't fit can never be fixed by the placer, so say so now.
-    for (i, f) in out.fixed.iter().enumerate() {
-        if let Some(p) = f {
-            let (pw, ph) = board::size(&c.components[i], p.rot);
-            let name = &c.components[i].reference;
-            if p.x < 0 || p.y < 0 || p.x + pw > w || p.y + ph > h {
-                panic!("board file: fixed {name} at {:?} hangs off the {w}x{h} board", (p.x, p.y));
-            }
-            let mut body = (p.x..p.x + pw).flat_map(|x| (p.y..p.y + ph).map(move |y| (x, y)));
-            if body.any(|hole| out.keepout_holes.contains(&hole)) {
-                panic!("board file: fixed {name} sits on a keep-out");
-            }
-        }
-    }
-    out
+    Ok(out)
 }
 
 /// How each net is wired: one run joining all its pins, or for a star net, one run per branch
@@ -260,27 +417,19 @@ pub fn runs(c: &Circuit) -> Vec<Run> {
     out
 }
 
-/// Puts fixed parts in their place and pushes edge parts against their edge.
+/// Moves every part with placement rules to the nearest place they allow, keeping its rotation if
+/// one allows it (so a quarter turn by the placer stays a quarter turn when the rules allow it).
 /// The placer calls this after every move, so these rules can never be broken.
 pub fn apply(c: &Circuit, placement: &mut Placement) {
-    let (w, h) = (c.board.width, c.board.height);
-    for (i, p) in placement.iter_mut().enumerate() {
-        if let Some(f) = c.constraints.fixed[i] {
-            *p = f;
-        }
-        if let Some(e) = c.constraints.edge[i] {
-            let (pw, ph) = board::size(&c.components[i], p.rot);
-            match e {
-                Edge::Left => p.x = 0,
-                Edge::Right => p.x = w - pw,
-                Edge::Top => p.y = 0,
-                Edge::Bottom => p.y = h - ph,
-            }
+    for (p, allowed) in placement.iter_mut().zip(&c.constraints.allowed) {
+        if let Some(allowed) = allowed {
+            let away = |q: &&Place| (q.rot != p.rot, (q.x - p.x).abs() + (q.y - p.y).abs());
+            *p = *allowed.iter().min_by_key(away).expect("resolve never leaves a part without a place");
         }
     }
 }
 
-/// Plain-language problems with a finished layout. Fixed and edge rules can't break, so only keep-outs are checked.
+/// Plain-language problems with a finished layout. Placement rules can't break, so only keep-outs are checked.
 pub fn problems(c: &Circuit, placement: &[Place]) -> Vec<String> {
     let g = board::geometry(c, placement);
     let mut out = Vec::new();

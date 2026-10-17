@@ -78,21 +78,36 @@ fn main() {
     if args.command == "check" {
         return check_cmd(&args);
     }
-    let (circuit, sketch, board_file_path) = load(&args.circuit, &args);
-    if let Some(path) = board_file_path {
+    let loaded = load(&args.circuit, &args);
+    if let Some(path) = &loaded.board_file {
         println!("Board file: {path}\n");
     }
+    for why in &loaded.left_out {
+        println!("Left out: {why}");
+    }
+    let cases = &loaded.cases;
     match args.command.as_str() {
-        "train" => train(&circuit, args.seed),
-        "evolve" => evolve(&circuit, args.seed),
-        "nets" => print_nets(&circuit),
-        _ => place_cmd(&circuit, &args, sketch),
+        "train" => train(cases, args.seed),
+        "evolve" => evolve(cases, args.seed),
+        "nets" => print_nets(cases),
+        _ => place_cmd(cases, &args, loaded.sketch),
     }
 }
 
+/// A circuit and the board file next to it, as `load` reads them.
+struct Loaded {
+    /// The circuit once for each case of the board file's rules (one, unless there's a one-of).
+    cases: Vec<Circuit>,
+    /// Cases left out because some part has no place meeting their rules, and why.
+    left_out: Vec<String>,
+    /// For a DIYLC sketch, where you put things: a starting point.
+    sketch: Option<board::Placement>,
+    /// The board file's path, if there is one.
+    board_file: Option<String>,
+}
+
 /// Reads a circuit (a KiCad netlist or a DIYLC sketch) and the board file next to it, if any.
-/// For a sketch, also where you put things, as a starting point. Returns the board file's path too.
-fn load(path: &str, args: &Args) -> (Circuit, Option<board::Placement>, Option<String>) {
+fn load(path: &str, args: &Args) -> Loaded {
     // Flags win over the board file, so you can try a variation quickly.
     let (board_file_path, board_file) = constraints::read_board_file(path).unzip();
     let board_file = board_file.unwrap_or_default();
@@ -102,15 +117,60 @@ fn load(path: &str, args: &Args) -> (Circuit, Option<board::Placement>, Option<S
         power: args.power.clone().or(board_file.power.clone()),
         ground: args.ground.clone().or(board_file.ground.clone()),
     };
-    let (mut circuit, sketch) = if path.ends_with(".diy") {
+    let (circuit, sketch) = if path.ends_with(".diy") {
         let (c, s) = diylc_import::load(path, opts);
         (c, Some(s))
     } else {
         (netlist::load(path, opts), None)
     };
-    circuit.constraints = constraints::resolve(&board_file, &circuit);
-    circuit.runs = constraints::runs(&circuit); // again, now that the star rules are known
-    (circuit, sketch, board_file_path)
+    let (mut cases, mut left_out) = (Vec::new(), Vec::new());
+    for case in constraints::cases(&board_file) {
+        match constraints::resolve(&case, &circuit) {
+            Ok(rules) => {
+                let mut c = circuit.clone();
+                c.constraints = rules;
+                c.runs = constraints::runs(&c); // again, now that the star rules are known
+                cases.push(c);
+            }
+            Err(why) if case.choices.is_empty() => left_out.push(why),
+            Err(why) => left_out.push(format!("{}: {why}", case.choices.join("; "))),
+        }
+    }
+    if cases.is_empty() {
+        panic!("board file: no case of its rules can be met:\n  {}", left_out.join("\n  "));
+    }
+    Loaded { cases, left_out, sketch, board_file: board_file_path }
+}
+
+/// Places every case of the board file's rules, from the sketch if there is one, and keeps the
+/// layout the judge likes best. Returns which case it was, where it started, and the layout.
+fn place_cases(
+    cases: &[Circuit],
+    judge: impl Fn(&Measures) -> f64,
+    steps: usize,
+    rng: &mut StdRng,
+    sketch: Option<&board::Placement>,
+) -> (usize, board::Placement, board::Placement) {
+    let mut best: Option<(usize, board::Placement, board::Placement, f64)> = None;
+    for (k, c) in cases.iter().enumerate() {
+        let mut start = sketch.cloned().unwrap_or_else(|| board::random_placement(c, rng));
+        constraints::apply(c, &mut start);
+        let layout = place::anneal(c, &judge, steps, rng, Some(start.clone()), |_| {});
+        if cases.len() > 1 {
+            println!("{}", board::report(c, &layout, &format!("Case {} of {} ({})", k + 1, cases.len(), case_name(c))));
+        }
+        let score = judge(&board::measure(c, &layout));
+        if best.as_ref().is_none_or(|b| score > b.3) {
+            best = Some((k, start, layout, score));
+        }
+    }
+    let (k, start, layout, _) = best.expect("there's at least one case");
+    (k, start, layout)
+}
+
+/// Which option of each one-of a case took, like `one-of "USB on an edge": option 2 of 4`.
+fn case_name(c: &Circuit) -> String {
+    c.constraints.choices.join("; ")
 }
 
 /// The connections of a circuit, in an order that doesn't depend on the file: each net with two
@@ -155,28 +215,29 @@ fn caught<T>(f: impl FnOnce() -> T) -> Result<T, String> {
 /// The round trip for one DIYLC file: place it as `place` does, write the `.diy` (to
 /// out/check.diy), read that back, and compare the connections.
 fn check_one(path: &str, args: &Args) -> Outcome {
-    let (c, sketch) = match caught(|| load(path, args)) {
-        Ok((c, sketch, _)) => (c, sketch),
+    let loaded = match caught(|| load(path, args)) {
+        Ok(loaded) => loaded,
         Err(why) => return Outcome::Unreadable(why),
     };
-    let before = connections(&c);
+    let before = connections(&loaded.cases[0]);
     if before.is_empty() {
         return Outcome::NoConnections;
     }
     let round_trip = || {
-        let mut start = sketch.expect("a .diy file has a sketch");
-        constraints::apply(&c, &mut start);
-        let best = place::anneal(&c, board::score, args.steps, &mut StdRng::seed_from_u64(args.seed), Some(start), |_| {});
+        let sketch = loaded.sketch.as_ref().expect("a .diy file has a sketch");
+        let mut rng = StdRng::seed_from_u64(args.seed);
+        let (k, _, best) = place_cases(&loaded.cases, board::score, args.steps, &mut rng, Some(sketch));
+        let c = &loaded.cases[k];
         let written = "out/check.diy";
-        std::fs::write(written, diylc::write(&c, &best, "check")).unwrap();
-        let after = connections(&load(written, args).0);
+        std::fs::write(written, diylc::write(c, &best, "check")).unwrap();
+        let after = connections(&load(written, args).cases[0]);
         if before == after {
             return Outcome::Same;
         }
         // Pins sharing a hole, or off the board, explain joined nets without any fault in the writer.
         let (w, h) = (c.board.width, c.board.height);
         let mut seen = std::collections::HashSet::new();
-        let pins = board::geometry(&c, &best).pins;
+        let pins = board::geometry(c, &best).pins;
         let clashing = pins.iter().flatten().filter(|&&(x, y)| x < 0 || x >= w || y < 0 || y >= h || !seen.insert((x, y))).count();
         if clashing > 0 {
             return Outcome::Unfinished(clashing);
@@ -244,8 +305,10 @@ fn check_cmd(args: &Args) {
     }
 }
 
-/// What the program understood from the file: the parts and which pins connect.
-fn print_nets(c: &Circuit) {
+/// What the program understood from the file: the parts, which pins connect, and the cases of the
+/// board file's rules.
+fn print_nets(cases: &[Circuit]) {
+    let c = &cases[0]; // the parts and nets are the same in every case
     println!("{} parts:", c.components.len());
     for comp in &c.components {
         let kind = if comp.body.len() < (comp.w * comp.h) as usize { "  (module: parts can go under it)" } else { "" };
@@ -256,9 +319,15 @@ fn print_nets(c: &Circuit) {
     for net in &c.nets {
         println!("  {:<10} {}", net.name, net.pins.join("  "));
     }
+    if cases.len() > 1 {
+        println!("\n{} cases of the board file's rules:", cases.len());
+        for (k, case) in cases.iter().enumerate() {
+            println!("  {:>2}. {}", k + 1, case_name(case));
+        }
+    }
 }
 
-fn place_cmd(c: &Circuit, args: &Args, sketch: Option<board::Placement>) {
+fn place_cmd(cases: &[Circuit], args: &Args, sketch: Option<board::Placement>) {
     let t0 = Instant::now();
     let mut rng = StdRng::seed_from_u64(args.seed);
     let net = (args.judge == "net").then(|| Net::load(MODEL));
@@ -268,13 +337,18 @@ fn place_cmd(c: &Circuit, args: &Args, sketch: Option<board::Placement>) {
     };
 
     let start_label = if sketch.is_some() { "Your sketch" } else { "Random start" };
-    let mut start = sketch.unwrap_or_else(|| board::random_placement(c, &mut rng));
-    constraints::apply(c, &mut start);
+    let (k, start, best) = place_cases(cases, judge, args.steps, &mut rng, sketch.as_ref());
+    let c = &cases[k];
+    if cases.len() > 1 {
+        println!("\nBest: case {} of {}\n", k + 1, cases.len());
+    }
     println!("{}", board::report(c, &start, start_label));
     println!("{}\n", board::ascii_board(c, &start));
 
-    let best = place::anneal(c, judge, args.steps, &mut rng, Some(start.clone()), |_| {});
-    let label = format!("Placed by {}", args.judge);
+    let label = match case_name(c) {
+        choices if choices.is_empty() => format!("Placed by {}", args.judge),
+        choices => format!("Placed by {} ({choices})", args.judge),
+    };
     println!("{}", board::report(c, &best, &label));
     if let Some(net) = &net {
         let m = board::measure(c, &best);
@@ -306,10 +380,12 @@ fn place_cmd(c: &Circuit, args: &Args, sketch: Option<board::Placement>) {
 }
 
 /// Example boards for training: (to learn from, kept aside to test).
-/// Random boards, plus boards caught part-way through auto-placement so there are good ones too.
-fn make_examples(c: &Circuit, rng: &mut StdRng) -> (Vec<Measures>, Vec<Measures>) {
+/// Random boards, plus boards caught part-way through auto-placement so there are good ones too,
+/// taking the cases of the board file's rules in turn.
+fn make_examples(cases: &[Circuit], rng: &mut StdRng) -> (Vec<Measures>, Vec<Measures>) {
     let mut examples: Vec<Measures> = Vec::new();
-    for _ in 0..12 {
+    for i in 0..12 {
+        let c = &cases[i % cases.len()];
         let mut snap_rng = StdRng::seed_from_u64(rng.random());
         place::anneal(c, board::score, 4000, rng, None, |p| {
             if snap_rng.random::<f64>() < 0.02 {
@@ -317,7 +393,8 @@ fn make_examples(c: &Circuit, rng: &mut StdRng) -> (Vec<Measures>, Vec<Measures>
             }
         });
     }
-    for _ in 0..examples.len() / 4 {
+    for i in 0..examples.len() / 4 {
+        let c = &cases[i % cases.len()];
         examples.push(board::measure(c, &board::random_placement(c, rng)));
     }
     examples.shuffle(rng);
@@ -337,10 +414,10 @@ fn pairs(boards: &[Measures]) -> Vec<(Vec<f64>, f64)> {
 /// 2. Ask the rules for each board's score: that's the "right answer".
 /// 3. Show the network each board many times, nudging every weight in the direction that makes it less wrong.
 /// 4. Test it on boards it has never seen.
-fn train(c: &Circuit, seed: u64) {
+fn train(cases: &[Circuit], seed: u64) {
     let t0 = Instant::now();
     let mut rng = StdRng::seed_from_u64(seed);
-    let (train, test) = make_examples(c, &mut rng);
+    let (train, test) = make_examples(cases, &mut rng);
 
     let mut net = Net::new(8, 0);
     let mut pairs = pairs(&train);
@@ -361,12 +438,12 @@ fn train(c: &Circuit, seed: u64) {
 /// 2. Make 19 children, each a copy of the parent with every weight changed a little at random.
 /// 3. Keep whichever of the 20 is least wrong on the example boards; it becomes the new parent.
 /// 4. Repeat. Changes get smaller towards the end, to fine-tune.
-fn evolve(c: &Circuit, seed: u64) {
+fn evolve(cases: &[Circuit], seed: u64) {
     const CHILDREN: usize = 19;
     const GENERATIONS: usize = 1000;
     let t0 = Instant::now();
     let mut rng = StdRng::seed_from_u64(seed);
-    let (train, test) = make_examples(c, &mut rng);
+    let (train, test) = make_examples(cases, &mut rng);
     let pairs = pairs(&train);
 
     let mut parent = Net::new(8, 0);

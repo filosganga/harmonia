@@ -1,8 +1,10 @@
 # Perfboard layout + a tiny neural network
 
 Rust, with four small crates (`rand`, `serde`, `serde_json`, and `roxmltree` to read DIYLC files).
-Every placer step routes the whole board, so most commands are over the one-second goal: on the 555,
-`place` takes about 0.7s, `train` 1.8s and `evolve` 2.9s; placing the bigger cat-feeder board about 2.9s.
+Every placer step routes the whole board, so commands take seconds: on the 555, `place` takes about
+0.7s, `train` 1.8s and `evolve` 2.9s; placing the bigger cat-feeder board about 2.7s. A board file
+with a `one-of` is placed once per case (below), so it takes that many times longer. Anything up to
+the time to make and drink an espresso is fine.
 
 ```bash
 cargo run --release -- place                # auto-place the 555 blinker using the hand-written rules
@@ -19,7 +21,8 @@ Options: `--steps 50000` (placer effort), `--seed 7` (a different random start),
 ground, guessed from common names like `+5V`, `VCC` and `GND` if left out), or a path to another netlist.
 Board size, power and ground can also live in the board file (below); a flag wins over it.
 
-Each `place` run prints the board as text and writes, in `out/` (named `rules` or `net` after the judge):
+Each `place` run prints the board as text (with a `one-of` in the board file, first a line for each case
+and which was best) and writes, in `out/` (named `rules` or `net` after the judge):
 
 - `rules.svg`: a picture of the result. Holes are coloured by net, with the copper traces and wires, the parts,
   header pin names and modules, and beside the board the score and every net. Hover a hole for its
@@ -92,8 +95,17 @@ Next to the netlist, a JSON file with the same name (`circuits/555_blinker.json`
   "board": "18x12",
   "power": "+5V", "ground": "GND",
   "constraints": [
-    { "kind": "fixed",   "part": "U1", "at": [6, 3], "rot": 0 },
-    { "kind": "edge",    "part": "J1", "edge": "left" },
+    { "kind": "fixed",       "part": "U1", "at": [6, 3], "rot": 0 },
+    { "kind": "edge",        "part": "J1", "edge": "left" },
+    { "kind": "orientation", "part": "C1", "rot": 1 },
+    { "kind": "within",      "part": "C1", "from": [0, 6], "to": [5, 11] },
+    { "kind": "one-of", "name": "R3 on the left or right edge", "rules": [
+      { "kind": "all-of", "rules": [
+        { "kind": "orientation", "part": "R3", "rot": 1 },
+        { "kind": "within", "part": "R3", "from": [0, 0], "to": [0, 11] } ] },
+      { "kind": "all-of", "rules": [
+        { "kind": "orientation", "part": "R3", "rot": 3 },
+        { "kind": "within", "part": "R3", "from": [17, 0], "to": [17, 11] } ] } ] },
     { "kind": "keepout", "name": "M3 screw", "from": [16, 0], "to": [17, 1] },
     { "kind": "near",    "name": "C2 by CTRL", "pins": ["C2.1", "U1.5"] },
     { "kind": "star",    "at": "C1.2", "runs": [["U1.1", "C2.2"], ["D1.1"]] }
@@ -107,7 +119,19 @@ Next to the netlist, a JSON file with the same name (`circuits/555_blinker.json`
   names the rule area).
 - **fixed**: the part goes exactly there, and the placer never moves it. `at` is the top-left hole of the
   part after turning it, `rot` is quarter turns clockwise (0–3).
-- **edge**: the part always touches that edge: `left`, `right`, `top` or `bottom`.
+- **edge**: the part touches that edge: `left`, `right`, `top` or `bottom`. Two edge rules next to
+  each other (left and top) put it in that corner.
+- **orientation**: the part is turned `rot` quarter turns clockwise (0–3) from how it's drawn (in
+  DIYLC, as you drew it; for a netlist, as its `footprints.json` entry is).
+- **within**: the whole part, its outline, is inside the rectangle from one corner to the other.
+- **all-of**: every rule in `rules` holds. **one-of**: at least one does. They hold any rules, about
+  any parts, and nest. A one-of makes cases: "A, one-of (B1, B2), C" is placed twice, as (A, B1, C)
+  and as (A, B2, C), and the best layout is kept. A one-of inside a one-of just adds options, an
+  all-of keeps its rules together in one option, and two one-ofs side by side multiply (2 and 3
+  options make 6 cases). `nets` lists the cases; an option is named by its `name`, or its number.
+  The example says "R3 stands along the left or the right edge"; "a USB socket's side is on one of
+  the board's edges" is a one-of of four all-ofs, each an orientation and a `within` strip as deep as
+  the part. "One of these near rules" places each and keeps the cheaper.
 - **keepout**: holes no part may cover, from one corner to the other. Shown as `x` on the text board, a
   grey box in the pictures and in DIYLC, and a "rule area" in KiCad, which keeps enforcing it while you edit.
 - **near**: two pins of the same net should be joined by as little copper as possible, like a resistor
@@ -120,9 +144,13 @@ Next to the netlist, a JSON file with the same name (`circuits/555_blinker.json`
   Each run in `runs` joins its pins in a chain; any other pin of the net gets a run of its own, straight
   from `at`. A net can have one star rule.
 
-fixed and edge are hard limits: the placer puts the part back after every move, so it can't break them.
-A keep-out is, for now, a very expensive cost like a collision (see "Next steps"): if one can't be kept
-(no room left), the run ends with a `!!` line naming the part. Coordinates are holes, counted like the numbers around the
+fixed, edge, orientation and within are hard limits. In each case, each part they're about gets the
+list of places (position and turn) that meet all its rules, while staying on the board and off the
+keep-outs. After every move the placer puts the part back on the nearest of them, keeping its turn if
+it can. A case where some part has no such place is left out (the run says why); if every case is,
+the program stops. A keep-out is, for any other part, a very expensive cost like a collision for now
+(see "Next steps"): if one can't be kept (no room left), the run ends with a `!!` line naming the
+part. Coordinates are holes, counted like the numbers around the
 text board. Pins are named like the `nets` command prints them.
 
 ## The pieces
@@ -133,7 +161,7 @@ text board. Pins are named like the `nets` command prints them.
 | `circuits/555_blinker.json` | Its board file: board size, power and ground, and the rules for this board. |
 | `circuits/cat_feeder.diy` | A copy of the cat-feeder's `pcb.diy` (2026-10-17), with `cat_feeder.json`: its star wiring on C1 and R1 near GPIO2. |
 | `TODO.md` | Ideas for later, in Filippo's words: mostly a richer board-file format. |
-| `src/constraints.rs` | Reads the board file and keeps its rules: fixed parts, edges, keep-outs, near, star. |
+| `src/constraints.rs` | Reads the board file and keeps its rules: where parts may go (fixed, edge, orientation, within, all-of, one-of), keep-outs, near, star. |
 | `footprints.json` | Footprint name → size in holes and where each pad is. |
 | `src/sexpr.rs` | Reads KiCad's bracket format, `(comp (ref "R1") ...)`, into a tree. |
 | `src/netlist.rs` | Turns a KiCad netlist plus `footprints.json` into the circuit the placer works on. |
@@ -145,7 +173,7 @@ text board. Pins are named like the `nets` command prints them.
 | `src/diylc.rs` | Writes the layout as a DIYLC project (your own parts, moved, if it came from one). |
 | `src/place.rs` | The auto-placer: keeps nudging/rotating/swapping parts and keeps changes the judge likes. |
 | `src/nn.rs` | The neural network, written out by hand (8 hidden neurons, 81 weights). |
-| `src/main.rs` | The commands: `place`, `train`, `evolve`, `nets` and `check`. `train` and `evolve` make ~1,200 example boards, have the rules score them, and train the network to match. |
+| `src/main.rs` | The commands: `place`, `train`, `evolve`, `nets` and `check`; `place` and `check` place every case of the board file's rules and keep the best. `train` and `evolve` make ~1,200 example boards (going through the board file's cases in turn, up to 12), have the rules score them, and train the network to match. |
 
 ## How a board is judged
 
@@ -214,7 +242,7 @@ boards it never saw and save it to `out/model.json` (so the last one you ran is 
   direction; it only needs to know which copy did better.
 
 Typical result on the 555: `train` is off by about 0.8 points on unseen boards in 1.8s, `evolve` by
-about 1.5 points in 2.9s, after trying 19,000 networks. When you have a right answer for every example,
+1 to 1.5 points (it depends on the seed) in 2.9s, after trying 19,000 networks. When you have a right answer for every example,
 gradient descent wins. Evolution is the tool when all you can say is "this one did better than that one",
 such as a network that proposes whole layouts.
 
@@ -229,7 +257,8 @@ cargo run --release -- check circuits/cat_feeder.diy --seed 2   # one file
 cargo run --release -- check my_sketches/ --steps 2000          # every .diy in a folder
 ```
 
-`check` places each file as `place` does, writes the `.diy` (to `out/check.diy`, overwritten for each
+`check` places each file as `place` does (every case, keeping the best, with a line for each case
+when there's a `one-of`), writes the `.diy` (to `out/check.diy`, overwritten for each
 file), reads it back and compares the connections. For each file it says one of:
 
 - **same**: passes (only counted).
@@ -249,13 +278,19 @@ measurements; one trained when a measurement meant something else loads silently
 
 ## Known limits
 
-- **Speed.** Every placer step routes the whole board, so most commands are over the one-second goal
-  (times at the top). Re-routing only what a move changes would fix it; it isn't built.
+- **Speed.** Every placer step routes the whole board, and each case of a `one-of` is placed in full,
+  one after the other (times at the top). Many one-ofs side by side multiply the cases. Re-routing
+  only what a move changes, or placing the cases at the same time, would make it quicker; neither is
+  built.
+- **A case starts from your sketch.** With a `one-of`, a case that moves a part far from where you
+  drew it (to the other edge) starts with that part on top of others, and may still have collisions
+  when the steps run out; try more `--steps`.
 - **The router is greedy.** It routes one run at a time, shortest first, and never undoes one. A
   different order can sometimes avoid a jumper it needed. A connection gets at most one wire; if that's
   not enough it gets one solder-side wire straight to the pin.
 - **Collisions and keep-outs are only a cost.** They're the `overlap` measurement, heavily weighted, so
   the placer avoids them, but with `--judge net` it's the network that decides how bad they are.
+  (A part with placement rules never sits on a keep-out or off the board.)
 - **KiCad has no traces.** `rules.kicad_pcb` has the parts and their nets, not the routed copper.
 - **DIP pin names from DIYLC.** Reading a `.diy`, a DIP chip's right-hand pins are numbered top to
   bottom (5–8) where the chip's own numbering runs bottom to top, so the top-right pin is called 5,
@@ -272,7 +307,7 @@ measurements; one trained when a measurement meant something else loads silently
   converters, plots) may be in Python, but nothing the program needs to run.
 - **Hard rules, preferences, taste.** Facts about the hardware and limits of a board (fixed parts,
   edges, keep-outs, collisions) should be hard rules the placer enforces, never learned; fixed parts
-  and edges already are, the rest is "Next steps" 1. What one board wants goes in its board file:
+  and the other placement rules already are, the rest is "Next steps" 1. What one board wants goes in its board file:
   `near` with a fixed cost per hole, `star` as how its nets are split into runs. The network is for
   taste among layouts that are already allowed.
 - **Model settings are the author's job.** Hidden neurons, learning rates, generations and the rule
@@ -303,7 +338,6 @@ In order:
    checks outside the score, so the score (and the network) only compares layouts that are allowed.
 2. **A `rate` command**: show two layouts, you pick the better one, and the network learns your taste
    from those picks ("Your taste" above). Then more circuits to learn from.
-3. **Faster routing**, so big boards are back to about a second (see Known limits).
+3. **Faster routing**, if waits grow past an espresso (see Known limits).
 
-Smaller ideas, not yet in that order, are in [TODO.md](TODO.md): a part's side facing a board edge,
-and "one of" these rules.
+Smaller ideas, in Filippo's words, are in [TODO.md](TODO.md).

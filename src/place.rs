@@ -18,8 +18,8 @@ pub fn anneal(
     mut on_step: impl FnMut(&Placement),
 ) -> Placement {
     let (w, h) = (c.board.width, c.board.height);
-    // Parts the placer may touch: everything except the ones the board file fixes in place.
-    let movable: Vec<usize> = (0..c.components.len()).filter(|&i| c.constraints.fixed[i].is_none()).collect();
+    // Parts the placer may touch: everything except the ones the board file allows only one place.
+    let movable: Vec<usize> = (0..c.components.len()).filter(|&i| c.constraints.allowed[i].as_ref().is_none_or(|a| a.len() > 1)).collect();
     let mut cur = start.unwrap_or_else(|| random_placement(c, rng));
     // Compare boards by cost, not by the 0-100 score: the score flattens out for big circuits
     // (at cost 400 a much worse move barely changes it), which would make the placer accept anything.
@@ -48,7 +48,7 @@ pub fn anneal(
             let o = movable[rng.random_range(0..movable.len())];
             (new[k].x, new[k].y, new[o].x, new[o].y) = (new[o].x, new[o].y, new[k].x, new[k].y);
         }
-        // Push edge parts back against their edge (a rotation or swap may have moved them off it).
+        // Put parts with placement rules back on a place they allow (a move may have taken them off it).
         constraints::apply(c, &mut new);
         let new_s = cost_of(&new);
         if new_s <= cur_s || rng.random::<f64>() < ((cur_s - new_s) / temp).exp() {
