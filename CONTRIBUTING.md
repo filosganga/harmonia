@@ -28,6 +28,9 @@ Follow README "Checking a change". In short:
 - `cargo run --release -- check circuits/cat_feeder.diy --seed N` with two or three seeds, and on a
   folder of your own DIYLC sketches if you have some.
 - Look at the pictures you changed (`out/rules.svg`, `out/rules-solder.svg`), not just the text.
+- If the change is meant to make layouts better, `cargo run --release -- bench` and compare the costs
+  with the last run (`out/bench.json`); after a change to the score's weights or measurements the
+  old costs no longer compare (README "The benchmark").
 - `cargo clippy` has two known warnings (`board::size`, `diylc::two_legged`); don't add new ones.
 - If you changed what a board is measured on, run `cargo run --release -- train` again and say how far
   off the network is on unseen boards.

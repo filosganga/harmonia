@@ -17,6 +17,7 @@ cargo run --release -- place --judge net    # auto-place again, but let the netw
 cargo run --release -- place my_sketch.diy  # score a rough DIYLC layout, then fit it on the board
 cargo run --release -- nets my_sketch.diy   # just list the parts and connections it understood
 cargo run --release -- check my_sketches/   # place, write and re-read every .diy: same connections? (see below)
+cargo run --release -- bench                # the benchmark: place a fixed set of circuits, record the costs (see below)
 ```
 
 Options: `--steps 50000` (placer effort), `--seed 7` (a different random start), `--board 24x16`
@@ -178,6 +179,8 @@ text board. Pins are named like the `nets` command prints them.
 | `circuits/cat_feeder.diy` | A copy of the cat-feeder's `pcb.diy` (2026-10-17), with `cat_feeder.json`: 5 V and ground starred from where the supply comes in (Q1's cathode, the cable's ground), the driver with its own runs and C1 near it, R1 near GPIO2, `Pads` close to GP5 or GP22 (the ESP32's back pads), the ESP32's USB side on one of the board's edges, and the two cable headers (`Inlet`, `Ext`) on an edge or one hole in. |
 | `TODO.md` | The maintainer's own list of ideas for later. |
 | `src/constraints.rs` | Reads the board file and keeps its rules: where parts may go (fixed, edge, orientation, within, all-of, one-of), keep-outs, near, close, star. |
+| `circuits/bench.txt` | The benchmark set: the circuits `bench` places. Never used to train a network. |
+| `circuits/bench/` | Ten classic hobby circuits for the benchmark (a 7805 supply, a transistor flasher, an LM386 amp, a 555 + 4017 LED chaser, ...), written as KiCad netlists after datasheet applications and well-known designs, each with a board file (its size, power, ground, and the connectors on edges). |
 | `footprints.json` | Footprint name → size in holes and where each pad is. |
 | `src/sexpr.rs` | Reads KiCad's bracket format, `(comp (ref "R1") ...)`, into a tree. |
 | `src/netlist.rs` | Turns a KiCad netlist plus `footprints.json` into the circuit the placer works on. |
@@ -189,7 +192,8 @@ text board. Pins are named like the `nets` command prints them.
 | `src/diylc.rs` | Writes the layout as a DIYLC project (your own parts, moved, if it came from one). |
 | `src/place.rs` | The auto-placer: keeps nudging/rotating/swapping parts (and jumping a part with placement rules to another place they allow) and keeps changes the judge likes. |
 | `src/nn.rs` | The neural network, written out by hand (8 hidden neurons, 89 weights). |
-| `src/main.rs` | The commands: `place`, `train`, `evolve`, `nets` and `check`; `place` and `check` place every case of the board file's rules and keep the best. `train` and `evolve` make ~1,200 example boards (going through the board file's cases in turn, up to 12), have the rules score them, and train the network to match. |
+| `src/bench.rs` | The benchmark: places every circuit of `circuits/bench.txt` with three seeds, several runs at once, and records the best costs. |
+| `src/main.rs` | The commands: `place`, `train`, `evolve`, `nets`, `check` and `bench`; `place` and `check` place every case of the board file's rules and keep the best. `train` and `evolve` make ~1,200 example boards (going through the board file's cases in turn, up to 12), have the rules score them, and train the network to match. |
 
 ## How a board is judged
 
@@ -306,6 +310,25 @@ found the tactile-switch problem above.
 After changing what `measure` returns, run `train` again. `place --judge net` only refuses a model trained on a different *number* of
 measurements; one trained when a measurement meant something else loads silently and judges wrong.
 
+### The benchmark
+
+After a change meant to make layouts better (the placer, the router, a network), run the benchmark
+and compare the costs with the last run (`out/bench.json`) or with the first one, recorded in
+[docs/plans/placing-network.md](docs/plans/placing-network.md):
+
+```bash
+cargo run --release -- bench
+```
+
+It places each circuit listed in `circuits/bench.txt` (the 555, the cat feeder and the hobby
+circuits in `circuits/bench/`) from a random start, with three seeds and `place`'s default steps,
+the way `place` does, and prints each seed's best cost, the best and mean of the three, and the time
+per run. It takes no options, so every run measures the same thing. The runs go several at a time,
+one per processor core (about 21s on an 18-core Mac); each has its own random numbers from its seed,
+so the costs are the same as running them one by one. Costs only compare within a circuit, and only
+under the same weights: a change to a measurement or a weight changes what a cost means, so run the
+benchmark before and after it and compare the layouts, not the old numbers.
+
 ## Known limits
 
 - **Speed.** Every placer step routes the whole board, and each case is placed in full, one after
@@ -357,8 +380,9 @@ It becomes useful when the "right answers" come from something the rules can't e
    that are hard to write down as a rule.
 2. **Richer input.** Feed it the board itself (which hole holds what) instead of nine numbers,
    so it can spot patterns no rule measures. That's when a library like Burn starts paying off.
-3. **Placing directly.** Train a network that proposes a layout in one shot instead of the
-   placer trying thousands of moves.
+3. **Placing directly.** Train a network that proposes where the parts go, so the placer starts
+   from a good layout instead of a random one. Under way: [docs/plans/placing-network.md](docs/plans/placing-network.md)
+   (its status line says how far it got).
 
 ## Next steps
 
@@ -369,6 +393,9 @@ In order:
 2. **A `rate` command**: show two layouts, you pick the better one, and the network learns your taste
    from those picks ("Your taste" above). Then more circuits to learn from.
 3. **Faster routing**, if waits grow past an espresso (see Known limits).
+
+Meanwhile, a network that places parts is being built, stage by stage:
+[docs/plans/placing-network.md](docs/plans/placing-network.md).
 
 Smaller ideas, in the maintainer's words, are in [TODO.md](TODO.md).
 

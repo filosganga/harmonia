@@ -1,0 +1,16 @@
+# The benchmark set: the circuits `bench` places. Never train on any of them.
+# One path per line, from the repo's root; each has its board file next to it.
+# Picked 2026-10-17 (docs/plans/placing-network.md, stage 0). Don't change the set: a new set
+# means today's numbers no longer compare.
+circuits/555_blinker.net
+circuits/cat_feeder.diy
+circuits/bench/lm7805_supply.net
+circuits/bench/astable_flasher.net
+circuits/bench/lm386_amp.net
+circuits/bench/lm358_preamp.net
+circuits/bench/attiny85_board.net
+circuits/bench/led_chaser_4017.net
+circuits/bench/pwm_motor_555.net
+circuits/bench/npn_load_switch.net
+circuits/bench/lm317_adjustable.net
+circuits/bench/h_bridge_bjt.net
