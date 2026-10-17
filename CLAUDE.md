@@ -14,13 +14,15 @@ if there is one. CONTRIBUTING.md is the same for people.
 
 - The project is also a way to learn Rust and neural networks: explain in plain language, and keep
   the code readable.
-- The program is Rust only: everything `cargo run` does, including any machine learning (Burn or
-  Candle if a library is needed). Python is fine for dev tools around it (a checker, a converter, a
+- The program is Rust only: everything `cargo run` does, including any machine learning (Burn, in
+  `src/placing.rs`). Python is fine for dev tools around it (a checker, a converter, a
   plotting script), as long as the program never needs them to run.
 - If a model setting needs changing, change the constant, justify it with the unseen-board error, and
   note it in README.md (README "Principles": no flags for these).
 - Waiting time: a command may take as long as making and drinking an espresso (a couple of
-  minutes); quicker is nicer but not a goal that beats clarity. After touching the placer, router or
+  minutes); quicker is nicer but not a goal that beats clarity. Training the placing network (`learn`)
+  is the exception: there accuracy beats speed, so don't trade held-out accuracy for a shorter
+  training without asking. After touching the placer, router or
   `measure`, time `place circuits/cat_feeder.diy` and say how long it took.
 - When README.md's facts change (timings, what an output contains, the measurements), update it in the
   same change.

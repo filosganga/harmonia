@@ -34,7 +34,8 @@ means something else with the same count, an old model loads silently and judges
 - The benchmark's recorded numbers (`docs/plans/placing-network.md`) were costs under the old
   weights: rerun `bench` and say the old table no longer compares.
 - `out/data/layouts.jsonl` holds layouts placed under the old score: delete `out/data/` and remake it
-  with `data` before training on it.
+  with `data` before training on it. Then rerun `bench` (its best layouts are `learn`'s test answers)
+  and `learn`, and update README "The placing network"'s results table.
 
 ## Check
 

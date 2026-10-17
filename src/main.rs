@@ -9,6 +9,7 @@
 //!     cargo run --release -- check sketches/      # place, write and re-read every .diy: same connections?
 //!     cargo run --release -- bench                # the benchmark: place a fixed set of circuits, record the costs
 //!     cargo run --release -- data                 # add a batch of placed random circuits to learn from
+//!     cargo run --release -- learn                # train the placing network on them, test it on unseen circuits
 
 mod bench;
 mod board;
@@ -21,6 +22,7 @@ mod netlist;
 mod nn;
 mod parallel;
 mod place;
+mod placing;
 mod random_circuit;
 mod route;
 mod sexpr;
@@ -67,7 +69,7 @@ fn parse_args() -> Args {
             "--board" => args.board = Some(it.next().and_then(|s| parse_size(&s)).expect("--board <width>x<height>, like 18x12")),
             "--power" => args.power = Some(it.next().expect("--power <net name>")),
             "--ground" => args.ground = Some(it.next().expect("--ground <net name>")),
-            "place" | "train" | "evolve" | "nets" | "check" | "bench" | "data" => args.command = a,
+            "place" | "train" | "evolve" | "nets" | "check" | "bench" | "data" | "learn" => args.command = a,
             path => args.circuit = path.into(),
         }
     }
@@ -87,6 +89,7 @@ fn main() {
         "check" => return check_cmd(&args),
         "bench" => return bench::run(),
         "data" => return data::run(),
+        "learn" => return placing::learn(),
         _ => {}
     }
     let loaded = load(&args.circuit, &args);

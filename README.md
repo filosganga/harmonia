@@ -3,11 +3,14 @@
 Before it meant harmony, the Greek ἁρμονία was a carpenter's word for a joint: things fitted together.
 Harmonia turns parts, fits them on a perfboard and wires them up.
 
-Rust, with four small crates (`rand`, `serde`, `serde_json`, and `roxmltree` to read DIYLC files).
+Rust, with four small crates (`rand`, `serde`, `serde_json`, and `roxmltree` to read DIYLC files), and
+[Burn](https://burn.dev) for the placing network, which is big: it brings about 180 more crates, and a
+clean `cargo build --release` takes about 40s instead of 7s.
 Every placer step routes the whole board, so commands take seconds: on the 555, `place` takes about
 2.4s, `train` 6s and `evolve` 7s; placing the bigger cat-feeder board about 16s (its board file makes two cases). A board file
 whose `one-of`s make cases (below) is placed once per case, so it takes that many times longer. Anything up to
-the time to make and drink an espresso is fine.
+the time to make and drink an espresso is fine. One exception: `learn`, training the placing network,
+takes about 14 minutes; for training, accuracy matters more than speed.
 
 ```bash
 cargo run --release -- place                # auto-place the 555 blinker using the hand-written rules
@@ -19,6 +22,7 @@ cargo run --release -- nets my_sketch.diy   # just list the parts and connection
 cargo run --release -- check my_sketches/   # place, write and re-read every .diy: same connections? (see below)
 cargo run --release -- bench                # the benchmark: place a fixed set of circuits, record the costs (see below)
 cargo run --release -- data                 # add a batch of placed random circuits, to train a placing network on (see below)
+cargo run --release -- learn                # train the placing network on them and test it on circuits it never saw
 ```
 
 Options: `--steps 50000` (placer effort), `--seed 7` (a different random start), `--board 24x16`
@@ -198,8 +202,9 @@ text board. Pins are named like the `nets` command prints them.
 | `src/parallel.rs` | Runs independent jobs (placing several circuits) on every processor core at once. |
 | `src/place.rs` | The auto-placer: keeps nudging/rotating/swapping parts (and jumping a part with placement rules to another place they allow) and keeps changes the judge likes. |
 | `src/nn.rs` | The neural network, written out by hand (8 hidden neurons, 89 weights). |
-| `src/bench.rs` | The benchmark: places every circuit of `circuits/bench.txt` with three seeds, several runs at once, and records the best costs. |
-| `src/main.rs` | The commands: `place`, `train`, `evolve`, `nets`, `check`, `bench` and `data`; `place` and `check` place every case of the board file's rules and keep the best. `train` and `evolve` make ~1,200 example boards (going through the board file's cases in turn, up to 12), have the rules score them, and train the network to match. |
+| `src/bench.rs` | The benchmark: places every circuit of `circuits/bench.txt` with three seeds, several runs at once, and records the best costs and layouts. |
+| `src/placing.rs` | The placing network (Burn): draws the board with the next part at each place it may take, scores each picture with a small convolutional network, and the `learn` command that trains and tests it. |
+| `src/main.rs` | The commands: `place`, `train`, `evolve`, `nets`, `check`, `bench`, `data` and `learn`; `place` and `check` place every case of the board file's rules and keep the best. `train` and `evolve` make ~1,200 example boards (going through the board file's cases in turn, up to 12), have the rules score them, and train the network to match. |
 
 ## How a board is judged
 
@@ -304,12 +309,53 @@ parts, nets and board file, and the best layout and its cost. A run takes about 
 carries on from the circuits already there. It takes no options, so circuit number n is always the
 same circuit, placed the same way, as long as the code is the same: after a change to the placer,
 the router, the score's weights, `footprints.json` or `src/random_circuit.rs`, delete `out/data/`
-and make it again, or the file mixes layouts (and costs) from before and after. It prints how many circuits and training examples there are (one per part) and what
+and make it again, or the file mixes layouts (and costs) from before and after; then `bench` and
+`learn` again, since the placing network's numbers below came from the old layouts. It prints how many circuits and training examples there are (one per part) and what
 they're like, and writes the batch's first circuit as `out/data/sample.net` (with its board file) so
 you can `place` it and look.
 
 The benchmark circuits are never in it: training only sees random circuits, so every benchmark
 circuit is one the network has never seen.
+
+## The placing network
+
+`learn` trains a network that, with some parts already on the board, says where the next one goes.
+Parts are placed one at a time, in a fixed order (parts with placement rules first, then the ones
+with the most connected pins, then the bigger ones). For each place the next part may take (allowed
+by the board file, on the board, off the parts already there and the keep-outs), the board is drawn
+as it would be with the part there: a stack of grids, one per kind of thing (holes taken, the new
+part's body and pins, placed pins on its nets, a "ratsnest" line from each new pin to the nearest
+placed pin of its net, supply and ground pins, off the board and keep-outs). A small convolutional
+network gives each picture a score: three layers of 3 x 3 filters, each sliding the same small grid of
+weights over the whole board to find local patterns, then what they found added up and its strongest
+value, into one number. The highest score wins.
+
+```bash
+cargo run --release -- learn
+```
+
+It learns from `out/data/layouts.jsonl` (`data`, above): for each part, with the parts before it where
+the placer put them, the placer's choice should score highest. Each step compares the placer's choice
+with some other places picked at random, through softmax (scores into probabilities that add up to 1)
+and cross-entropy (the loss: -log of the probability given to the placer's choice). Every tenth circuit
+is kept aside and never learned from. It then tests on those and on the benchmark circuits (the best
+layouts `bench` saved in `out/bench.json` are their right answers): how often the placer's choice is
+its first choice (top-1) or among its first five (top-5), next to simple rules: the shortest total
+ratsnest, next to the placed part it shares the most nets with, and a random guess. The network is
+saved to `out/placer.bpk`. Like `bench` and `data`, it takes no options.
+
+Its settings are constants in `src/placing.rs` (`FILTERS`, `NEGATIVES`, `EPOCHS`, `LEARNING_RATE`),
+chosen on the circuits kept aside; the benchmark row is only reported, never tuned on, so it stays
+a test on circuits nothing was fitted to. The numbers (2026-10-17, 1,000 circuits from `data`, 5 epochs, about 14 minutes on an
+18-core Mac's CPU):
+
+| unseen circuits | network top-1 / top-5 | shortest ratsnest | next to the part sharing most nets | random guess |
+|---|---|---|---|---|
+| random circuits kept aside (1,326 decisions) | 12.4% / 30.2% | 1.6% / 10.7% | 0.2% / 1.3% | 0.4% / 1.9% |
+| benchmark circuits (148 decisions) | 9.5% / 28.4% | 2.6% / 10.0% | 0.5% / 2.2% | 0.5% / 2.5% |
+
+Learning from random circuits carries over to the real ones: nearly as good on the benchmark. Nothing
+uses the network to place yet; that's next (docs/plans/placing-network.md, stage 3).
 
 ## Checking a change
 
@@ -354,7 +400,8 @@ cargo run --release -- bench
 It places each circuit listed in `circuits/bench.txt` (the 555, the cat feeder and the hobby
 circuits in `circuits/bench/`) from a random start, with three seeds and `place`'s default steps,
 the way `place` does, and prints each seed's best cost, the best and mean of the three, and the time
-per run. It takes no options, so every run measures the same thing. The runs go several at a time,
+per run; `out/bench.json` keeps them, with each circuit's best layout (the right answers `learn`
+tests the placing network on). It takes no options, so every run measures the same thing. The runs go several at a time,
 one per processor core (about 21s on an 18-core Mac); each has its own random numbers from its seed,
 so the costs are the same as running them one by one. Costs only compare within a circuit, and only
 under the same weights: a change to a measurement or a weight changes what a cost means, so run the
@@ -410,10 +457,11 @@ It becomes useful when the "right answers" come from something the rules can't e
 1. **Your taste.** Rate layouts yourself; the network learns what you like, including things
    that are hard to write down as a rule.
 2. **Richer input.** Feed it the board itself (which hole holds what) instead of nine numbers,
-   so it can spot patterns no rule measures. That's when a library like Burn starts paying off.
+   so it can spot patterns no rule measures. The placing network (item 3) already sees the board this
+   way, with Burn.
 3. **Placing directly.** Train a network that proposes where the parts go, so the placer starts
    from a good layout instead of a random one. Under way: [docs/plans/placing-network.md](docs/plans/placing-network.md)
-   (its status line says how far it got).
+   (its status line says how far it got); "The placing network" above is what's built.
 
 ## Next steps
 

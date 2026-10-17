@@ -8,6 +8,8 @@ repository = "https://github.com/filosganga/harmonia"
 readme = "README.md"
 
 [dependencies]
+# The placing network (src/placing.rs). "flex" is Burn's pure-Rust CPU backend.
+burn = { version = "0.22", features = ["flex"] }
 rand = "0.9"
 roxmltree = "0.20"
 serde = { version = "1", features = ["derive"] }

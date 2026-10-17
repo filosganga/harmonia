@@ -1,15 +1,15 @@
 //! The benchmark: the yardstick every later change to the placer is measured with.
 //!
 //! It places each circuit listed in `circuits/bench.txt` from a random start, once per seed, the
-//! way `place` does (every case of its board file, keeping the best), and records the best cost and
-//! the time. Its settings are constants, so every run measures the same thing.
+//! way `place` does (every case of its board file, keeping the best), and records the best cost, the
+//! time, and each circuit's best layout (the right answers `learn` tests the placing network on). Its settings are constants, so every run measures the same thing.
 //!
 //! The runs don't depend on each other, so several go at once, one per processor core. Each run has
 //! its own random numbers, made from its seed, so the costs are the same as running them one by one.
 
 use crate::board::{self, Circuit};
 use rand::{SeedableRng, rngs::StdRng};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::time::Instant;
 
 /// The benchmark set: one circuit per line, from the repo's root.
@@ -19,22 +19,26 @@ const STEPS: usize = crate::DEFAULT_STEPS;
 const RESULTS: &str = "out/bench.json";
 
 /// What `bench` found for one circuit, as saved in out/bench.json.
-#[derive(Serialize)]
-struct Found {
-    circuit: String,
+#[derive(Serialize, Deserialize)]
+pub struct Found {
+    pub circuit: String,
     parts: usize,
     nets: usize,
     /// The best cost each seed reached, in the order of `SEEDS`.
     costs: Vec<f64>,
     /// How long each seed took, in seconds (wall clock, while other runs shared the machine).
     seconds: Vec<f64>,
+    /// The best layout of all seeds, [x, y, rot] per part, and which case of the board file it's
+    /// for: the right answers when testing the placing network (`learn`).
+    pub best_case: usize,
+    pub best_layout: Vec<[i32; 3]>,
 }
 
-#[derive(Serialize)]
-struct Saved {
+#[derive(Serialize, Deserialize)]
+pub struct Saved {
     steps: usize,
     seeds: Vec<u64>,
-    results: Vec<Found>,
+    pub results: Vec<Found>,
 }
 
 /// Places every circuit of the benchmark with every seed, prints a table and saves out/bench.json.
@@ -57,7 +61,8 @@ pub fn run() {
 
     let done = crate::parallel::map(&jobs, |&(c, s)| {
         let started = Instant::now();
-        (best_cost(&circuits[c], SEEDS[s]), started.elapsed().as_secs_f64())
+        let (cost, case, layout) = place(&circuits[c], SEEDS[s]);
+        (cost, case, layout, started.elapsed().as_secs_f64())
     });
 
     let mut results: Vec<Found> = paths
@@ -69,11 +74,22 @@ pub fn run() {
             nets: cases[0].nets.len(),
             costs: vec![0.0; SEEDS.len()],
             seconds: vec![0.0; SEEDS.len()],
+            best_case: 0,
+            best_layout: Vec::new(),
         })
         .collect();
-    for (&(c, s), (cost, seconds)) in jobs.iter().zip(done) {
+    let mut layouts = vec![vec![(0, Vec::new()); SEEDS.len()]; circuits.len()];
+    for (&(c, s), (cost, case, layout, seconds)) in jobs.iter().zip(done) {
         results[c].costs[s] = cost;
         results[c].seconds[s] = seconds;
+        layouts[c][s] = (case, layout);
+    }
+    for (r, layouts) in results.iter_mut().zip(layouts) {
+        // The first seed with the lowest cost.
+        let best = (0..SEEDS.len()).min_by(|&a, &b| r.costs[a].total_cmp(&r.costs[b])).unwrap();
+        let (case, layout) = &layouts[best];
+        r.best_case = *case;
+        r.best_layout = layout.iter().map(|p| [p.x, p.y, p.rot as i32]).collect();
     }
     print_table(&results);
     let saved = Saved { steps: STEPS, seeds: SEEDS.to_vec(), results };
@@ -87,7 +103,7 @@ pub fn run() {
 
 /// The circuit once for each case of its board file's rules, read as `place` reads it, ignoring
 /// any flags: the benchmark's settings don't change.
-fn load(path: &str) -> Vec<Circuit> {
+pub fn load(path: &str) -> Vec<Circuit> {
     let args = crate::Args {
         command: "bench".into(),
         circuit: path.into(),
@@ -101,12 +117,19 @@ fn load(path: &str) -> Vec<Circuit> {
     crate::load(path, &args).cases
 }
 
-/// Places every case from a random start, as `place --seed <seed>` does, and returns the best cost.
-/// A DIYLC sketch starts from random too, not from where it was drawn: so will the network.
-fn best_cost(cases: &[Circuit], seed: u64) -> f64 {
+/// Places every case from a random start, as `place --seed <seed>` does, and returns the best
+/// layout's cost, its case and the layout. A DIYLC sketch starts from random too, not from where it
+/// was drawn: so will the network.
+fn place(cases: &[Circuit], seed: u64) -> (f64, usize, board::Placement) {
     let mut rng = StdRng::seed_from_u64(seed);
     let (k, _, layout) = crate::place_cases(cases, board::score, STEPS, &mut rng, None, false);
-    board::cost(&board::measure(&cases[k], &layout))
+    (board::cost(&board::measure(&cases[k], &layout)), k, layout)
+}
+
+/// What the last `bench` saved (out/bench.json), or why it can't be read.
+pub fn saved() -> Result<Saved, String> {
+    let text = std::fs::read_to_string(RESULTS).map_err(|e| format!("can't read {RESULTS} ({e}): run `bench` first"))?;
+    serde_json::from_str(&text).map_err(|e| format!("{RESULTS} is from an older `bench` ({e}): run `bench` again"))
 }
 
 fn print_table(results: &[Found]) {

@@ -1,6 +1,6 @@
 # Plan: a network that places parts
 
-Status: stages 0 and 1 done (2026-10-17); stage 2 next. Written 2026-10-17.
+Status: stages 0, 1 and 2 done (2026-10-17); stage 3 next. Written 2026-10-17.
 
 ## Goal
 
@@ -143,6 +143,42 @@ they differ from the benchmark circuits:
   part it shares the most nets with".
 - **Decision:** if it isn't clearly better than that baseline on unseen circuits, stop and discuss
   before stage 3: more data, other channels, or another design.
+
+**Done (2026-10-17).** `cargo run --release -- learn` (`src/placing.rs`), Burn 0.22.0. What changed
+from the above, and why:
+
+- **Backend `flex`, not `ndarray`:** Burn 0.22 deprecated ndarray; flex is its pure-Rust CPU backend.
+  0.22 also changed the API (no backend type parameter: tensors carry a `Device`). Clean build 7.3s
+  -> 40.5s, 24 -> 206 crates.
+- **Candidate scoring, as recommended.** 8 channels: holes taken, the new part's body, its pins,
+  placed pins on its nets, ratsnest lines (each new pin to the nearest placed pin of its net), supply
+  pins, ground pins, off the board and keep-outs. Three 3 x 3 convolutions (16, 32, 32 filters), then
+  the sum and the max over the board, then one score. Candidates are the places the part may take
+  (placement rules, on the board, off placed bodies and keep-outs, module rules).
+- **Sampled wrong places in training:** each step compares the placer's choice with 63 other places
+  picked at random (all ~800 would be over 12 times the pictures, so roughly half an hour an
+  epoch at the measured speed); the final test compares with all of them.
+  Cross-entropy is written out (`log_softmax`), since Burn's assumes the same number of choices per
+  row.
+- **Benchmark right answers:** `bench` now saves each circuit's best layout in `out/bench.json`.
+- **A second, stronger baseline:** shortest total ratsnest, next to the plan's.
+
+Results (1,000 circuits from `data`, every 10th kept aside; 5 epochs, Adam, learning rate 0.001):
+
+| unseen circuits | network top-1 / top-5 | shortest ratsnest | next to the part sharing most nets | random guess |
+|---|---|---|---|---|
+| random circuits kept aside (1,326 decisions) | 12.4% / 30.2% | 1.6% / 10.7% | 0.2% / 1.3% | 0.4% / 1.9% |
+| benchmark circuits (148 decisions) | 9.5% / 28.4% | 2.6% / 10.0% | 0.5% / 2.2% | 0.5% / 2.5% |
+
+Loss per epoch, training / kept aside: 3.11 / 2.83, 2.88 / 2.75, 2.82 / 2.71, 2.79 / 2.71, 2.76 /
+2.68: still falling, so more epochs would likely help. The plan's baseline does no better than a
+guess: the placer doesn't put parts as close as it can to their partner, since crowding pushes them
+apart.
+
+**Decision (maintainer, 2026-10-17): go on to stage 3.** Training takes about 14 minutes (130s an
+epoch on the CPU, not the 45s estimated from a smaller test network), past the usual espresso; the
+maintainer chose accuracy over speed for training, and will try faster combinations later (a smaller
+network, fewer wrong places, epochs carried over between runs, Metal through `wgpu`).
 
 ### Stage 3: the head start
 
