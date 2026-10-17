@@ -10,8 +10,6 @@
 use crate::board::{self, Circuit};
 use rand::{SeedableRng, rngs::StdRng};
 use serde::Serialize;
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 /// The benchmark set: one circuit per line, from the repo's root.
@@ -50,27 +48,16 @@ pub fn run() {
     // isn't left waiting on one long run at the end.
     let mut jobs: Vec<(usize, usize)> = (0..circuits.len()).flat_map(|c| (0..SEEDS.len()).map(move |s| (c, s))).collect();
     jobs.sort_by_key(|&(c, _)| std::cmp::Reverse(circuits[c].len() * circuits[c][0].components.len()));
-    let workers = std::thread::available_parallelism().map_or(1, |n| n.get()).min(jobs.len());
+    let workers = crate::parallel::workers().min(jobs.len());
     println!(
         "Benchmark: {} circuits x {} seeds, {STEPS} steps each, from a random start ({workers} runs at a time)\n",
         circuits.len(),
         SEEDS.len()
     );
 
-    // Each worker takes the next job off the list until none are left. `next` is a counter all the
-    // workers share; fetch_add hands each one a different job number.
-    let next = AtomicUsize::new(0);
-    let done: Mutex<Vec<(usize, usize, f64, f64)>> = Mutex::new(Vec::new());
-    std::thread::scope(|scope| {
-        for _ in 0..workers {
-            scope.spawn(|| {
-                while let Some(&(c, s)) = jobs.get(next.fetch_add(1, Ordering::Relaxed)) {
-                    let started = Instant::now();
-                    let cost = best_cost(&circuits[c], SEEDS[s]);
-                    done.lock().unwrap().push((c, s, cost, started.elapsed().as_secs_f64()));
-                }
-            });
-        }
+    let done = crate::parallel::map(&jobs, |&(c, s)| {
+        let started = Instant::now();
+        (best_cost(&circuits[c], SEEDS[s]), started.elapsed().as_secs_f64())
     });
 
     let mut results: Vec<Found> = paths
@@ -84,7 +71,7 @@ pub fn run() {
             seconds: vec![0.0; SEEDS.len()],
         })
         .collect();
-    for (c, s, cost, seconds) in done.into_inner().unwrap() {
+    for (&(c, s), (cost, seconds)) in jobs.iter().zip(done) {
         results[c].costs[s] = cost;
         results[c].seconds[s] = seconds;
     }

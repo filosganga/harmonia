@@ -87,7 +87,8 @@ DIYLC. For a DIYLC part the reader refuses, see `.claude/skills/perfboard-diylc-
    Tools → Update Footprints from Library: the real footprint's pads should land on the same holes.
 
 Changing an entry that's already there moves the legs of every circuit that uses it, the benchmark
-circuits too: rerun `bench` and say which numbers changed.
+circuits too: rerun `bench` and say which numbers changed, and delete `out/data/` and make it again
+with `data` (README "Data for a placing network").
 
 ## How the project is shaped
 

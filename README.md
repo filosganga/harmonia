@@ -18,6 +18,7 @@ cargo run --release -- place my_sketch.diy  # score a rough DIYLC layout, then f
 cargo run --release -- nets my_sketch.diy   # just list the parts and connections it understood
 cargo run --release -- check my_sketches/   # place, write and re-read every .diy: same connections? (see below)
 cargo run --release -- bench                # the benchmark: place a fixed set of circuits, record the costs (see below)
+cargo run --release -- data                 # add a batch of placed random circuits, to train a placing network on (see below)
 ```
 
 Options: `--steps 50000` (placer effort), `--seed 7` (a different random start), `--board 24x16`
@@ -185,17 +186,20 @@ text board. Pins are named like the `nets` command prints them.
 | `footprints.json` | Footprint name → size in holes and where each pad is. |
 | `dev/kicad_footprint.py` | A dev tool (Python, not needed to run the program): drafts a `footprints.json` entry from a KiCad footprint file. |
 | `src/sexpr.rs` | Reads KiCad's bracket format, `(comp (ref "R1") ...)`, into a tree. |
-| `src/netlist.rs` | Turns a KiCad netlist plus `footprints.json` into the circuit the placer works on. |
+| `src/netlist.rs` | Turns a KiCad netlist (or, for `data`, a list of parts and nets) plus `footprints.json` into the circuit the placer works on. |
 | `src/board.rs` | Places parts, works out where every pin lands, measures the board and gives it a score. |
 | `src/route.rs` | The router: joins every net with copper traces, and hops over with a jumper (or, last, a solder-side wire) where a trace can't get through. |
 | `src/svg.rs` | Draws the layout as an SVG picture, from the parts' side or the solder side. |
 | `src/kicad_pcb.rs` | Writes the layout as a KiCad board. |
 | `src/diylc_import.rs` | Reads a DIYLC sketch: its parts, its modules (groups), and which pins connect. |
 | `src/diylc.rs` | Writes the layout as a DIYLC project (your own parts, moved, if it came from one). |
+| `src/random_circuit.rs` | Makes random circuits from the parts in `footprints.json`, wired like a small hobby board, with a board file. The same number always makes the same circuit. |
+| `src/data.rs` | The `data` command: places random circuits and keeps their layouts, the training data for a placing network; and the order that network places parts in. |
+| `src/parallel.rs` | Runs independent jobs (placing several circuits) on every processor core at once. |
 | `src/place.rs` | The auto-placer: keeps nudging/rotating/swapping parts (and jumping a part with placement rules to another place they allow) and keeps changes the judge likes. |
 | `src/nn.rs` | The neural network, written out by hand (8 hidden neurons, 89 weights). |
 | `src/bench.rs` | The benchmark: places every circuit of `circuits/bench.txt` with three seeds, several runs at once, and records the best costs. |
-| `src/main.rs` | The commands: `place`, `train`, `evolve`, `nets`, `check` and `bench`; `place` and `check` place every case of the board file's rules and keep the best. `train` and `evolve` make ~1,200 example boards (going through the board file's cases in turn, up to 12), have the rules score them, and train the network to match. |
+| `src/main.rs` | The commands: `place`, `train`, `evolve`, `nets`, `check`, `bench` and `data`; `place` and `check` place every case of the board file's rules and keep the best. `train` and `evolve` make ~1,200 example boards (going through the board file's cases in turn, up to 12), have the rules score them, and train the network to match. |
 
 ## How a board is judged
 
@@ -281,6 +285,31 @@ Typical result on the 555: `train` is off by about 0.9 points on unseen boards (
 about 1.3 points (1.1 to 1.6, depending on the seed) in 7s, after trying 19,000 networks. When you have a right answer for every example,
 gradient descent wins. Evolution is the tool when all you can say is "this one did better than that one",
 such as a network that proposes whole layouts.
+
+## Data for a placing network
+
+A network that places parts (docs/plans/placing-network.md) learns from layouts the placer found.
+`data` makes them:
+
+```bash
+cargo run --release -- data
+```
+
+Each run makes a batch of random circuits (parts from `footprints.json`: a supply header, chips with
+a supply and a ground pin, capacitors and LEDs to ground, small signal nets, all joined up, on a board
+about as crowded as the benchmark's, with some connectors on edges; the sizes are constants in
+`src/random_circuit.rs` and `src/data.rs`), places each from a random start with
+`place`'s default steps, and appends them to `out/data/layouts.jsonl`, one circuit per line: its
+parts, nets and board file, and the best layout and its cost. A run takes about 75s on an 18-core Mac and
+carries on from the circuits already there. It takes no options, so circuit number n is always the
+same circuit, placed the same way, as long as the code is the same: after a change to the placer,
+the router, the score's weights, `footprints.json` or `src/random_circuit.rs`, delete `out/data/`
+and make it again, or the file mixes layouts (and costs) from before and after. It prints how many circuits and training examples there are (one per part) and what
+they're like, and writes the batch's first circuit as `out/data/sample.net` (with its board file) so
+you can `place` it and look.
+
+The benchmark circuits are never in it: training only sees random circuits, so every benchmark
+circuit is one the network has never seen.
 
 ## Checking a change
 

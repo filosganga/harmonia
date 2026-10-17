@@ -68,7 +68,7 @@ impl Component {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct Net {
     pub name: String,
     pub pins: Vec<String>,
@@ -80,7 +80,8 @@ pub struct BoardSize {
     pub height: i32,
 }
 
-/// Everything the placer needs. Built by `netlist::load` from a KiCad netlist.
+/// Everything the placer needs. Built by `netlist` (from a KiCad netlist or a list of parts) or
+/// `diylc_import` (from a DIYLC sketch).
 #[derive(Clone)]
 pub struct Circuit {
     pub board: BoardSize,

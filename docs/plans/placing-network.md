@@ -1,6 +1,6 @@
 # Plan: a network that places parts
 
-Status: stage 0 done (2026-10-17); stage 1 next. Written 2026-10-17.
+Status: stages 0 and 1 done (2026-10-17); stage 2 next. Written 2026-10-17.
 
 ## Goal
 
@@ -99,6 +99,28 @@ Examples of "this part went here": (circuit, board so far, the part to place nex
   connections, biggest first. The network then always learns the same kind of decision.
 - **Time:** making data for hundreds of circuits takes far longer than an espresso. Make it
   incremental: each run adds a batch within a couple of minutes and appends to what's there.
+
+**Done (2026-10-17).** `cargo run --release -- data` adds 200 random circuits
+(`src/random_circuit.rs`) to `out/data/layouts.jsonl`, each placed from a random start with
+`place`'s default steps, one per core: about 75s per batch on the maintainer's Mac. Circuit n is
+always the same circuit placed the same way (checked: the first batch made twice is the same, byte
+for byte). Placing order (`data::placing_order`): parts with placement rules first, then most
+connected pins, then biggest, then by name.
+
+Five batches made: **1,000 circuits, 13,122 examples** (one per part). What they're like, and how
+they differ from the benchmark circuits:
+
+- 6 to 20 parts, evenly spread (59 to 79 circuits of each size). The benchmark has 8 to 19.
+- Parts, most common first: resistors (27%), ceramic and electrolytic capacitors, LEDs, TO-92
+  transistors, headers, trimmers, diodes, terminal blocks, DIP-8, TO-220, other headers, DIP-16,
+  DIP-14.
+- Boards from 96 to 704 holes, sized so the parts cover 18 to 32% of them (the benchmark: 19 to 31%),
+  at least 12 x 8 holes, so a small circuit may cover less.
+- **Fewer big nets than real circuits.** Signal nets are 79% two-pin, 19% three, 2% four, about one
+  net per part. The benchmark circuits have fewer nets per part (0.4 to 0.9) and more of 3 to 5
+  pins, and their supply and ground nets reach 8 to 11 pins. If stage 2 does worse on the benchmark
+  than on held-out random circuits, this is the first thing to change.
+- No modules (nothing like the cat feeder's ESP32 on headers): `footprints.json` has none.
 
 ### Stage 2: the network (Burn)
 

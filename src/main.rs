@@ -8,16 +8,20 @@
 //!     cargo run --release -- nets my_sketch.diy   # just show the parts and connections the program understood
 //!     cargo run --release -- check sketches/      # place, write and re-read every .diy: same connections?
 //!     cargo run --release -- bench                # the benchmark: place a fixed set of circuits, record the costs
+//!     cargo run --release -- data                 # add a batch of placed random circuits to learn from
 
 mod bench;
 mod board;
 mod constraints;
+mod data;
 mod diylc;
 mod diylc_import;
 mod kicad_pcb;
 mod netlist;
 mod nn;
+mod parallel;
 mod place;
+mod random_circuit;
 mod route;
 mod sexpr;
 mod svg;
@@ -63,7 +67,7 @@ fn parse_args() -> Args {
             "--board" => args.board = Some(it.next().and_then(|s| parse_size(&s)).expect("--board <width>x<height>, like 18x12")),
             "--power" => args.power = Some(it.next().expect("--power <net name>")),
             "--ground" => args.ground = Some(it.next().expect("--ground <net name>")),
-            "place" | "train" | "evolve" | "nets" | "check" | "bench" => args.command = a,
+            "place" | "train" | "evolve" | "nets" | "check" | "bench" | "data" => args.command = a,
             path => args.circuit = path.into(),
         }
     }
@@ -82,6 +86,7 @@ fn main() {
     match args.command.as_str() {
         "check" => return check_cmd(&args),
         "bench" => return bench::run(),
+        "data" => return data::run(),
         _ => {}
     }
     let loaded = load(&args.circuit, &args);
@@ -129,9 +134,16 @@ fn load(path: &str, args: &Args) -> Loaded {
     } else {
         (netlist::load(path, opts), None)
     };
+    let (cases, left_out) = cases_of(&circuit, &board_file);
+    Loaded { cases, left_out, sketch, board_file: board_file_path }
+}
+
+/// The circuit once for each case of the board file's rules that can be met, and why the others
+/// can't. Stops if none can.
+fn cases_of(circuit: &Circuit, board_file: &constraints::BoardFile) -> (Vec<Circuit>, Vec<String>) {
     let (mut cases, mut left_out) = (Vec::new(), Vec::new());
-    for case in constraints::cases(&board_file) {
-        match constraints::resolve(&case, &circuit) {
+    for case in constraints::cases(board_file) {
+        match constraints::resolve(&case, circuit) {
             Ok(rules) => {
                 let mut c = circuit.clone();
                 c.constraints = rules;
@@ -145,7 +157,7 @@ fn load(path: &str, args: &Args) -> Loaded {
     if cases.is_empty() {
         panic!("board file: no case of its rules can be met:\n  {}", left_out.join("\n  "));
     }
-    Loaded { cases, left_out, sketch, board_file: board_file_path }
+    (cases, left_out)
 }
 
 /// Places every case of the board file's rules, from the sketch if there is one, and keeps the

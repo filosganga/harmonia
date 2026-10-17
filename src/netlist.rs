@@ -1,4 +1,5 @@
-//! Turns a KiCad netlist (.net) plus our footprint library into a `Circuit`.
+//! Turns a KiCad netlist (.net), or any list of parts and nets, plus our footprint library into a
+//! `Circuit`.
 //!
 //! The netlist says which pin connects to which net and names each part's
 //! footprint. It says nothing about where the pins physically are, so that
@@ -43,30 +44,55 @@ pub fn load(path: &str, opts: Options) -> Circuit {
     if root.head() != Some("export") {
         panic!("{path} doesn't look like a KiCad netlist (it should start with \"(export\")");
     }
-    let lib_text = std::fs::read_to_string(FOOTPRINTS).unwrap_or_else(|e| panic!("can't read {FOOTPRINTS}: {e}"));
-    let library: HashMap<String, Footprint> =
-        serde_json::from_str(&lib_text).unwrap_or_else(|e| panic!("bad {FOOTPRINTS}: {e}"));
+    let parts: Vec<Part> = root.child("components").into_iter().flat_map(|cs| cs.children("comp")).map(part).collect();
+    let nets: Vec<Net> = root.child("nets").into_iter().flat_map(|ns| ns.children("net")).map(net).collect();
+    from_parts(&parts, nets, opts)
+}
 
-    let components: Vec<Component> =
-        root.child("components").into_iter().flat_map(|cs| cs.children("comp")).map(|comp| component(comp, &library)).collect();
-    // KiCad also lists pins that connect to nothing as one-pin nets; there's nothing to wire for those.
-    let nets: Vec<Net> =
-        root.child("nets").into_iter().flat_map(|ns| ns.children("net")).map(net).filter(|n| n.pins.len() > 1).collect();
+/// A part as a netlist names it: its reference (R1), value (10k) and footprint.
+#[derive(Clone, serde::Serialize, Deserialize)]
+pub struct Part {
+    pub reference: String,
+    pub value: String,
+    pub footprint: String,
+}
 
+/// The circuit made of these parts, their footprints looked up in footprints.json, and these nets.
+/// One-pin nets are dropped (KiCad lists pins that connect to nothing that way): there's nothing to wire.
+pub fn from_parts(parts: &[Part], nets: Vec<Net>, opts: Options) -> Circuit {
+    let library = library();
+    let components: Vec<Component> = parts.iter().map(|p| component(p, &library)).collect();
+    let nets: Vec<Net> = nets.into_iter().filter(|n| n.pins.len() > 1).collect();
     let (power, ground) = power_and_ground(&nets, &opts);
     Circuit::new(opts.board, components, nets, power, ground)
 }
 
-fn component(comp: &Sexpr, library: &HashMap<String, Footprint>) -> Component {
+fn library() -> HashMap<String, Footprint> {
+    let lib_text = std::fs::read_to_string(FOOTPRINTS).unwrap_or_else(|e| panic!("can't read {FOOTPRINTS}: {e}"));
+    serde_json::from_str(&lib_text).unwrap_or_else(|e| panic!("bad {FOOTPRINTS}: {e}"))
+}
+
+/// Each footprint's outline in holes (w, h), as footprints.json gives it.
+pub fn sizes() -> HashMap<String, (i32, i32)> {
+    library().into_iter().map(|(name, fp)| (name, (fp.w, fp.h))).collect()
+}
+
+fn part(comp: &Sexpr) -> Part {
     let reference = comp.value("ref").expect("a (comp) without a (ref)").to_string();
-    let footprint = comp.value("footprint").unwrap_or_else(|| panic!("{reference} has no footprint; set one in KiCad"));
+    let footprint = comp.value("footprint").unwrap_or_else(|| panic!("{reference} has no footprint; set one in KiCad")).to_string();
+    let value = comp.value("value").unwrap_or("").to_string();
+    Part { reference, value, footprint }
+}
+
+fn component(part: &Part, library: &HashMap<String, Footprint>) -> Component {
+    let (reference, footprint) = (part.reference.clone(), &part.footprint);
     // "Package_DIP:DIP-8_W7.62mm" -> "DIP-8_W7.62mm": the library name before ':' doesn't matter here.
     let name = footprint.rsplit(':').next().unwrap();
     let fp = library.get(name).unwrap_or_else(|| {
         panic!("{reference} uses footprint {name}, which isn't in {FOOTPRINTS} yet: add its size and pads in holes")
     });
     let pins = fp.pins.iter().map(|(name, &at)| Pin { name: name.clone(), at, off_grid: false }).collect();
-    let value = comp.value("value").unwrap_or("").to_string();
+    let value = part.value.clone();
     let body = Component::full_body(fp.w, fp.h);
     Component { reference, value, footprint: footprint.to_string(), diylc: fp.diylc.clone(), w: fp.w, h: fp.h, pins, body, source: None, low: fp.low }
 }
