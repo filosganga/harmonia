@@ -50,6 +50,19 @@ These are from README "Principles"; a pull request that goes against them will b
 - **Docs change with the code.** If a change makes something in README.md wrong (a timing, an output,
   a measurement, a rule), fix the README in the same pull request.
 
+## Commit messages
+
+Start each commit's subject with what kind of change it is, in the
+[Conventional Commits](https://www.conventionalcommits.org) style, then say what it does in plain
+words, lowercase:
+
+- `feat:` something new a user can do (a command, a board-file rule, a DIYLC part).
+- `fix:` something that was wrong now works.
+- `docs:`, `refactor:`, `perf:`, `test:`, `ci:`, `chore:` for the rest.
+
+Add `!` after the type (`feat!:`) when old board files, sketches or commands stop working. The
+release PR uses these to sort the changelog and to pick the next version.
+
 ## Releasing
 
 Releases are made with [release-plz](https://release-plz.dev) (`release-plz.toml`,
