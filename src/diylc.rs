@@ -1,22 +1,23 @@
-//! Writes a placement as a DIYLC project (.diy) that opens in DIY Layout Creator.
+//! Writes a layout (src/layout.rs) as a DIYLC project (.diy) that opens in DIY Layout Creator.
 //!
 //! A .diy file is XML: a perfboard, then each part with the positions of its legs, in
 //! inches (one hole = 0.1"). Which DIYLC part to draw comes from the "diylc" entry in
 //! footprints.json; a footprint without one is drawn as a labelled box. The routed
 //! copper becomes DIYLC copper traces (solder side) and jumpers, coloured by net.
 
-use crate::board::{self, Circuit, Place, Point};
-use serde::Deserialize;
+use crate::board::{self, Place, Point};
+use crate::layout::Layout;
+use serde::{Deserialize, Serialize};
 use std::fmt::Write;
 
-/// The "diylc" entry of a footprint in footprints.json.
-#[derive(Clone, Deserialize)]
+/// The "diylc" entry of a footprint in footprints.json (the layout file keeps it too).
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Part {
     /// DIYLC's name for the part: Resistor, RadialElectrolytic, RadialCeramicDiskCapacitor, LED, DIL_IC or PinHeader.
     pub part: String,
     /// For two-legged parts: which pad becomes DIYLC's first leg and which its second (default "1", "2").
     /// It matters for polarised parts: DIYLC's first leg is + on a capacitor, but the anode on an LED.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub legs: Vec<String>,
 }
 
@@ -107,7 +108,8 @@ fn point(s: &mut String, (x, y): (f64, f64)) {
 /// DIYLC turns parts clockwise in 90 degree steps, like our placer does.
 const ORIENTATIONS: [&str; 4] = ["DEFAULT", "_90", "_180", "_270"];
 
-pub fn write(c: &Circuit, placement: &[Place], title: &str) -> String {
+pub fn write(layout: &Layout) -> String {
+    let (c, placement, title) = (&layout.circuit, &layout.placement, layout.title.as_str());
     let g = board::geometry(c, placement);
     let mut ids = 0..;
     let mut id = || format!("00000000-0000-4000-8000-{:012x}", ids.next().unwrap());
@@ -201,7 +203,7 @@ pub fn write(c: &Circuit, placement: &[Place], title: &str) -> String {
     }
 
     // The routed copper: traces on the solder side and jumpers on top, coloured like their net.
-    let routing = crate::route::route(c, &g);
+    let routing = &layout.routing;
     let colors = board::net_colors(c);
     let copper = routing.straight_traces().into_iter().map(|t| (t, "connectivity.CopperTrace", r#"<thickness value="1.0" unit="mm"/><layer>_1</layer><endingStyle>Round</endingStyle>"#));
     let jumpers = routing.jumpers.iter().map(|&t| (t, "connectivity.Jumper", "<style>SOLID</style>"));

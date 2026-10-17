@@ -46,6 +46,10 @@ description: Procedure for adding or changing a rule in the perfboard board file
    part no place (a `fixed` hanging off the board) isn't a mistake to stop on: `resolve` returns an
    error for it and that case is left out.
 6. The module's doc comment shows every kind in its JSON example; keep it loadable.
+7. If the pictures, the KiCad board or the `.diy` draw the rule (read from `c.constraints`, like
+   keep-outs), the layout file must carry it too: `src/layout.rs` keeps only the keep-outs and the
+   one-of choices, and `draw` (and `check`'s read-back) rebuild nothing else. Add it to the file
+   (and raise `VERSION` if an older reader would get it wrong), or keep it out of the writers.
 
 ## Docs and examples
 

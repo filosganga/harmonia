@@ -32,3 +32,6 @@ CLAUDE.local.md
 
 # What the program writes: pictures, KiCad and DIYLC files, the trained network.
 out/
+
+# Git worktrees Claude Code makes for agents working in parallel.
+.claude/worktrees/

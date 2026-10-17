@@ -201,9 +201,14 @@ fn manhattan(a: Point, b: Point) -> i32 {
 pub struct Measures(pub [f64; FEATURES.len()]);
 
 pub fn measure(c: &Circuit, placement: &[Place]) -> Measures {
-    let (w, h) = (c.board.width, c.board.height);
     let g = geometry(c, placement);
     let routing = crate::route::route(c, &g);
+    measure_routed(c, &g, &routing)
+}
+
+/// The same, for parts at `g` already routed as `routing` (so a layout is routed only once).
+pub fn measure_routed(c: &Circuit, g: &Geometry, routing: &crate::route::Routing) -> Measures {
+    let (w, h) = (c.board.width, c.board.height);
 
     let pins_of = |net: usize| -> Vec<Point> { c.net_pins[net].iter().map(|&(ci, pi)| g.pins[ci][pi]).collect() };
     let net_pins = |name: &Option<String>| name.as_ref().map(|n| pins_of(c.net_index(n))).unwrap_or_default();
@@ -220,9 +225,9 @@ pub fn measure(c: &Circuit, placement: &[Place]) -> Measures {
         }
     }
     overlap += g.outlines.iter().flatten().filter(|&&(x, y)| x < 0 || x >= w || y < 0 || y >= h).count() as i32;
-    overlap += under_modules(c, &g).len() as i32;
+    overlap += under_modules(c, g).len() as i32;
 
-    let crowding = crowding(c, &g);
+    let crowding = crowding(c, g);
 
     // For each "near" rule: holes of copper between its two pins, the way the router joined them.
     // For each "close" rule: holes between its two pins, straight across the board.
@@ -235,7 +240,7 @@ pub fn measure(c: &Circuit, placement: &[Place]) -> Measures {
 
     Measures([
         routing.trace_length(),
-        routing.turns(&g) as f64,
+        routing.turns(g) as f64,
         routing.jumpers.len() as f64,
         routing.jumper_length(),
         routing.bottom.len() as f64,

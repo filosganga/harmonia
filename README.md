@@ -22,6 +22,7 @@ cargo run --release -- place --start net    # start the placer from the placing 
 cargo run --release -- place my_sketch.diy  # score a rough DIYLC layout, then fit it on the board
 cargo run --release -- nets my_sketch.diy   # just list the parts and connections it understood
 cargo run --release -- check my_sketches/   # place, write and re-read every .diy: same connections? (see below)
+cargo run --release -- draw out/rules.layout.json  # draw a saved layout again, without placing it (see below)
 cargo run --release -- bench                # the benchmark: place a fixed set of circuits, record the costs (see below)
 cargo run --release -- data                 # add a batch of placed random circuits, to train a placing network on (see below)
 cargo run --release -- learn                # train the placing network on them and test it on circuits it never saw
@@ -42,6 +43,8 @@ inside its folder, which also holds `footprints.json` and the example circuits: 
 Each `place` run prints the board as text (when the board file's `one-of`s make cases, first a line
 for each case and which was best) and writes, in `out/` (named `rules` or `net` after the judge):
 
+- `rules.layout.json`: the finished board as one plain file (below). The two pictures, the KiCad
+  board and the DIYLC project are all drawn from it, and so is the result in the html.
 - `rules.svg`: a picture of the result. Holes are coloured by net, with the copper traces and wires, the parts,
   header pin names and modules, and beside the board the score and every net. Hover a hole for its
   position, pin and net. Hole numbers are the text board's.
@@ -54,6 +57,42 @@ for each case and which was best) and writes, in `out/` (named `rules` or `net` 
   real ones without moving anything.
 - `rules.diy`: the layout for DIY Layout Creator, on a perfboard, with the routed copper traces (solder
   side) and jumpers, coloured by net (power red, ground near-black); solder-side wires as red jumpers.
+
+### The layout file
+
+`rules.layout.json` describes the finished board, so the drawings (and any tool of your own) don't
+have to work it out again. It's JSON, with `"format": "harmonia-layout"` and a `"version"` number (a
+file of another version is refused, with a message):
+
+- **made**: how it was made: the circuit file, the board file, the judge, where the placer started
+  (`random`, `sketch` or `network`), the seed, the steps, and which case of the board file's rules
+  won (counted from 1, out of how many, and the option it took in each one-of). And a **title**, the
+  one the pictures show.
+- **board**: its width and height in holes, and the keep-outs (name, from, to).
+- **power** and **ground**: the two net names.
+- **parts**: each part's reference, value and footprint; `at` and `rot`, meaning what they mean in
+  the board file's `fixed` rule; its `size` in holes before turning, whether it's `low`, the
+  `"diylc"` entry from `footprints.json` if it has one, and its pins: name, `at` (its hole inside the
+  part, before turning), `hole` (where that is on the board), net, and `off_grid` for a pin between
+  holes. A part that doesn't take its whole outline (a module, or a DIYLC part drawn at an angle)
+  also has its `body`, the holes it takes; a part from a DIYLC sketch has its `diylc_drawing`, your
+  drawing of it, which is how the `.diy` keeps it.
+- **nets**: each net's name and pins.
+- **runs**: what the router joins with one piece of copper (a net, or a branch of a star net, with
+  its `star` point), in the order it laid them, with that copper: `traces` as straight pieces,
+  `[from hole, to hole]`, then `jumpers` and `solder_wires` the same way.
+- **score**: the score, the cost and the nine measurements by name (below), and the `!!` **problems**.
+
+Not in it: the net colours (worked out from the nets), the start (only `rules.html` shows it), and
+the board file's rules about where parts may go, `near` and `close`.
+
+`draw` reads a layout file and draws it again next to it: `draw out/rules.layout.json` writes
+`out/rules.svg`, `out/rules-solder.svg`, `out/rules.kicad_pcb` and `out/rules.diy`, the same files
+`place` wrote, without placing or routing anything. It uses the copper and the measurements as they
+were saved, so a layout saved before a change to the router draws as it did. (The score and cost
+beside the board are worked out from those measurements with today's weights; a file measured on
+other things than today's measurements is refused.) Copy a
+layout file somewhere first to keep it: the next `place` overwrites `out/rules.layout.json`.
 
 ## Using your own circuit
 
@@ -200,6 +239,7 @@ text board. Pins are named like the `nets` command prints them.
 | `src/netlist.rs` | Turns a KiCad netlist (or, for `data`, a list of parts and nets) plus `footprints.json` into the circuit the placer works on. |
 | `src/board.rs` | Places parts, works out where every pin lands, measures the board and gives it a score. |
 | `src/route.rs` | The router: joins every net with copper traces, and hops over with a jumper (or, last, a solder-side wire) where a trace can't get through. |
+| `src/layout.rs` | The finished board, routed and measured once (`Layout`), which the three writers below draw; and the layout file: writing it, and reading it back for `draw`. |
 | `src/svg.rs` | Draws the layout as an SVG picture, from the parts' side or the solder side. |
 | `src/kicad_pcb.rs` | Writes the layout as a KiCad board. |
 | `src/diylc_import.rs` | Reads a DIYLC sketch: its parts, its modules (groups), and which pins connect. |
@@ -212,7 +252,7 @@ text board. Pins are named like the `nets` command prints them.
 | `src/bench.rs` | The benchmark: places every circuit of `circuits/bench.txt` with three seeds, several runs at once, and records the best costs and layouts and how the cost fell; `--start net` starts from the placing network and compares with the plain placer. |
 | `src/placing.rs` | The placing network (Burn): draws the board with the next part at each place it may take, scores each picture with a small convolutional network, and the `learn` command that trains and tests it; and `propose`, the network's whole layout, for `place --start net`. |
 | `src/round.rs` | The `round` command: one round of expert iteration (the network and the placer teaching each other), recorded in `out/rounds.json`. |
-| `src/main.rs` | The commands: `place`, `train`, `evolve`, `nets`, `check`, `bench`, `data`, `learn` and `round`; `place` and `check` place every case of the board file's rules and keep the best. `train` and `evolve` make ~1,200 example boards (going through the board file's cases in turn, up to 12), have the rules score them, and train the network to match. |
+| `src/main.rs` | The commands: `place`, `train`, `evolve`, `nets`, `check`, `draw`, `bench`, `data`, `learn` and `round`; `place` and `check` place every case of the board file's rules and keep the best. `train` and `evolve` make ~1,200 example boards (going through the board file's cases in turn, up to 12), have the rules score them, and train the network to match. |
 
 ## How a board is judged
 
@@ -314,7 +354,9 @@ ground, small signal nets, all joined up, on a board about as crowded as the ben
 edges; the sizes are constants in
 `src/random_circuit.rs` and `src/data.rs`), places each from a random start with
 `place`'s default steps, and appends them to `out/data/layouts.jsonl`, one circuit per line: its
-parts, nets and board file, and the best layout and its cost. A run takes about 90s on an 18-core Mac and
+parts, nets and board file, and the best layout and its cost. A layout here is only where each
+part goes, `[x, y, rot]` in the order of `parts` (the `at` and `rot` of a layout file, above): the
+rest of a layout file can be worked out again from the circuit. A run takes about 90s on an 18-core Mac and
 carries on from the circuits already there. It takes no options, so circuit number n is always the
 same circuit, placed the same way, as long as the code is the same: after a change to the placer,
 the router, the score's weights, `footprints.json` or `src/random_circuit.rs`, delete `out/data/`
@@ -399,8 +441,9 @@ where the new network crams every part into one corner.
 ## Checking a change
 
 Run both circuits and look at the pictures (`out/rules.svg`, `out/rules-solder.svg`) and the time
-printed at the end. After a change to routing, the DIYLC files or the board file, also check that the
-`.diy` the program writes still has exactly the connections it was given:
+printed at the end. After a change to routing, the DIYLC files, the board file, the layout file or
+any of the drawings, also check that the `.diy` the program writes still has exactly the connections
+it was given (and that the layout file keeps everything the drawings need):
 
 ```bash
 cargo run --release -- check circuits/cat_feeder.diy --seed 2   # one file
@@ -409,10 +452,14 @@ cargo run --release -- check my_sketches/ --steps 2000          # every .diy in 
 
 `check` places each file as `place` does from the sketch (every case, keeping the best, with a line
 for each case when there are several; it ignores `--start`), writes the `.diy` (to `out/check.diy`, overwritten for each
-file), reads it back and compares the connections. For each file it says one of:
+file), reads it back and compares the connections. It also writes the layout file (`out/check.layout.json`),
+reads it back, and checks that what was read writes the same layout file again and the same `.diy`,
+pictures and KiCad board as the layout in memory, so the layout file keeps everything the drawings
+need. For each file it says one of:
 
 - **same**: passes (only counted).
-- **WRONG**: the written file has different connections; it lists the nets that differ.
+- **WRONG**: the written file has different connections; it lists the nets that differ. Or the
+  layout file read back came out different; it says which of the files did.
 - **STOPPED**: the program stopped after reading the file (in the placer, the router, the writer, or
   reading back what it wrote), with the message and where in the code.
 - **unfinished**: the connections differ, but when the placer stopped some pins still shared a hole or
@@ -440,7 +487,8 @@ It places each circuit listed in `circuits/bench.txt` (the 555, the cat feeder a
 circuits in `circuits/bench/`) from a random start, with three seeds and `place`'s default steps,
 the way `place` does, and prints each seed's best cost, the best and mean of the three, and the time
 per run; `out/bench.json` keeps them, with each circuit's best layout (the right answers `learn`
-tests the placing network on). It takes no options but one: `bench --start net` starts every run
+tests the placing network on), as `[x, y, rot]` per part like `out/data/layouts.jsonl`, not as a
+layout file. It takes no options but one: `bench --start net` starts every run
 from the placing network's layout, saves to `out/bench-net.json` (`out/bench.json` stays the plain
 placer's), and prints a comparison with the plain placer's last run: the starting layouts' cost, the
 mean and best cost after the same steps, and the step at which each run got down to the plain
@@ -466,6 +514,8 @@ benchmark before and after it and compare the layouts, not the old numbers.
   the placer avoids them, but with `--judge net` it's the network that decides how bad they are.
   (A part with placement rules never sits on a keep-out or off the board.)
 - **KiCad has no traces.** `rules.kicad_pcb` has the parts and their nets, not the routed copper.
+  The copper is in the layout file (`runs`) and in the `Layout` that `src/kicad_pcb.rs` is given,
+  so writing it into the KiCad board only needs that writer to draw it.
 - **DIP pin names from DIYLC.** Reading a `.diy`, a DIP chip's right-hand pins are numbered top to
   bottom (5–8) where the chip's own numbering runs bottom to top, so the top-right pin is called 5,
   not 8. The connections are right; only the names are off. Check with `nets` before naming such a pin

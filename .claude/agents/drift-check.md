@@ -38,7 +38,8 @@ Real examples from this project, all shipped and fixed later:
 Places that restate the code and drift with it:
 
 - README "Each `place` run ... writes": every file in `out/` and what it contains
-  (`src/main.rs` `place_cmd`, `src/svg.rs`, `src/diylc.rs`, `src/kicad_pcb.rs`).
+  (`src/main.rs` `place_cmd`, `src/layout.rs`, `src/svg.rs`, `src/diylc.rs`, `src/kicad_pcb.rs`);
+  and README "The layout file": the fields of `out/<judge>.layout.json` (`src/layout.rs`).
 - README "The board file" and the doc comment at the top of `src/constraints.rs`: every kind of
   `Rule`, and examples that would actually load (pins that exist and are on that net).
 - README "The pieces": one row per file in `src/` and `circuits/`.
@@ -92,7 +93,8 @@ touches, and every constant the diff changes, grep the whole repo for the old va
 
 The `.diy` the program writes must, when read back by the program, have exactly the connections it
 was given (README "Checking a change"). You can't run it, but flag a change to `src/route.rs`,
-`src/diylc.rs` or `src/diylc_import.rs` that came without saying this check was run. Also look for
+`src/diylc.rs`, `src/diylc_import.rs` or `src/layout.rs` (which `check` also writes, reads back
+and compares) that came without saying this check was run. Also look for
 copper written on a hole that belongs to another net, or two runs of a star net joined anywhere but
 the star point.
 
