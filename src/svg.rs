@@ -287,9 +287,10 @@ pub fn draw(c: &Circuit, placement: &[Place], title: &str, side: Side) -> String
                 above(&mut labels, ox + ow / 2.0, oy, "part-name", &reference);
             }
         }
-        // Pin names, on parts with more than two pins: grouped by header ("ESP32C6-L.5v" is on
-        // ESP32C6-L), each header boxed and named. A row of pins has its names turned to fit.
-        if pins.len() > 2 {
+        // Pin names, on headers and parts with more than two pins (a resistor's "1" and "2" say
+        // nothing): grouped by header ("ESP32C6-L.5v" is on ESP32C6-L), each header boxed and
+        // named. A row of pins has its names turned to fit.
+        if pins.len() > 2 || matches!(shape(comp), "PinHeader" | "module") {
             let mut groups: Vec<(&str, Vec<usize>)> = Vec::new();
             for (pi, pin) in comp.pins.iter().enumerate() {
                 let (group, _) = split_pin(&pin.name);
@@ -337,7 +338,10 @@ pub fn draw(c: &Circuit, placement: &[Place], title: &str, side: Side) -> String
         *ly += line_h;
     };
     let side_name = if mirror { "solder side, mirrored" } else { "component side" };
-    line(&mut legend, &mut ly, &format!("{title}, {side_name}"), "legend-title");
+    // Wrapped: with a one-of in the board file, the title names the case, and gets long.
+    for text in wrap(&format!("{title}, {side_name}"), 48) {
+        line(&mut legend, &mut ly, &text, "legend-title");
+    }
     line(&mut legend, &mut ly, &format!("score {:.0}/100, cost {:.1} (lower is better)", board::score(&m), board::cost(&m)), "legend");
     let measures: Vec<String> = board::FEATURES.iter().zip(m.0).map(|(k, v)| format!("{k} {v:.0}")).collect();
     line(&mut legend, &mut ly, &measures.join(" · "), "note");
