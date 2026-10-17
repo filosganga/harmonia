@@ -6,61 +6,77 @@
 //!     {
 //!       "board": "18x12",
 //!       "power": "+5V", "ground": "GND",
-//!       "fixed":   { "U1": { "at": [6, 3], "rot": 0 } },
-//!       "edge":    { "J1": "left" },
-//!       "keepout": [ { "from": [0, 0], "to": [1, 1], "why": "M3 screw" } ],
-//!       "near":    [ { "part": "C2", "pin": "U1.8" } ],
-//!       "star":    { "GND": { "at": "C1.2", "runs": [["U1.1", "D1.1"]] } }
+//!       "constraints": [
+//!         { "kind": "fixed",   "part": "U1", "at": [6, 3], "rot": 0 },
+//!         { "kind": "edge",    "part": "J1", "edge": "left" },
+//!         { "kind": "keepout", "name": "M3 screw", "from": [16, 0], "to": [17, 1] },
+//!         { "kind": "near",    "pins": ["C2.1", "U1.5"] },
+//!         { "kind": "star",    "name": "ground at C1", "at": "C1.2", "runs": [["U1.1", "D1.1"]] }
+//!       ]
 //!     }
+//!
+//! Every rule says its "kind", and may have a "name": it's in the messages about that rule (and a
+//! keep-out's is written on it in the pictures).
 //!
 //! fixed and edge are hard limits: the placer never moves a fixed part and always keeps an edge
 //! part touching its edge. A keep-out counts like a collision (the "overlap" measurement): very
 //! expensive, but for now a cost, not a limit.
 //!
-//! near is a preference: the part should be as close as it can to that pin. It costs per hole.
+//! near is a preference: the two pins, on the same net, should be joined by as little copper as
+//! possible. It costs per hole of copper between them, as routed (through the star point, for two
+//! runs of a star net).
 //!
-//! star says how a net is wired: every run starts at the `at` pin and goes its own way, never
-//! sharing copper with another run. Each run in `runs` joins its pins; any other pin of the net
-//! gets a run of its own, straight from `at`.
+//! star says how a net (the one its `at` pin is on) is wired: every run starts at the `at` pin and
+//! goes its own way, never sharing copper with another run. Each run in `runs` joins its pins; any
+//! other pin of the net gets a run of its own, straight from `at`.
 
 use crate::board::{self, Circuit, Place, Placement, Point, Run};
 use serde::Deserialize;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 #[derive(Deserialize, Default)]
-#[serde(deny_unknown_fields)] // so a typo like "fixd" is an error, not silently ignored
+#[serde(deny_unknown_fields)] // so a typo like "constraint" is an error, not silently ignored
 pub struct BoardFile {
     pub board: Option<String>,
     pub power: Option<String>,
     pub ground: Option<String>,
     #[serde(default)]
-    fixed: HashMap<String, Fixed>,
-    #[serde(default)]
-    edge: HashMap<String, Edge>,
-    #[serde(default)]
-    keepout: Vec<Keepout>,
-    #[serde(default)]
-    near: Vec<Near>,
-    #[serde(default)]
-    star: HashMap<String, Star>,
+    constraints: Vec<Rule>,
 }
 
+/// One entry of "constraints". `kind` in the JSON picks the variant, like { "kind": "near", ... }.
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Near {
-    part: String,
-    /// A pin, like "U1.8".
-    pin: String,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Star {
-    /// The pin every run starts from, like "C1.+".
-    at: String,
-    /// Pins that share a run, like [["U1.8", "J2.1"], ["U2.4"]].
-    #[serde(default)]
-    runs: Vec<Vec<String>>,
+#[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
+enum Rule {
+    /// The part goes exactly there and never moves.
+    Fixed {
+        name: Option<String>,
+        part: String,
+        /// Top-left hole of the part, after rotating.
+        at: Point,
+        /// Quarter turns clockwise, 0-3, like the placer uses.
+        #[serde(default)]
+        rot: u8,
+    },
+    /// The part always touches that edge of the board.
+    Edge { name: Option<String>, part: String, edge: Edge },
+    /// Holes no part may cover.
+    Keepout {
+        name: Option<String>,
+        from: Point,
+        to: Point,
+    },
+    /// Two pins of the same net, like ["R1.2", "U1.8"], joined by as little copper as possible.
+    Near { name: Option<String>, pins: [String; 2] },
+    /// How the net of the `at` pin is wired.
+    Star {
+        name: Option<String>,
+        /// The pin every run starts from, like "C1.+".
+        at: String,
+        /// Pins that share a run, like [["U1.8", "J2.1"], ["U2.4"]].
+        #[serde(default)]
+        runs: Vec<Vec<String>>,
+    },
 }
 
 /// A star rule, matched up with the circuit: pins are (component, pin) indexes.
@@ -68,16 +84,6 @@ pub struct StarRule {
     pub net: usize,
     pub at: (usize, usize),
     pub runs: Vec<Vec<(usize, usize)>>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Fixed {
-    /// Top-left hole of the part, after rotating.
-    at: Point,
-    /// Quarter turns clockwise, 0-3, like the placer uses.
-    #[serde(default)]
-    rot: u8,
 }
 
 #[derive(Deserialize, Clone, Copy, PartialEq)]
@@ -90,13 +96,12 @@ pub enum Edge {
 }
 
 /// A rectangle of holes no part may cover, `from` one corner `to` the other (both included).
-#[derive(Deserialize, Clone)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone)]
 pub struct Keepout {
     pub from: Point,
     pub to: Point,
-    #[serde(default)]
-    pub why: String,
+    /// The rule's name, like "M3 screw", or empty.
+    pub name: String,
 }
 
 impl Keepout {
@@ -117,8 +122,8 @@ pub struct Constraints {
     pub keepout: Vec<Keepout>,
     /// Every hole of every keep-out, for quick lookups.
     pub keepout_holes: HashSet<Point>,
-    /// (part, pin) pairs: the part should sit as close as it can to the pin.
-    pub near: Vec<(usize, (usize, usize))>,
+    /// (net, two of its pins as (component, pin)): join them by as little copper as possible.
+    pub near: Vec<(usize, [(usize, usize); 2])>,
     pub stars: Vec<StarRule>,
 }
 
@@ -131,55 +136,93 @@ pub fn read_board_file(netlist_path: &str) -> Option<(String, BoardFile)> {
     Some((path, file))
 }
 
+/// How messages name a rule: `near "R1 guards GP2"`, or just `near` if it has no name.
+fn called(kind: &str, name: &Option<String>) -> String {
+    match name {
+        Some(n) => format!("{kind} \"{n}\""),
+        None => kind.to_string(),
+    }
+}
+
 /// Matches the board file's part names to the circuit and checks the rules make sense.
 pub fn resolve(file: &BoardFile, c: &Circuit) -> Constraints {
     let index = |name: &str| {
         c.components.iter().position(|comp| comp.reference == name).unwrap_or_else(|| panic!("board file: there's no part called {name}"))
     };
+    // The net a pin is on, if it's connected to anything.
+    let net_of = |p: (usize, usize)| c.net_pins.iter().position(|pins| pins.contains(&p));
     let n = c.components.len();
-    let mut out = Constraints { fixed: vec![None; n], edge: vec![None; n], ..Default::default() };
-    for (name, f) in &file.fixed {
-        if f.rot > 3 {
-            panic!("board file: {name}'s \"rot\" should be 0-3 (quarter turns clockwise)");
-        }
-        out.fixed[index(name)] = Some(Place { x: f.at.0, y: f.at.1, rot: f.rot });
-    }
-    for (name, &e) in &file.edge {
-        let i = index(name);
-        if out.fixed[i].is_some() {
-            panic!("board file: {name} is both fixed and on an edge; pick one");
-        }
-        out.edge[i] = Some(e);
-    }
     let (w, h) = (c.board.width, c.board.height);
-    for k in &file.keepout {
-        if k.holes().any(|(x, y)| x < 0 || x >= w || y < 0 || y >= h) {
-            panic!("board file: keep-out {:?} to {:?} goes off the {w}x{h} board", k.from, k.to);
-        }
-        out.keepout_holes.extend(k.holes());
-    }
-    out.keepout = file.keepout.clone();
-    for near in &file.near {
-        out.near.push((index(&near.part), c.find_pin(&near.pin)));
-    }
-    for (net_name, star) in &file.star {
-        let net = c.nets.iter().position(|n| &n.name == net_name).unwrap_or_else(|| panic!("board file: star: there's no net called {net_name}"));
-        let on_net = |pin: &str| {
-            let p = c.find_pin(pin);
-            if !c.net_pins[net].contains(&p) {
-                panic!("board file: star {net_name}: {pin} isn't on {net_name}");
+    let mut out = Constraints { fixed: vec![None; n], edge: vec![None; n], ..Default::default() };
+    for rule in &file.constraints {
+        match rule {
+            Rule::Fixed { name, part, at, rot } => {
+                let rule = called("fixed", name);
+                if *rot > 3 {
+                    panic!("board file: {rule}: {part}'s \"rot\" should be 0-3 (quarter turns clockwise)");
+                }
+                let i = index(part);
+                if out.fixed[i].is_some() {
+                    panic!("board file: {rule}: {part} is already fixed by another rule");
+                }
+                out.fixed[i] = Some(Place { x: at.0, y: at.1, rot: *rot });
             }
-            p
-        };
-        let at = on_net(&star.at);
-        let runs: Vec<Vec<(usize, usize)>> = star.runs.iter().map(|run| run.iter().map(|pin| on_net(pin)).collect()).collect();
-        let mut seen = HashSet::from([at]);
-        for (pin, p) in star.runs.iter().flatten().zip(runs.iter().flatten()) {
-            if !seen.insert(*p) {
-                panic!("board file: star {net_name}: {pin} is the star point or in two runs");
+            Rule::Edge { name, part, edge } => {
+                let i = index(part);
+                if out.edge[i].is_some() {
+                    panic!("board file: {}: {part} already has an edge rule", called("edge", name));
+                }
+                out.edge[i] = Some(*edge);
+            }
+            Rule::Keepout { name, from, to } => {
+                let k = Keepout { from: *from, to: *to, name: name.clone().unwrap_or_default() };
+                if k.holes().any(|(x, y)| x < 0 || x >= w || y < 0 || y >= h) {
+                    panic!("board file: {}: {from:?} to {to:?} goes off the {w}x{h} board", called("keepout", name));
+                }
+                out.keepout_holes.extend(k.holes());
+                out.keepout.push(k);
+            }
+            Rule::Near { name, pins: [a, b] } => {
+                let rule = called("near", name);
+                let (pa, pb) = (c.find_pin(a), c.find_pin(b));
+                if pa == pb {
+                    panic!("board file: {rule}: both pins are {a}");
+                }
+                // Near is measured along the copper, so there has to be copper between them.
+                let net = net_of(pa).filter(|&net| net_of(pb) == Some(net));
+                let net = net.unwrap_or_else(|| panic!("board file: {rule}: {a} and {b} aren't on the same net, so no copper joins them"));
+                out.near.push((net, [pa, pb]));
+            }
+            Rule::Star { name, at, runs } => {
+                let rule = called("star", name);
+                let at_pin = c.find_pin(at);
+                let net = net_of(at_pin).unwrap_or_else(|| panic!("board file: {rule}: {at} isn't connected to anything"));
+                let net_name = &c.nets[net].name;
+                if out.stars.iter().any(|s| s.net == net) {
+                    panic!("board file: {rule}: {net_name} already has a star rule");
+                }
+                let on_net = |pin: &str| {
+                    let p = c.find_pin(pin);
+                    if !c.net_pins[net].contains(&p) {
+                        panic!("board file: {rule}: {pin} isn't on {net_name}, the net of {at}");
+                    }
+                    p
+                };
+                let resolved: Vec<Vec<(usize, usize)>> = runs.iter().map(|run| run.iter().map(|pin| on_net(pin)).collect()).collect();
+                let mut seen = HashSet::from([at_pin]);
+                for (pin, p) in runs.iter().flatten().zip(resolved.iter().flatten()) {
+                    if !seen.insert(*p) {
+                        panic!("board file: {rule}: {pin} is the star point or in two runs");
+                    }
+                }
+                out.stars.push(StarRule { net, at: at_pin, runs: resolved });
             }
         }
-        out.stars.push(StarRule { net, at, runs });
+    }
+    for i in 0..n {
+        if out.fixed[i].is_some() && out.edge[i].is_some() {
+            panic!("board file: {} is both fixed and on an edge; pick one", c.components[i].reference);
+        }
     }
     // A fixed part that doesn't fit can never be fixed by the placer, so say so now.
     for (i, f) in out.fixed.iter().enumerate() {
@@ -245,8 +288,8 @@ pub fn problems(c: &Circuit, placement: &[Place]) -> Vec<String> {
         for k in &c.constraints.keepout {
             let holes: HashSet<Point> = k.holes().collect();
             if body.iter().any(|p| holes.contains(p)) {
-                let why = if k.why.is_empty() { String::new() } else { format!(" ({})", k.why) };
-                out.push(format!("{} is on the keep-out at {:?}-{:?}{why}", comp.reference, k.from, k.to));
+                let name = if k.name.is_empty() { String::new() } else { format!(" ({})", k.name) };
+                out.push(format!("{} is on the keep-out at {:?}-{:?}{name}", comp.reference, k.from, k.to));
             }
         }
     }

@@ -22,7 +22,7 @@ pub const WEIGHTS: [f64; 8] = [
     1.5,  // power: per hole between each 5V pin and its nearest GND pin
     40.0, // overlap: per hole where two parts collide or a part hangs off the board
     0.15, // area: per hole of the rectangle that encloses all parts
-    4.0,  // near: per hole between a part and the pin the board file wants it near
+    4.0,  // near: per hole of copper between two pins the board file wants near each other
 ];
 
 /// Turns the cost into a 0-100 score (100 = perfect, about 37 at cost == SCORE_SCALE).
@@ -220,15 +220,15 @@ pub fn measure(c: &Circuit, placement: &[Place]) -> Measures {
     let (min_y, max_y) = (outline().map(|p| p.1).min().unwrap(), outline().map(|p| p.1).max().unwrap());
     let area = (max_x - min_x + 1) * (max_y - min_y + 1);
 
-    // For each "near" rule: holes from the part's closest pin to the pin it should be near.
-    let near: i32 = c.constraints.near.iter().map(|&(part, (ci, pi))| g.pins[part].iter().map(|&p| manhattan(p, g.pins[ci][pi])).min().unwrap_or(0)).sum();
+    // For each "near" rule: holes of copper between its two pins, the way the router joined them.
+    let near: f64 = c.constraints.near.iter().map(|&(net, [(ca, pa), (cb, pb)])| routing.copper_between(c, net, g.pins[ca][pa], g.pins[cb][pb])).sum::<f64>() + 0.0; // + 0.0: no rules is 0, not -0
 
     Measures([
         routing.trace_length(),
         routing.jumpers.len() as f64,
         routing.jumper_length(),
         routing.bottom.len() as f64,
-        power as f64, overlap as f64, area as f64, near as f64])
+        power as f64, overlap as f64, area as f64, near])
 }
 
 /// Holes where something that doesn't fit sits under a module: (part, hole). Only low parts

@@ -28,7 +28,7 @@ const STYLE: &str = "
   text { font-family: -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif; }
   .coord { font-size: 11px; fill: #6b6b6b; text-anchor: middle; font-family: Menlo, Consolas, monospace; }
   .keepout { fill: #555555; fill-opacity: 0.25; stroke: #555555; stroke-dasharray: 4 3; }
-  .keepout-why { font-size: 10px; text-anchor: middle; fill: #222222; }
+  .keepout-name { font-size: 10px; text-anchor: middle; fill: #222222; }
   .module { fill: #7fbf7f; fill-opacity: 0.12; stroke: #4d8f4d; stroke-dasharray: 6 4; stroke-width: 1.5; }
   .module-name { font-size: 11px; fill: #3d6e3d; font-style: italic; paint-order: stroke; stroke: #ffffff; stroke-width: 3px; }
   .lead { stroke: #8f8f8f; stroke-width: 2.5; }
@@ -159,8 +159,8 @@ pub fn draw(c: &Circuit, placement: &[Place], title: &str, side: Side) -> String
     }
     for k in &c.constraints.keepout {
         let (x, y, bw, bh) = bounds(&[k.from, k.to], 0.5);
-        writeln!(base, r#"<rect x="{x:.1}" y="{y:.1}" width="{bw:.1}" height="{bh:.1}" class="keepout"><title>keep-out {}</title></rect>"#, esc(&k.why)).unwrap();
-        writeln!(base, r#"<text x="{:.1}" y="{:.1}" class="keepout-why">{}</text>"#, x + bw / 2.0, y + bh / 2.0 + 3.5, esc(&k.why)).unwrap();
+        writeln!(base, r#"<rect x="{x:.1}" y="{y:.1}" width="{bw:.1}" height="{bh:.1}" class="keepout"><title>keep-out {}</title></rect>"#, esc(&k.name)).unwrap();
+        writeln!(base, r#"<text x="{:.1}" y="{:.1}" class="keepout-name">{}</text>"#, x + bw / 2.0, y + bh / 2.0 + 3.5, esc(&k.name)).unwrap();
     }
 
     // --- the copper traces, on the solder side
