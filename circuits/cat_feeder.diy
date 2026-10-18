@@ -1927,16 +1927,16 @@
       </alphaPercent>
       <value></value>
       <controlPoints>
-        <point x="1.2" y="1.5"/>
-        <point x="2.7" y="2.2"/>
+        <point x="1.2" y="1.4"/>
+        <point x="2.7" y="2.3"/>
       </controlPoints>
-      <firstPoint x="1.2" y="1.5"/>
-      <secondPoint x="2.7" y="2.2"/>
+      <firstPoint x="1.2" y="1.4"/>
+      <secondPoint x="2.7" y="2.3"/>
       <color hex="3333ff"/>
       <borderColor hex="000000"/>
       <borderThickness value="0.2" unit="mm"/>
       <length value="38.1" unit="mm"/>
-      <width value="17.78" unit="mm"/>
+      <width value="22.86" unit="mm"/>
       <mode>TwoPoints</mode>
       <edgeRadius value="0.0" unit="mm"/>
     </diylc.shapes.Rectangle>

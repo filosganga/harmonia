@@ -119,7 +119,9 @@ the board file or `--board`, so the sketch can be drawn on a bigger board than t
 - **Pin names** come from DIYLC: `R1.1`, `C1.+`, `D1.A`, or your header labels (`ESP32C6-L.5v`).
   Nets are named after them (`5v`, `GND`, `SCL`), and power and ground are guessed from those names.
 - **A DIYLC group with pins in it is one part, a module**: say two pin headers, a rectangle for the
-  module's board and some labels. It moves as a whole, and only its pin holes are taken: **low parts**
+  module's board and some labels. Its outline is the rectangle's holes: a hole counts if the rectangle
+  reaches clearly past its centre, so a board drawn with its edge on a line of holes ends there (the
+  same rule as for footprints). It moves as a whole, and only its pin holes are taken: **low parts**
   (a resistor lying flat, a ceramic disc, a diode) can go under it. Taller parts can't, and two modules
   can't overlap. `:` on the text board marks the space under a module.
 - **The `.diy` it writes keeps your own drawing**: your parts with their values, colours and labels,
@@ -219,7 +221,7 @@ text board. Pins are named like the `nets` command prints them.
 |---|---|
 | `circuits/555_blinker.net` | The example circuit as a KiCad netlist: the parts, their footprints, and which pins connect (nets). |
 | `circuits/555_blinker.json` | Its board file: board size, power and ground, and the rules for this board. |
-| `circuits/cat_feeder.diy` | A copy of the cat-feeder's `pcb.diy` (2026-10-17), with `cat_feeder.json`: 5 V and ground starred from where the supply comes in (Q1's cathode, the cable's ground), the driver with its own runs and C1 near it, R1 near GPIO2, `Pads` close to GP5 or GP22 (the ESP32's back pads), the ESP32's USB side on one of the board's edges, and the two cable headers (`Inlet`, `Ext`) on an edge or one hole in. |
+| `circuits/cat_feeder.diy` | A copy of the cat-feeder's `pcb.diy` (2026-10-17; the RTC's board rectangle since drawn one hole wider on each long side, to its real 8 holes), with `cat_feeder.json`: 5 V and ground starred from where the supply comes in (Q1's cathode, the cable's ground), the driver with its own runs and C1 near it, R1 near GPIO2, `Pads` close to GP5 or GP22 (the ESP32's back pads), the ESP32's USB side on one of the board's edges, and the two cable headers (`Inlet`, `Ext`) on an edge or one hole in. |
 | `TODO.md` | The maintainer's own list of ideas for later. |
 | `src/constraints.rs` | Reads the board file and keeps its rules: where parts may go (fixed, edge, orientation, within, all-of, one-of), keep-outs, near, close, star. |
 | `circuits/bench.txt` | The benchmark set: the circuits `bench` places. Never used to train a network. |
