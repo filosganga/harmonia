@@ -28,7 +28,7 @@ use rand::{Rng, SeedableRng, rngs::StdRng, seq::SliceRandom};
 use std::collections::HashSet;
 use std::time::Instant;
 
-const MODEL: &str = "out/placer.bpk";
+pub const MODEL: &str = "out/placer.bpk";
 /// Every circuit whose number is a multiple of this is kept aside to test on, never learned from.
 const HELD_OUT: u64 = 10;
 /// The kinds of thing drawn, one grid each (see `draw`).

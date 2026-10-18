@@ -1,6 +1,6 @@
 # Plan: a network that places parts
 
-Status: stages 0 to 3 done (2026-10-17), modules added to the training data and stage 4 started (2026-10-18): stopped after round 1 for the maintainer. Written 2026-10-17.
+Status: all stages done (2026-10-18): stages 0 to 3, modules in the training data, and stage 4 (three rounds, round 2's network kept). Written 2026-10-17.
 
 ## Goal
 
@@ -279,17 +279,19 @@ on average over all 12 (was -0.5%), **-8.6% without the cat feeder** (was -4.8%)
 - After each round, rerun the benchmark. Stop when a round no longer helps.
 - Report the curve: benchmark cost per round, against the plain placer's.
 
-**Under way (2026-10-18).** `cargo run --release -- round` (`src/round.rs`) does one round:
-re-places every circuit in `out/data` from the network (seed n + round x 2^40, start temperature 5),
-keeps the cheaper of the new and the old layout (circuits kept aside too: they're never trained on,
-and their test answers improve with the rest), retrains from scratch as `learn` does, runs
-`bench --start net`, and appends the round to `out/rounds.json`. About 38 minutes a round (relabel
-1,158s, training 1,109s, bench 30s); 7.1 GB of memory at most.
+**Built (2026-10-18).** `cargo run --release -- round` (`src/round.rs`) does one round:
+re-places every circuit in `out/data` from the network (seed n + round x 2^40, start temperature 5;
+from round 2 also from a random start, below), keeps the cheapest layout (circuits kept aside too:
+they're never trained on, and their test answers improve with the rest), retrains from scratch as
+`learn` does, runs `bench --start net`, and appends the round to `out/rounds.json`. Round 1, before
+the guard, took 38 minutes (relabel 1,158s, training 1,109s, bench 30s); 7.1 GB of memory at most.
 
 | round | improved | examples | held-out top-1 / top-5 | benchmark top-1 / top-5 | bench vs plain |
 |---:|---:|---:|---|---|---:|
 | 0 | | | 8.1% / 21.7% | 11.5% / 29.7% | -5.2% |
 | 1 | 731 / 1100 | -11.9% | 11.8% / 28.9% | 9.5% / 29.1% | -1.1% |
+| 2 (guard) | 529 (372 network + 157 random) | -4.8% | 12.4% / 31.3% | 8.8% / 28.4% | **-5.4%** |
+| 3 (guard) | 336 (219 + 117) | -2.0% | 11.5% / 31.2% | 10.1% / 27.0% | -4.2% |
 
 (Round 1's held-out numbers are against relabelled answers, so they don't compare with round 0's.)
 
@@ -301,7 +303,43 @@ can't undo. The loop can feed its own habits back to itself: the new examples co
 started at the network's layout.
 
 **Stopped for the maintainer**: by the plan's rule round 1 didn't help (on the benchmark average),
-but one round is noisy.
+but one round is noisy. **Decision (maintainer, 2026-10-18): guard the loop, then go on.** From
+round 2 each circuit is also placed from a random start, and the cheapest of the old, the network's
+and the random start's layout is kept, so the examples can't drift towards the network's habits;
+each round's network is kept as `out/placer-round-<n>.bpk`. Rounds took 55 minutes (round 2) and
+138 (round 3, everything 2.5x slower: the Mac was most likely throttled overnight).
+
+Mean cost per circuit starting from each round's network (plain placer for comparison):
+
+| circuit | plain | r0 | r1 | r2 | r3 |
+|---|---:|---:|---:|---:|---:|
+| 555_blinker | 90.7 | 78.7 | 77.0 | 74.9 | 75.4 |
+| cat_feeder | 419.6 | 594.6 | 471.0 | 458.8 | 517.8 |
+| lm7805_supply | 66.9 | 59.0 | 62.2 | 59.5 | 60.8 |
+| astable_flasher | 101.4 | 85.2 | 81.9 | 83.7 | 82.2 |
+| lm386_amp | 87.5 | 75.7 | 76.9 | 74.1 | 74.8 |
+| lm358_preamp | 128.6 | 119.0 | 105.3 | 117.2 | 124.9 |
+| attiny85_board | 170.1 | 157.9 | 199.0 | 223.4 | 221.0 |
+| led_chaser_4017 | 241.2 | 248.5 | 398.7 | 207.4 | 206.7 |
+| pwm_motor_555 | 177.7 | 166.0 | 164.1 | 166.7 | 176.2 |
+| npn_load_switch | 73.4 | 74.7 | 74.6 | 69.2 | 71.9 |
+| lm317_adjustable | 114.5 | 101.9 | 108.5 | 111.5 | 107.1 |
+| h_bridge_bjt | 127.1 | 113.2 | 126.1 | 131.8 | 119.1 |
+
+**Done.** Round 3 didn't beat round 2, so by the rule above the loop stopped; round 2's network is
+`out/placer.bpk` (copied back by hand from `out/placer-round-2.bpk`: `round` always leaves its own
+network there). The guard fixed the chaser (now better than the plain placer). What the loop bought
+over round 0 is small on the benchmark average (-5.4% against -5.2%), though the examples got 18%
+cheaper over the three rounds. Still worse than the plain placer: the cat feeder, the ATtiny85
+board and the H-bridge. On the cat feeder with `place`, which starts the plain placer from the
+maintainer's sketch rather than at random as `bench` does (so other numbers than the table's),
+seeds 1-3: plain 454.3 / 452.6 / 415.2, from round 2's network 464.9 / 460.4 / 451.2; the network packs the parts into half the board
+with short traces but solder-side wires, the plain placer spreads them out without any.
+
+Ideas for later, from what the rounds showed: more training circuits like the losers (modules with
+many used pins, crowded chip boards); scoring a few of the network's top choices with the placer
+instead of only the first; letting `place --start net` also try a random start and keep the better
+(it costs twice the time, but never does worse than today).
 
 ## Rules for the work (from CLAUDE.md and README)
 

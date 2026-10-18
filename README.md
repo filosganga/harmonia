@@ -11,7 +11,7 @@ Every placer step routes the whole board, so commands take seconds: on the 555, 
 whose `one-of`s make cases (below) is placed once per case, so it takes that many times longer. Anything up to
 the time to make and drink an espresso is fine. The exceptions are training the placing network,
 where accuracy matters more than speed: `learn` takes about 20 minutes, and `round` (placing every
-training circuit again, then `learn`) about 40.
+training circuit again twice, then `learn`) about an hour.
 
 ```bash
 cargo run --release -- place                # auto-place the 555 blinker using the hand-written rules
@@ -419,24 +419,35 @@ network scores best, with the parts before it where it put them (under a second)
 room left starts at random. The placer still has the last word, so the result is always polished,
 but it starts cooler (`place::NETWORK_START_TEMPERATURE`, 5 against the usual 20), since a hot
 start shakes a good layout up; 5 was the best of 20, 5, 2 and 0.5 on the benchmark circuits, so for
-this one setting the benchmark isn't quite unseen. `bench --start net` measures it against the plain placer (below). With the network above: its
-layout alone costs 1.5 to 7 times less than a random start, and after the same 20,000 steps the mean
-cost is lower on 9 of the 12 benchmark circuits, 5.2% lower on average (8.6% without the cat feeder),
-usually reached thousands of steps sooner than the plain placer does (on the 555, from the start). It
-does worse on the cat feeder (595 against 420: its three modules are still placed badly), the LED
-chaser and the NPN switch (by 2 to 3%). Before the random circuits had modules it was 7 of 12 and
-4.8% without the cat feeder (682 on it).
+this one setting the benchmark isn't quite unseen. `bench --start net` measures it against the plain placer (below). With the network the table above
+comes from (`learn` on the data before any `round`): its layout alone costs 1.5 to 7 times less than
+a random start, and after the same 20,000 steps the mean cost is lower on 9 of the 12 benchmark
+circuits, 5.2% lower on average (8.6% without the cat feeder), usually reached thousands of steps
+sooner than the plain placer does (on the 555, from the start). Before the random circuits had
+modules it was 7 of 12 and 4.8% without the cat feeder. The network in `out/placer.bpk` now is round
+2's (below): also 9 of 12, 5.4% lower on average; it does worse on the cat feeder (459 against 420),
+the ATtiny85 board (223 against 170) and the H-bridge (132 against 127). Its own top-1 / top-5 on
+the benchmark circuits: 8.8% / 28.4%.
 
 **The loop.** `round` is one round of "expert iteration", where the network and the placer teach each
-other: it places every circuit in `out/data` again, starting from the network (new random numbers
-each round), keeps whichever layout is cheaper, the new one or the one there, so the examples only
-get better, trains the network again on them, and measures it with `bench --start net`. Each round
-is added to `out/rounds.json` and printed with the ones before. A round takes about 40 minutes (half
-placing, half training). Round 1 (2026-10-18): 731 of the 1,100 circuits got a cheaper layout, the
-examples 11.9% cheaper on average; the benchmark from the new network was mixed, -1.1% against the
-plain placer (round 0: -5.2%): much better on the cat feeder (471) and the LM358 preamp, worse on
-the ATtiny85 board (199 against the plain 170) and much worse on the LED chaser (399 against 241),
-where the new network crams every part into one corner.
+other: it places every circuit in `out/data` again twice (new random numbers each round), from the
+network and from a random start, keeps the cheapest of the layout there and the two new ones, so the
+examples only get better, trains the network again on them (keeping a copy as
+`out/placer-round-<n>.bpk`), and measures it with `bench --start net`. The random start is a guard:
+from the network's start alone, the examples drift towards the network's own habits and the next
+network learns them even more. Each round is added to `out/rounds.json` and printed with the ones
+before. A round takes about an hour (two thirds placing, one third training).
+
+On 2026-10-18 (mean cost on the benchmark starting from each round's network, against the plain
+placer; round 1 without the guard): round 0 -5.2%, round 1 -1.1% (the LED chaser crammed into one
+corner: 399 against the plain 241), round 2 **-5.4%** (the chaser 207, better than the plain placer;
+the cat feeder 459), round 3 -4.2%. The examples got 11.9%, 4.8% and 2.0% cheaper round by round.
+Round 3 didn't beat round 2, so the loop stopped there. `round` always leaves its own network in
+`out/placer.bpk`, so round 2's was copied back by hand (`cp out/placer-round-2.bpk out/placer.bpk`);
+do the same after a round that doesn't help. (`learn` would train on the examples as they are now,
+after round 3.) Round 2's network is better than the plain placer on 9 of 12 benchmark circuits,
+not on the cat feeder (459 against 420), the ATtiny85 board (223 against 170) or the H-bridge (132
+against 127).
 
 ## Checking a change
 
@@ -553,8 +564,8 @@ It becomes useful when the "right answers" come from something the rules can't e
    so it can spot patterns no rule measures. The placing network (item 3) already sees the board this
    way, with Burn.
 3. **Placing directly.** Train a network that proposes where the parts go, so the placer starts
-   from a good layout instead of a random one. Under way: [docs/plans/placing-network.md](docs/plans/placing-network.md)
-   (its status line says how far it got); "The placing network" above is what's built.
+   from a good layout instead of a random one. Built: "The placing network" above, and how it got
+   there in [docs/plans/placing-network.md](docs/plans/placing-network.md).
 
 ## Next steps
 
@@ -566,8 +577,8 @@ In order:
    from those picks ("Your taste" above). Then more circuits to learn from.
 3. **Faster routing**, if waits grow past an espresso (see Known limits).
 
-Meanwhile, a network that places parts is being built, stage by stage:
-[docs/plans/placing-network.md](docs/plans/placing-network.md).
+The network that places parts was built stage by stage: [docs/plans/placing-network.md](docs/plans/placing-network.md),
+with ideas for taking it further at the end.
 
 Smaller ideas, in the maintainer's words, are in [TODO.md](TODO.md).
 
