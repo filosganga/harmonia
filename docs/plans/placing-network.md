@@ -1,0 +1,170 @@
+# Plan: a network that places parts
+
+Status: parked (2026-10-18). All stages were built and measured on the branch `better-placing`
+(pushed to GitHub), where this plan has the full results: the network starts the placer about 5%
+better on average on the benchmark, but not on the cat feeder, and the maintainer thinks beating the
+plain placer needs examples or ratings from him (README "Next steps" 2). Only what helps the plain
+placer too was brought over from it: the benchmark (stage 0, below), the checked footprints, module
+footprints, and the layout file. Written 2026-10-17.
+
+## Goal
+
+**Better layouts than the placer finds on its own, in the same time, on circuits the network has
+never seen.** Faster placing and learning are welcome side effects, not the goal.
+
+This is "Placing directly" in README "Where the neural network fits". Today the network only copies
+the rules' score (`src/nn.rs`, 9 numbers in, 1 out), so it adds nothing. Here it proposes where
+parts go.
+
+## The idea in one paragraph
+
+A network places the parts **one at a time**. For each part it looks at the board so far and picks a
+hole and a rotation. Then the existing placer (`place::anneal`, which already accepts a `start`)
+polishes that layout, and the router wires it as today. The polished layouts are better than what
+the network proposed, so they become the next round of training examples. Repeat: a better network
+gives the placer better starts, the placer finds better layouts, and those train a better network.
+This loop is called **expert iteration**, the same idea as AlphaZero's: the search teaches the
+network, and the network guides the search. It's how the result can beat the plain placer, not just
+copy it.
+
+What doesn't change: the router stays a search (it has exact rules a network would only get roughly
+right). Hard rules stay hard (README "Principles"): every layout the network proposes goes through
+`constraints::apply` and the placer, so the network only chooses among allowed places.
+
+## Stages
+
+Each stage ends with something measurable. Stop and ask the maintainer at each **Decision** line.
+
+### Stage 0: the yardstick
+
+Before any network, decide how "better" is measured, and record today's numbers.
+
+- A fixed **benchmark set**: `circuits/555_blinker.net`, `circuits/cat_feeder.diy`, and about 20
+  sketches from the DIYLC corpus (CLAUDE.local.md says where it is), picked once and **never used for
+  training**. List them in a file in the repo, by name, not by a machine path.
+- For each: 3 seeds, the default steps, from a random start. Record the best cost and the time.
+- A command for it (e.g. `bench`), so every later stage reruns the same thing. Follow README
+  "Principles": the benchmark's settings are constants, not flags.
+- Mind CLAUDE.md's waiting time (a couple of minutes). If the whole set takes longer, the command
+  may take a subset or a smaller step count. Say which, and why.
+
+**Done (2026-10-17).** What changed from the above, and why:
+
+- **No corpus sketches in the set.** The DIYLC corpus turned out to be auto-backups of one circuit:
+  the cat feeder in three versions (`pcb.*` is the cat feeder itself, `pcb-v2.*` a smaller ESP32
+  version, `Untitled.*` an earlier Pi Zero one), about 80 different circuits with three nets or
+  more, each a step or two from the next. Benchmark sketches would have been near-copies of
+  training ones. Instead the set is the 555, the cat feeder, and ten classic hobby circuits written
+  as KiCad netlists after datasheet applications and well-known designs (`circuits/bench/`, each
+  with its source in the title block), listed in `circuits/bench.txt`. They needed eleven new
+  footprints in `footprints.json` (DIP-14 isn't used by any circuit yet).
+- **All of it, every step count.** `cargo run --release -- bench` runs the 36 runs (12 circuits x
+  seeds 1, 2, 3, 20,000 steps, random start) several at a time, one per core: about 21s on the
+  maintainer's 18-core Mac, so no subset or smaller step count is needed. The costs come out the
+  same as one run at a time (checked by running it twice and comparing); seed 1 on the 555 gives
+  `place`'s 84.6. Results go to `out/bench.json`.
+
+Today's numbers, the plain placer (best cost per seed; lower is better; times are per run with up to
+18 runs sharing the machine):
+
+| circuit | parts | nets | seed 1 | seed 2 | seed 3 | best | mean | s/run |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| 555_blinker | 8 | 7 | 84.6 | 99.5 | 88.1 | 84.6 | 90.7 | 3.7 |
+| cat_feeder | 11 | 18 | 464.2 | 392.9 | 401.7 | 392.9 | 419.6 | 20.5 |
+| lm7805_supply | 10 | 5 | 67.6 | 62.1 | 71.0 | 62.1 | 66.9 | 3.4 |
+| astable_flasher | 11 | 8 | 93.8 | 112.0 | 98.4 | 93.8 | 101.4 | 3.9 |
+| lm386_amp | 11 | 8 | 81.9 | 102.4 | 78.3 | 78.3 | 87.5 | 3.9 |
+| lm358_preamp | 14 | 9 | 141.0 | 117.1 | 127.8 | 117.1 | 128.6 | 5.1 |
+| attiny85_board | 11 | 10 | 180.4 | 165.7 | 164.3 | 164.3 | 170.1 | 5.4 |
+| led_chaser_4017 | 19 | 17 | 260.6 | 211.6 | 251.3 | 211.6 | 241.2 | 10.9 |
+| pwm_motor_555 | 15 | 10 | 169.0 | 186.2 | 177.9 | 169.0 | 177.7 | 9.0 |
+| npn_load_switch | 10 | 6 | 67.7 | 71.4 | 81.0 | 67.7 | 73.4 | 3.4 |
+| lm317_adjustable | 13 | 5 | 102.9 | 123.9 | 116.6 | 102.9 | 114.5 | 4.7 |
+| h_bridge_bjt | 15 | 8 | 117.0 | 128.3 | 136.0 | 117.0 | 127.1 | 6.5 |
+
+(Rerun the same day after two footprints were corrected against KiCad's own files: the screw
+terminal and the trimmer, used by lm7805_supply, lm386_amp, pwm_motor_555, npn_load_switch and
+lm317_adjustable.) The spread between seeds (about 30% on the lm386, 20% on the cat feeder and the chaser) is how
+much a later stage has to beat before a difference means anything.
+
+### Stage 1: training data
+
+Examples of "this part went here": (circuit, board so far, the part to place next, where it went).
+
+- **Sources:** the corpus sketches not in the benchmark, and **random circuits** made in Rust from
+  the parts in `footprints.json` with random nets. The corpus alone (about 190 readable sketches)
+  is probably too few. Random circuits are cheap but unrealistic, so keep both and say how many of
+  each.
+- **Decided 2026-10-17: random circuits only.** The corpus is all the cat feeder (stage 0), so
+  training on it would make the cat feeder a circuit the network has seen. The maintainer chose to
+  keep it out, so every benchmark circuit stays unseen.
+- **Labels:** run the placer on each circuit and save its best layout to `out/` (git-ignored), as
+  JSON. A layout gives one example per part, in the placing order below.
+- **Placing order:** a fixed rule, e.g. parts with fixed or edge rules first, then by number of
+  connections, biggest first. The network then always learns the same kind of decision.
+- **Time:** making data for hundreds of circuits takes far longer than an espresso. Make it
+  incremental: each run adds a batch within a couple of minutes and appends to what's there.
+
+### Stage 2: the network (Burn)
+
+- **Add Burn** (the maintainer said yes). Use a pure-Rust CPU backend (`ndarray`) first; try
+  `wgpu` (Metal on the Mac) only if training is too slow. Don't use the libtorch backend: it
+  downloads a C++ library. **Check the current Burn version and its API in its docs before
+  writing code**; don't trust memory, the API changes between versions.
+- **What it sees: a picture of the board**, one grid per kind of thing (called "channels"):
+  holes taken by parts already placed, pins on the next part's nets, supply pins, ground pins,
+  keep-outs, off the board, and the places the board file allows for this part.
+- **How it chooses (recommended): score each candidate.** For every allowed (hole, rotation) of
+  the next part, draw the board as it would be with the part there, and let a small convolutional
+  network give it one number. Pick the highest. The part's shape and pins come for free, because
+  they're drawn into the picture. Training is "pick the one the placer picked" over all candidates
+  (softmax and cross-entropy). The other design (one heat map of scores per rotation in a single
+  pass) is faster but has to be told the part's shape some other way. Try it only if scoring every
+  candidate is too slow.
+- **Measure on held-out circuits:** how often its first choice is the placer's choice, and how
+  often the placer's choice is in its top 5. Compare with a trivial baseline: "put it next to the
+  part it shares the most nets with".
+- **Decision:** if it isn't clearly better than that baseline on unseen circuits, stop and discuss
+  before stage 3: more data, other channels, or another design.
+
+### Stage 3: the head start
+
+- `place` can start from the network's layout instead of a random one, e.g. `place --start net`,
+  like the existing `--judge net`. The placer still has the last word, so the result is always an
+  allowed, polished layout. It can still come out worse than a random start; that's what the
+  benchmark is for.
+- Rerun the stage 0 benchmark. Report two things: the best cost after the same steps, and the steps
+  needed to reach today's best cost.
+- **Decision:** is it worth going on to stage 4?
+
+### Stage 4: the loop (expert iteration)
+
+- Round n: place the training circuits starting from network n, polish with the placer, keep the
+  better of the new layout and the old label, retrain into network n+1.
+- After each round, rerun the benchmark. Stop when a round no longer helps.
+- Report the curve: benchmark cost per round, against the plain placer's.
+
+## Rules for the work (from CLAUDE.md and README)
+
+- Explain in plain language as you go. This project is also how the maintainer learns Rust and
+  neural networks, so say what a convolution, softmax or an epoch is when they first come up.
+- Model settings (layers, channels, learning rate, rounds) are constants in the code, justified by
+  the held-out numbers, and noted in README. No flags for them.
+- Rust only for everything `cargo run` does. Python is fine for a plot.
+- After touching the placer, router or `measure`: time `place circuits/cat_feeder.diy` and say how
+  long it took. Run `check` (README "Checking a change") with two or three seeds.
+- Update README in the same change when its facts change: "Where the neural network fits", "The
+  pieces", "Next steps", the commands and the timings.
+- Conventional Commits, and run the `drift-check` agent before each commit.
+
+## Risks
+
+- **It may not carry over to new circuits.** That's what stage 2's decision is for, before
+  investing in stages 3 and 4.
+- **Too little realistic data.** Random circuits help with volume but may teach habits that don't
+  fit real boards. Watch the benchmark, not the training numbers.
+- **Burn makes the build much slower** and adds many crates. Accepted by the maintainer. Say how
+  long a clean `cargo build --release` takes before and after.
+- **The head start may not help.** Annealing starts hot and shakes the layout up, so a good start
+  can get thrown away early. If stage 3 shows that, try starting the placer cooler when it starts
+  from the network. That's a constant in `place.rs`, justified by the benchmark.

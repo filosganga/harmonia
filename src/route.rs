@@ -26,7 +26,7 @@ use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 
 /// Where the copper goes. Each entry is (run, from hole, to hole).
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Routing {
     /// One step of trace between neighbouring holes, on the solder side.
     pub traces: Vec<(usize, Point, Point)>,
@@ -388,20 +388,11 @@ pub fn route(c: &Circuit, g: &Geometry) -> Routing {
         }
     }
 
-    // Shortest runs first: they have the fewest ways around things.
     let holes_of = |r: usize| -> Vec<Point> { c.runs[r].pins.iter().map(|&(ci, pi)| g.pins[ci][pi]).collect() };
-    let span = |r: usize| {
-        let ps = holes_of(r);
-        let (xs, ys) = (ps.iter().map(|p| p.0), ps.iter().map(|p| p.1));
-        xs.clone().max().unwrap() - xs.min().unwrap() + ys.clone().max().unwrap() - ys.min().unwrap()
-    };
-    let mut order: Vec<usize> = (0..c.runs.len()).collect();
-    order.sort_by_cached_key(|&r| span(r));
-
     let mut out = Routing::default();
     let mut mem = [Scratch::new(n), Scratch::new(n)];
     let shapes = jumper_shapes();
-    for r in order {
+    for r in order(c, g) {
         let run = &c.runs[r];
         let start = run.star.unwrap_or(run.pins[0]);
         let start = g.pins[start.0][start.1];
@@ -462,6 +453,20 @@ pub fn route(c: &Circuit, g: &Geometry) -> Routing {
         }
     }
     out
+}
+
+/// The order `route` routes the runs in: shortest first, since they have the fewest ways around
+/// things. A run's copper is laid all at once, so in a `Routing` each run's pieces come one after
+/// the other, runs in this order (the layout file keeps them that way).
+pub fn order(c: &Circuit, g: &Geometry) -> Vec<usize> {
+    let span = |r: usize| {
+        let ps: Vec<Point> = c.runs[r].pins.iter().map(|&(ci, pi)| g.pins[ci][pi]).collect();
+        let (xs, ys) = (ps.iter().map(|p| p.0), ps.iter().map(|p| p.1));
+        xs.clone().max().unwrap() - xs.min().unwrap() + ys.clone().max().unwrap() - ys.min().unwrap()
+    };
+    let mut order: Vec<usize> = (0..c.runs.len()).collect();
+    order.sort_by_cached_key(|&r| span(r));
+    order
 }
 
 /// Distance in tenths of a hole if nothing were in the way (diagonals where they help).

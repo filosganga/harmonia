@@ -1,0 +1,17 @@
+{
+  "board": "18x12",
+  "power": "+5V",
+  "ground": "GND",
+  "constraints": [
+    {
+      "kind": "edge",
+      "part": "J2",
+      "edge": "left"
+    },
+    {
+      "kind": "edge",
+      "part": "J3",
+      "edge": "right"
+    }
+  ]
+}

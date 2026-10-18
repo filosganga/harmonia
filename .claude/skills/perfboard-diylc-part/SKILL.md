@@ -28,6 +28,9 @@ A new class is supported only when its connections are proven to match.
 - For KiCad footprints, DIYLC drawings come from `footprints.json`'s `"diylc"` entry and the matching
   branch in `src/diylc.rs` (`TWO_LEGGED`, `DIL_IC`, `PinHeader`); copy DIYLC's own defaults for a new one.
 - `src/svg.rs` `shape()`: add a drawing if a grey box (the default) misleads.
+- `diylc::Part` and `diylc_import::Source` are saved in the layout file (`src/layout.rs`, a part's
+  `"diylc"` and `"diylc_drawing"`): a new field on either changes the file, so raise `VERSION` there
+  if an older reader would get it wrong.
 
 ## Prove it
 

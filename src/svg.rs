@@ -1,13 +1,13 @@
-//! Draws a placement as an SVG picture of the perfboard: holes coloured by net, the routed
-//! copper traces and jumpers, the parts as they look from above, header pin names, and beside
+//! Draws a layout (src/layout.rs) as an SVG picture of the perfboard: holes coloured by net, the
+//! routed copper traces and jumpers, the parts as they look from above, header pin names, and beside
 //! the board a legend with the score and every net. Open it in a browser; hovering a hole names
 //! it, its pin and net.
 //!
 //! `Side::Solder` is the board turned over to solder it: mirrored, so column 0 is on the right,
 //! with the copper in front and the parts behind the board, faint.
 
-use crate::board::{self, Circuit, Component, Place, Point};
-use crate::route;
+use crate::board::{self, Component, Point};
+use crate::layout::Layout;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 
@@ -53,12 +53,17 @@ const STYLE: &str = "
   .warn { font-size: 11px; fill: #b00020; }
 ";
 
-/// What to draw a part as: DIYLC's name for it, or "module" for a DIYLC group parts can go under.
+/// What to draw a part as: DIYLC's name for it, or "module" for a part parts can go under (a DIYLC
+/// group, or a footprint with "module": true).
 fn shape(comp: &Component) -> &str {
+    let full = comp.body.len() == (comp.w * comp.h) as usize;
     match &comp.diylc {
         Some(p) => &p.part,
         // A group with nothing free under it (say, a header and its label) is drawn like a header.
-        None if comp.footprint == "DIYLC:module" && comp.body.len() == (comp.w * comp.h) as usize => "PinHeader",
+        None if comp.footprint == "DIYLC:module" && full => "PinHeader",
+        // A footprints.json module. (A DIYLC part drawn at an angle only takes its legs too, but it's
+        // still drawn as itself, below.)
+        None if !full && !comp.footprint.starts_with("DIYLC:") => "module",
         None => comp.footprint.strip_prefix("DIYLC:").unwrap_or(""),
     }
 }
@@ -96,11 +101,12 @@ fn wrap(text: &str, width: usize) -> Vec<String> {
     lines
 }
 
-pub fn draw(c: &Circuit, placement: &[Place], title: &str, side: Side) -> String {
+pub fn draw(layout: &Layout, side: Side) -> String {
+    let (c, title) = (&layout.circuit, layout.title.as_str());
     let (w, h) = (c.board.width, c.board.height);
     let mirror = side == Side::Solder;
-    let g = board::geometry(c, placement);
-    let m = board::measure(c, placement);
+    let g = board::geometry(c, &layout.placement);
+    let m = layout.measures;
 
     // Holes -> pixels. Fractions are for points between holes, like the middle of a resistor.
     let px = |x: f64| MARGIN + (if mirror { w as f64 - x } else { x + 1.0 }) * PX;
@@ -164,7 +170,7 @@ pub fn draw(c: &Circuit, placement: &[Place], title: &str, side: Side) -> String
     }
 
     // --- the copper traces, on the solder side
-    let routing = route::route(c, &g);
+    let routing = &layout.routing;
     let opacity = if mirror { 0.9 } else { 0.55 };
     let mut copper: HashMap<Point, usize> = HashMap::new(); // holes the copper touches -> net
     for (run, a, b) in routing.straight_traces() {
@@ -291,15 +297,18 @@ pub fn draw(c: &Circuit, placement: &[Place], title: &str, side: Side) -> String
         // nothing): grouped by header ("ESP32C6-L.5v" is on ESP32C6-L), each header boxed and
         // named. A row of pins has its names turned to fit.
         if pins.len() > 2 || matches!(shape(comp), "PinHeader" | "module") {
-            let mut groups: Vec<(&str, Vec<usize>)> = Vec::new();
+            // A module from footprints.json has plain pin numbers, no header names: its headers are
+            // the columns of its footprint, each named after the part.
+            let unnamed_module = shape(comp) == "module" && comp.pins.iter().all(|pin| split_pin(&pin.name).0.is_empty());
+            let mut groups: Vec<(String, &str, Vec<usize>)> = Vec::new(); // (key, name, pins)
             for (pi, pin) in comp.pins.iter().enumerate() {
-                let (group, _) = split_pin(&pin.name);
-                match groups.iter_mut().find(|(g, _)| *g == group) {
-                    Some((_, members)) => members.push(pi),
-                    None => groups.push((group, vec![pi])),
+                let (key, group) = if unnamed_module { (format!("column {}", pin.at.0), "") } else { (split_pin(&pin.name).0.to_string(), split_pin(&pin.name).0) };
+                match groups.iter_mut().find(|(k, _, _)| *k == key) {
+                    Some((_, _, members)) => members.push(pi),
+                    None => groups.push((key, group, vec![pi])),
                 }
             }
-            for (group, members) in groups {
+            for (_, group, members) in groups {
                 let holes: Vec<Point> = members.iter().map(|&pi| pins[pi]).collect();
                 let in_a_row = holes.len() > 1 && holes.iter().all(|p| p.1 == holes[0].1);
                 for (&pi, &p) in members.iter().zip(&holes) {
