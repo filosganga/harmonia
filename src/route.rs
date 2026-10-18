@@ -450,8 +450,8 @@ pub fn route(c: &Circuit, g: &Geometry) -> Routing {
         let start = g.pins[start.0][start.1];
         let (mut remaining, off): (Vec<Point>, Vec<Point>) =
             holes_of(r).into_iter().filter(|&p| p != start).partition(|&p| grid.on_board(p) && grid.on_board(start));
-        // A pin off the board can't be routed to: it's left unrouted, which costs more than any
-        // wiring, so hanging a part off the board never saves any.
+        // A pin off the board can't be routed to: it's left unrouted. Only a layout that isn't
+        // allowed has one (a sketch as you drew it); the placer never makes such a layout.
         out.unrouted.extend(off.into_iter().map(|p| (r, start, p)));
         let mut tree = vec![start];
         while !remaining.is_empty() {

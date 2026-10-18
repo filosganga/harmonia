@@ -5,7 +5,7 @@ Harmonia turns parts, fits them on a perfboard and wires them up.
 
 Rust, with four small crates (`rand`, `serde`, `serde_json`, and `roxmltree` to read DIYLC files).
 Every placer step routes the whole board, so commands take seconds: on the 555, `place` takes about
-1.9s, `train` 5s and `evolve` 6s; placing the bigger cat-feeder board about 11s (its board file makes two cases). A board file
+2s, `train` 5s and `evolve` 6s; placing the bigger cat-feeder board about 12s (its board file makes two cases). A board file
 whose `one-of`s make cases (below) is placed once per case, so it takes that many times longer. Anything up to
 the time to make and drink an espresso is fine.
 
@@ -74,7 +74,7 @@ file of another version is refused, with a message):
   its `star` point), in the order it laid them, with that copper: `traces` as straight pieces,
   `[from hole, to hole]`, then `jumpers` and `solder_wires` the same way, and `unrouted` (only when
   there are any): connections the router couldn't make.
-- **score**: the score, the cost and the twelve measurements by name (below), and the `!!` **problems**.
+- **score**: the score, the cost and the eleven measurements by name (below), and the `!!` **problems**.
 
 Not in it: the net colours (worked out from the nets), the start (only `rules.html` shows it), and
 the board file's rules about where parts may go, `near` and `close`.
@@ -118,6 +118,11 @@ wire joins whatever is at its two ends). Where you put things is only the starti
 your sketch ("Your sketch: score ...") and then fits everything onto the real board, which comes from
 the board file or `--board`, so the sketch can be drawn on a bigger board than the real one.
 
+- **Your sketch doesn't have to be allowed.** Parts drawn on top of each other, off the real board,
+  on a keep-out or under a module are moved, each to the nearest place where it fits, before the
+  placer starts (biggest parts first, so the small one moves). The run says what was wrong ("Your
+  sketch: not allowed, so not scored: ..."), and the start in `rules.html` boxes those parts in red
+  and isn't scored either.
 - **Pin names** come from DIYLC: `R1.1`, `C1.+`, `D1.A`, or your header labels (`ESP32C6-L.5v`).
   Nets are named after them (`5v`, `GND`, `SCL`), and power and ground are guessed from those names.
 - **A DIYLC group with pins in it is one part, a module**: say two pin headers, a rectangle for the
@@ -135,7 +140,7 @@ the board file or `--board`, so the sketch can be drawn on a bigger board than t
   it, because its connections would otherwise be missed.
 
 Checked against DIYLC itself: on 216 DIYLC files, the program finds exactly the connections DIYLC's own
-netlist finds. And on all 193 of them with connections, the file it writes (re-placed and re-routed)
+netlist finds. And on all 194 of them with connections, the file it writes (re-placed and re-routed)
 reads back with exactly the original's connections.
 
 Some parts have legs between holes (a tactile switch's are 0.175" and 0.255" apart). Copper in a hole
@@ -212,9 +217,8 @@ list of places (position and turn) that meet all its rules, while staying on the
 keep-outs. After every move the placer puts the part back on the nearest of them, keeping its turn if
 it can; now and then it also jumps the part to any of them, so it can get across to another option
 of a one-of, like the other edge. A case where some part has no such place is left out (the run says why); if every case is,
-the program stops. A keep-out is, for any other part, a very expensive cost like a collision for now
-(see "Next steps"): if one can't be kept (no room left), the run ends with a `!!` line naming the
-part. Coordinates are holes, counted like the numbers around the
+the program stops. A keep-out is a hard limit for every part: no part ever covers one (see what's
+allowed, in "How a board is judged" below). Coordinates are holes, counted like the numbers around the
 text board. Pins are named like the `nets` command prints them.
 
 ## The pieces
@@ -239,14 +243,20 @@ text board. Pins are named like the `nets` command prints them.
 | `src/kicad_pcb.rs` | Writes the layout as a KiCad board. |
 | `src/diylc_import.rs` | Reads a DIYLC sketch: its parts, its modules (groups), and which pins connect. |
 | `src/diylc.rs` | Writes the layout as a DIYLC project (your own parts, moved, if it came from one). |
-| `src/place.rs` | The auto-placer: keeps nudging/rotating/swapping parts (and jumping a part with placement rules to another place they allow) and keeps changes the judge likes. |
-| `src/nn.rs` | The neural network, written out by hand (8 hidden neurons, 113 weights). |
+| `src/place.rs` | The auto-placer: starts from an allowed layout and keeps nudging/rotating/swapping/jumping parts, only ever to allowed layouts, keeping changes the judge likes. |
+| `src/nn.rs` | The neural network, written out by hand (8 hidden neurons, 105 weights). |
 | `src/bench.rs` | The benchmark: places every circuit of `circuits/bench.txt` with three seeds, several runs at once, and records the best costs. |
 | `src/main.rs` | The commands: `place`, `train`, `evolve`, `nets`, `check`, `draw` and `bench`; `place` and `check` place every case of the board file's rules and keep the best. `train` and `evolve` make ~1,200 example boards (going through the board file's cases in turn, up to 12), have the rules score them, and train the network to match. |
 
 ## How a board is judged
 
-`src/board.rs` measures twelve things (weights in `WEIGHTS`):
+First, whether it's **allowed**: whether it can be built at all. A layout isn't allowed if two parts
+take the same hole, a part hangs off the board (a module's board too), a part sits on a keep-out, or
+a part that isn't low sits under a module's board (`board::clashes`). That's a yes-or-no check, not
+a cost: the placer never makes a layout that isn't allowed, so the score below only ever compares
+layouts that can be built.
+
+Then how good it is. `src/board.rs` measures eleven things (weights in `WEIGHTS`):
 
 - **wire**: total length of copper trace, in holes, as routed (below).
 - **turns**: how hard the traces' bends are to make. Traces are laid with copper wire, and each
@@ -271,11 +281,13 @@ text board. Pins are named like the `nets` command prints them.
 - **bottom**: how many wires on the solder side, the last resort. Each costs as much as twenty jumpers,
   so the placer finds room for jumpers instead.
 - **unrouted**: connections the router couldn't make at all: a pin walled in by other copper so that
-  not even a wire fits (a wire's leg needs a hole of its own, never a pin's), or a pin off the board.
+  not even a wire fits (a wire's leg needs a hole of its own, never a pin's).
   Each costs a thousand holes of trace, far more than any wiring, so the placer keeps away from such
-  layouts; one that's left is drawn as a thin dotted line, with a `!!` line naming the pin.
+  layouts; one that's left is drawn as a thin dotted line, with a `!!` line naming the pin. It stays
+  a cost, not part of "allowed": it's only known once the board is routed, it's the greedy router's
+  limit rather than the board's (another order might route it, and a wire added by hand fixes it),
+  and at the placer's low temperatures a thousand already works like a "never".
 - **power**: for every supply pin, the distance to the nearest ground pin (keeps supply and ground close).
-- **overlap**: holes where two parts collide, a part hangs off the board, sits on a keep-out, or sits under a module without being low enough (very expensive).
 - **crowding**: pairs of neighbouring holes (across or down) taken by two different parts, where the
   soldering iron has no room. A pair of pins a solder blob would wrongly join (on different nets, or
   one on a net and one unused) counts twice. So parts get room around them and spread over the board. Beyond that, being far
@@ -319,9 +331,8 @@ two branches of the same star net.
 
 Runs are routed one at a time, shortest first. Each run grows like a tree: from what's joined so far,
 the cheapest way to the nearest pin not joined yet, trying holes in the direction of that pin first
-("A*" search). A pin that can't be reached, because it's walled in so that not even a wire fits or
-it's off the board, is left out of its run: `unrouted`, above. No wire ever ends on a pin.
-(A part hanging off the board is boxed in red too.)
+("A*" search). A pin that can't be reached, because it's walled in so that not even a wire fits,
+is left out of its run: `unrouted`, above. No wire ever ends on a pin.
 
 In the pictures, jumpers are solid blue and solder-side wires dashed red. In the `.diy`, both are
 DIYLC jumpers (DIYLC has no wire on the solder side), the solder-side ones red and named "(solder side)".
@@ -333,13 +344,13 @@ boards it never saw and save it to `out/model.json` (so the last one you ran is 
 
 - **`train` (gradient descent):** for each board, compare the network's guess with the rules'
   score and nudge every weight in the direction that makes it less wrong. One example points
-  all 113 weights the right way at once.
+  all 105 weights the right way at once.
 - **`evolve` (evolution):** make 19 copies of the network with every weight changed a little at
   random, keep whichever of the 20 is least wrong, repeat 1,000 times. It never works out a
   direction; it only needs to know which copy did better.
 
-Typical result on the 555: `train` is off by about 0.7 points on unseen boards (0.6 to 0.8) in 5s, `evolve` by
-about 1.9 points (1.3 to 2.3, depending on the seed) in 6s, after trying 19,000 networks. When you have a right answer for every example,
+Typical result on the 555: `train` is off by about 0.6 points on unseen boards (0.6 for seeds 1-3) in 5s, `evolve` by
+about 1.1 points (0.9 to 1.6, depending on the seed) in 6s, after trying 19,000 networks. When you have a right answer for every example,
 gradient descent wins. Evolution is the tool when all you can say is "this one did better than that one",
 such as a network that proposes whole layouts.
 
@@ -367,8 +378,8 @@ need. For each file it says one of:
   layout file read back came out different; it says which of the files did.
 - **STOPPED**: the program stopped after reading the file (in the placer, the router, the writer, or
   reading back what it wrote), with the message and where in the code.
-- **unfinished**: the connections differ, but when the placer stopped some pins still shared a hole,
-  hung off the board (which joins nets by itself) or couldn't be reached by the router. Try more `--steps`.
+- **unfinished**: the connections differ, but only because some pins couldn't be reached by the
+  router. Try more `--steps`.
 - **skipped**: no connections, or the reader refuses the file (a part it doesn't support), with why.
 
 It exits with an error if any file was WRONG or STOPPED. Try two or three seeds: a layout where
@@ -403,20 +414,14 @@ benchmark before and after it and compare the layouts, not the old numbers.
   only what a move changes, or placing the cases at the same time, would make it quicker; neither is
   built.
 - **Layouts depend on the seed.** On the cat feeder, different seeds land on quite different layouts
-  and costs, and a part whose rules send it far from where you drew it starts on top of others. Try
-  more `--steps` and two or three `--seed`s, and compare the costs.
+  and costs. Try more `--steps` and two or three `--seed`s, and compare the costs.
 - **The router is greedy.** It routes one run at a time, shortest first, and never undoes one. A
   different order can sometimes avoid a jumper it needed. A connection gets at most one wire; if that's
   not enough, the pin is left unrouted (very expensive, so the placer finds another layout).
-- **Big penalties make the placer's search stiff.** A collision costs more than a solder-side wire
-  and an unrouted pin far more, so the placer rarely lets a part pass through another to reach a
-  better place. A crowded board started at random can end with collisions or unrouted pins: the cat
-  feeder in `bench` (random starts) does, though placed from the sketch it doesn't, and short `check`
-  runs on sketches with modules drawn on top of each other end unfinished more often. Making
-  collisions an exact check instead of a cost ("Next steps" 1) is the way out.
-- **Collisions and keep-outs are only a cost.** They're the `overlap` measurement, heavily weighted, so
-  the placer avoids them, but with `--judge net` it's the network that decides how bad they are.
-  (A part with placement rules never sits on a keep-out or off the board.)
+- **A part can't pass through another.** The placer only ever holds allowed layouts, so a nudge
+  that would put a part on top of its neighbour is thrown away. To get past, it jumps: three moves
+  in ten put a part anywhere it fits on the board. On a crowded board, a place that's only reachable
+  by moving two parts at once is still hard to find.
 - **KiCad has no traces.** `rules.kicad_pcb` has the parts and their nets, not the routed copper.
   The copper is in the layout file (`runs`) and in the `Layout` that `src/kicad_pcb.rs` is given,
   so writing it into the KiCad board only needs that writer to draw it.
@@ -434,8 +439,8 @@ benchmark before and after it and compare the layouts, not the old numbers.
 - **The program is Rust only**, including the machine learning. Dev tools around it (checkers,
   converters, plots) may be in Python, but nothing the program needs to run.
 - **Hard rules, preferences, taste.** Facts about the hardware and limits of a board (fixed parts,
-  edges, keep-outs, collisions) should be hard rules the placer enforces, never learned; fixed parts
-  and the other placement rules already are, the rest is "Next steps" 1. What one board wants goes in its board file:
+  edges, keep-outs, collisions) are hard rules the placer enforces, never learned: the placement
+  rules and what's allowed ("How a board is judged"). What one board wants goes in its board file:
   `near` and `close` with a fixed cost per hole, `star` as how its nets are split into runs. The network is for
   taste among layouts that are already allowed.
 - **Model settings are the author's job.** Hidden neurons, learning rates, generations and the rule
@@ -446,18 +451,18 @@ benchmark before and after it and compare the layouts, not the old numbers.
 ## Where the neural network fits
 
 Right now the network learns to copy the rules. On boards it has never seen it is off by
-under a point, but as the placer's judge it fails: with today's big penalties (collisions,
-solder-side wires, unrouted pins) almost every example board scores about 0, so it learns little
-more than "bad", and `place --judge net` leaves parts on top of each other (on the 555, seeds 1-3:
-19 to 21 holes of collision, costs about 3,000 against the rules' 104 to 109). Training it on the
-cost instead of the 0-100 score would likely help. Even at its best it isn't useful on its own,
-since we already have the rules. It proves the plumbing works.
+under a point, and as the placer's judge it does about as well as the rules on the 555 (seeds 1-3:
+costs 113.5, 110.5 and 104.5, against the rules' 103, 122 and 112.5). It learns from allowed boards
+only, and the placer can't make any other kind, so it never has to learn that a collision is bad.
+Its 0-100 score is still flat for big circuits (below 10 for the cat feeder), so as a judge there it
+would likely do worse; training it on the cost instead would help. Even at its best it isn't useful
+on its own, since we already have the rules. It proves the plumbing works.
 
 It becomes useful when the "right answers" come from something the rules can't express:
 
 1. **Your taste.** Rate layouts yourself; the network learns what you like, including things
    that are hard to write down as a rule.
-2. **Richer input.** Feed it the board itself (which hole holds what) instead of twelve numbers,
+2. **Richer input.** Feed it the board itself (which hole holds what) instead of eleven numbers,
    so it can spot patterns no rule measures. That's when a library like Burn starts paying off.
 3. **Placing directly.** Train a network that proposes where the parts go, so the placer starts
    from a good layout instead of a random one. Tried and parked:
@@ -467,11 +472,9 @@ It becomes useful when the "right answers" come from something the rules can't e
 
 In order:
 
-1. **Split "allowed" from "good".** Collisions, hanging off the board and keep-outs become exact
-   checks outside the score, so the score (and the network) only compares layouts that are allowed.
-2. **A `rate` command**: show two layouts, you pick the better one, and the network learns your taste
+1. **A `rate` command**: show two layouts, you pick the better one, and the network learns your taste
    from those picks ("Your taste" above). Then more circuits to learn from.
-3. **Faster routing**, if waits grow past an espresso (see Known limits).
+2. **Faster routing**, if waits grow past an espresso (see Known limits).
 
 A network that places parts was built and parked (on the branch `better-placing`); see
 [docs/plans/placing-network.md](docs/plans/placing-network.md).

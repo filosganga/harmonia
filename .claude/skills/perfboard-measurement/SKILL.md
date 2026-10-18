@@ -35,7 +35,7 @@ means something else with the same count, an old model loads silently and judges
 - "Two ways to train": "all N weights" with N = inputs × 8 + 8 + 8 + 1, and the typical errors and times.
 - "The pieces", the `src/nn.rs` row: the same weight count.
 - "Where the neural network fits": how many numbers the network gets.
-- "The layout file": the score has "the twelve measurements by name".
+- "The layout file": the score has "the eleven measurements by name".
 - The timings at the top, if the change touched routing or measuring.
 - The benchmark's recorded numbers (`docs/plans/placing-network.md`) were costs under the old
   weights: rerun `bench` and say the old table no longer compares.

@@ -40,7 +40,7 @@ Places that restate the code and drift with it:
 - README "Each `place` run ... writes": every file in `out/` and what it contains
   (`src/main.rs` `place_cmd`, `src/layout.rs`, `src/svg.rs`, `src/diylc.rs`, `src/kicad_pcb.rs`);
   and README "The layout file": the fields of `out/<judge>.layout.json` (`src/layout.rs`), including
-  "the twelve measurements by name".
+  "the eleven measurements by name".
 - README "The board file" and the doc comment at the top of `src/constraints.rs`: every kind of
   `Rule`, and examples that would actually load (pins that exist and are on that net).
 - README "The pieces": one row per file in `src/` and `circuits/`.
@@ -83,13 +83,12 @@ touches, and every constant the diff changes, grep the whole repo for the old va
   rule weights or router costs is a finding. Flags are for the user's problem: circuit, board, power
   and ground, seed, steps.
 - **Hard rules are never learned.** Placement rules (fixed, edge, orientation, within, and all-of
-  and one-of of them) are enforced by the placer (`Constraints::allowed`,
-  kept by `constraints::apply`), and a
-  part with them also stays on the board and off keep-outs. Otherwise collisions, hanging off the
-  board and keep-outs are still a cost (the
-  `overlap` measurement in `WEIGHTS`, and a network input) until README "Next steps" 1
-  makes them exact checks. A change that weakens that cost (its weight, its `SCALE`), or turns another
-  hard rule into something the network has to learn, is a finding.
+  and one-of of them) are enforced by the placer (`Constraints::allowed`, kept by
+  `constraints::apply`), and so is what's allowed for every part (`board::clashes`: no collisions,
+  nothing off the board, on a keep-out, or under a module without being low): the placer starts
+  from an allowed layout (`place::allowed_start`) and never accepts a move that isn't. A change that
+  turns any of these back into a cost (a measurement, a weight, a network input), or lets the
+  placer or `train` judge a layout that isn't allowed, is a finding.
 - **Nothing outside the repo is written.** Copies of other projects' files live in `circuits/`.
 
 ### 4. Output that no longer round-trips

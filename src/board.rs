@@ -10,11 +10,12 @@ use std::fmt::Write;
 
 pub type Point = (i32, i32);
 
-/// The twelve things the rules measure. They are also the network's inputs.
-pub const FEATURES: [&str; 12] = ["wire", "turns", "diagonal", "crosswise", "jumpers", "jumper_len", "bottom", "unrouted", "power", "overlap", "crowding", "near"];
+/// The eleven things the rules measure. They are also the network's inputs. They only judge layouts
+/// that are allowed (see `clashes`): the placer never makes any other kind.
+pub const FEATURES: [&str; 11] = ["wire", "turns", "diagonal", "crosswise", "jumpers", "jumper_len", "bottom", "unrouted", "power", "crowding", "near"];
 
 /// How much each measurement costs, in the same order as FEATURES. Lower total cost = better board.
-pub const WEIGHTS: [f64; 12] = [
+pub const WEIGHTS: [f64; 11] = [
     1.0,  // wire: per hole of copper trace, as routed (see route.rs, whose costs match these)
     1.0,  // turns: per right angle's worth of bending a trace (45° is 2, 135° is 3; see route::bend)
     3.0,  // diagonal: per diagonal step of copper trace, on top of its length (jumpers and wires don't count)
@@ -22,9 +23,8 @@ pub const WEIGHTS: [f64; 12] = [
     5.0,  // jumpers: per jumper on the parts' side, where a trace couldn't get through (not priced by the router: it takes a jumper whenever one fits)
     2.0,  // jumper_len: per hole of jumper or solder-side wire: twice a trace, so they stay short
     100.0, // bottom: per wire on the solder side, the last resort (not priced by the router: it takes one only when no jumper fits)
-    1000.0, // unrouted: per connection the router couldn't make at all (a pin walled in, or off the board; nothing for the router to price)
+    1000.0, // unrouted: per connection the router couldn't make at all (a pin walled in; nothing for the router to price)
     1.5,  // power: per hole between each 5V pin and its nearest GND pin
-    150.0, // overlap: per hole where two parts collide or a part hangs off the board: like unrouted, it can't be built
     2.0,  // crowding: per pair of neighbouring holes taken by two parts (twice for pins of two nets)
     4.0,  // near: per hole between two pins the board file wants near (along copper) or close (straight)
 ];
@@ -145,6 +145,8 @@ pub struct Place {
 
 pub type Placement = Vec<Place>;
 
+/// Every part dropped at a random place (parts with placement rules on the nearest place they
+/// allow). Parts may land on each other: `place::random_start` moves them apart.
 pub fn random_placement(c: &Circuit, rng: &mut impl Rng) -> Placement {
     let (w, h) = (c.board.width, c.board.height);
     let mut placement: Placement = c
@@ -210,24 +212,10 @@ pub fn measure(c: &Circuit, placement: &[Place]) -> Measures {
 
 /// The same, for parts at `g` already routed as `routing` (so a layout is routed only once).
 pub fn measure_routed(c: &Circuit, g: &Geometry, routing: &crate::route::Routing) -> Measures {
-    let (w, h) = (c.board.width, c.board.height);
-
     let pins_of = |net: usize| -> Vec<Point> { c.net_pins[net].iter().map(|&(ci, pi)| g.pins[ci][pi]).collect() };
     let net_pins = |name: &Option<String>| name.as_ref().map(|n| pins_of(c.net_index(n))).unwrap_or_default();
     let (vcc, gnd) = (net_pins(&c.power), net_pins(&c.ground));
     let power: i32 = vcc.iter().map(|&v| gnd.iter().map(|&g| manhattan(v, g)).min().unwrap_or(0)).sum();
-
-    // Collisions and keep-outs only count the holes a part actually takes; hanging off the
-    // board counts its whole outline (a module's board can't hang off the perfboard either).
-    let mut seen = HashSet::new();
-    let mut overlap = 0;
-    for &cell in g.bodies.iter().flatten() {
-        if !seen.insert(cell) || c.constraints.keepout_holes.contains(&cell) {
-            overlap += 1;
-        }
-    }
-    overlap += g.outlines.iter().flatten().filter(|&&(x, y)| x < 0 || x >= w || y < 0 || y >= h).count() as i32;
-    overlap += under_modules(c, g).len() as i32;
 
     let crowding = crowding(c, g);
 
@@ -249,7 +237,7 @@ pub fn measure_routed(c: &Circuit, g: &Geometry, routing: &crate::route::Routing
         routing.jumper_length(),
         routing.bottom.len() as f64,
         routing.unrouted.len() as f64,
-        power as f64, overlap as f64, crowding as f64, near])
+        power as f64, crowding as f64, near])
 }
 
 /// How crowded the parts are, for soldering: pairs of neighbouring holes (across or down) taken by
@@ -257,7 +245,8 @@ pub fn measure_routed(c: &Circuit, g: &Geometry, routing: &crate::route::Routing
 /// (on different nets, or one on a net and one unused) counts twice. Parts may be as far apart as they like beyond that;
 /// wire length keeps them from drifting.
 fn crowding(c: &Circuit, g: &Geometry) -> i32 {
-    // Which part takes each hole (the first one, if two collide: that's `overlap`'s business).
+    // Which part takes each hole (the first one, if two collide: only a layout that isn't allowed has
+    // collisions, and the placer never makes one).
     let mut part_at: HashMap<Point, usize> = HashMap::new();
     for (i, body) in g.bodies.iter().enumerate() {
         for &hole in body {
@@ -287,22 +276,94 @@ fn crowding(c: &Circuit, g: &Geometry) -> i32 {
     crowding
 }
 
-/// Holes where something that doesn't fit sits under a module: (part, hole). Only low parts
-/// (see `Component::low`) fit under a module's board, and two modules can't overlap.
-pub fn under_modules(c: &Circuit, g: &Geometry) -> Vec<(usize, Point)> {
+/// What's wrong with one hole of a layout that isn't allowed.
+#[derive(Clone, Copy, PartialEq)]
+pub enum Why {
+    /// Another part (this index) already takes the hole.
+    OnPart(usize),
+    /// The hole is off the board.
+    OffBoard,
+    /// The hole is on a keep-out (this index in `Constraints::keepout`).
+    OnKeepout(usize),
+    /// The hole is under this module's board, and the part isn't low enough to go there.
+    UnderModule(usize),
+}
+
+/// One thing that makes a layout impossible to build: `part` at `hole`, and why.
+pub struct Clash {
+    pub part: usize,
+    pub hole: Point,
+    pub why: Why,
+}
+
+/// Everything that makes a layout impossible to build: two parts taking one hole, a part hanging off
+/// the board, a part on a keep-out, or a part under a module without being low enough (see
+/// `Component::low`; two modules can't overlap either). An empty list means the layout is allowed.
+/// Collisions and keep-outs count the holes a part takes; hanging off the board counts its whole
+/// outline (a module's board can't hang off the perfboard either). Only the parts `placed` says are
+/// counted, so a layout can be checked while it's being put together.
+pub fn clashes(c: &Circuit, g: &Geometry, placed: &[bool]) -> Vec<Clash> {
+    let (w, h) = (c.board.width, c.board.height);
+    let keepouts = &c.constraints.keepout;
     let mut out = Vec::new();
-    for (m, (outline, body)) in g.outlines.iter().zip(&g.bodies).enumerate() {
+    let mut taken: HashMap<Point, usize> = HashMap::new();
+    for (part, body) in g.bodies.iter().enumerate().filter(|&(i, _)| placed[i]) {
+        for &hole in body {
+            match taken.get(&hole) {
+                Some(&other) => out.push(Clash { part, hole, why: Why::OnPart(other) }),
+                None => _ = taken.insert(hole, part),
+            }
+            if c.constraints.keepout_holes.contains(&hole) {
+                let k = keepouts.iter().position(|k| k.holes().any(|p| p == hole)).expect("a keep-out hole is in some keep-out");
+                out.push(Clash { part, hole, why: Why::OnKeepout(k) });
+            }
+        }
+    }
+    for (part, outline) in g.outlines.iter().enumerate().filter(|&(i, _)| placed[i]) {
+        out.extend(outline.iter().filter(|&&(x, y)| x < 0 || x >= w || y < 0 || y >= h).map(|&hole| Clash { part, hole, why: Why::OffBoard }));
+    }
+    for (m, (outline, body)) in g.outlines.iter().zip(&g.bodies).enumerate().filter(|&(i, _)| placed[i]) {
         if body.len() == outline.len() {
             continue; // not a module
         }
         let under: HashSet<Point> = outline.iter().filter(|p| !body.contains(p)).copied().collect();
-        for (p, comp) in c.components.iter().enumerate() {
-            if p != m && !comp.low {
-                out.extend(g.outlines[p].iter().filter(|h| under.contains(h)).map(|&h| (p, h)));
+        for (part, comp) in c.components.iter().enumerate().filter(|&(i, _)| placed[i]) {
+            if part != m && !comp.low {
+                out.extend(g.outlines[part].iter().filter(|h| under.contains(h)).map(|&hole| Clash { part, hole, why: Why::UnderModule(m) }));
             }
         }
     }
     out
+}
+
+/// Is the layout allowed: can it be built? (No clashes, see `clashes`.)
+pub fn allowed(c: &Circuit, placement: &[Place]) -> bool {
+    clashes(c, &geometry(c, placement), &vec![true; placement.len()]).is_empty()
+}
+
+/// The clashes in plain words, one line per part and what's wrong with it, like "R1 and C2 share 2 holes".
+pub fn clash_words(c: &Circuit, clashes: &[Clash]) -> Vec<String> {
+    let mut seen: Vec<(usize, Why, usize)> = Vec::new();
+    for clash in clashes {
+        match seen.iter_mut().find(|(part, why, _)| (*part, *why) == (clash.part, clash.why)) {
+            Some((.., holes)) => *holes += 1,
+            None => seen.push((clash.part, clash.why, 1)),
+        }
+    }
+    let name = |i: usize| &c.components[i].reference;
+    let holes = |n: usize| if n == 1 { "1 hole".to_string() } else { format!("{n} holes") };
+    seen.iter()
+        .map(|&(part, why, n)| match why {
+            Why::OnPart(other) => format!("{} and {} share {}", name(other), name(part), holes(n)),
+            Why::OffBoard => format!("{} hangs off the board ({})", name(part), holes(n)),
+            Why::OnKeepout(k) => {
+                let k = &c.constraints.keepout[k];
+                let called = if k.name.is_empty() { String::new() } else { format!(" ({})", k.name) };
+                format!("{} is on the keep-out at {:?}-{:?}{called} ({})", name(part), k.from, k.to, holes(n))
+            }
+            Why::UnderModule(m) => format!("{} is under {}'s board but isn't low enough to fit there ({})", name(part), name(m), holes(n)),
+        })
+        .collect()
 }
 
 pub fn cost(m: &Measures) -> f64 {
@@ -314,7 +375,13 @@ pub fn score(m: &Measures) -> f64 {
     100.0 * (-cost(m) / SCORE_SCALE).exp()
 }
 
+/// One line about a layout: its score, cost and measurements, or, for one that isn't allowed (a
+/// sketch can be drawn that way), what's wrong with it instead: it isn't scored.
 pub fn report(c: &Circuit, placement: &[Place], title: &str) -> String {
+    let wrong = clashes(c, &geometry(c, placement), &vec![true; placement.len()]);
+    if !wrong.is_empty() {
+        return format!("{title}: not allowed, so not scored: {}", clash_words(c, &wrong).join("; "));
+    }
     let m = measure(c, placement);
     let parts: Vec<String> = FEATURES.iter().zip(m.0).map(|(k, v)| format!("{k}={v:.0}")).collect();
     format!("{title}: score {:.0}/100  (cost {:.1}: {})", score(&m), cost(&m), parts.join(", "))
@@ -343,12 +410,11 @@ pub fn ascii_board(c: &Circuit, placement: &[Place]) -> String {
     for (i, body) in g.bodies.iter().enumerate() {
         let letter = (b'a' + i as u8) as char;
         for &p in body.iter().filter(|&&p| on_board(p)) {
-            let cell = &mut grid[p.1 as usize][p.0 as usize];
-            *cell = if *cell == '.' || *cell == ':' { letter } else { '#' };
+            grid[p.1 as usize][p.0 as usize] = letter;
         }
     }
-    for (_, p) in under_modules(c, &g).into_iter().filter(|&(_, p)| on_board(p)) {
-        grid[p.1 as usize][p.0 as usize] = '#';
+    for clash in clashes(c, &g, &vec![true; placement.len()]).iter().filter(|clash| on_board(clash.hole)) {
+        grid[clash.hole.1 as usize][clash.hole.0 as usize] = '#';
     }
     for (i, pins) in g.pins.iter().enumerate() {
         let letter = (b'A' + i as u8) as char;

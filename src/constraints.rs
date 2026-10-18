@@ -40,8 +40,8 @@
 //! ever puts the part on one of them. Those places are all on the board and off the keep-outs too.
 //! A case where some part has no such place is left out.
 //!
-//! A keep-out counts like a collision (the "overlap" measurement): very expensive, but for now a
-//! cost, not a limit, except for a part with placement rules (above).
+//! A keep-out is a hard limit too: no part covers one, like no two parts share a hole (see
+//! `board::clashes`). The placer never makes a layout that breaks it.
 //!
 //! near is a preference: the two pins, on the same net, should be joined by as little copper as
 //! possible. It costs per hole of copper between them, as routed (through the star point, for two
@@ -463,20 +463,4 @@ pub fn apply(c: &Circuit, placement: &mut Placement) {
             *p = *allowed.iter().min_by_key(away).expect("resolve never leaves a part without a place");
         }
     }
-}
-
-/// Plain-language problems with a finished layout. Placement rules can't break, so only keep-outs are checked.
-pub fn problems(c: &Circuit, placement: &[Place]) -> Vec<String> {
-    let g = board::geometry(c, placement);
-    let mut out = Vec::new();
-    for (comp, body) in c.components.iter().zip(&g.bodies) {
-        for k in &c.constraints.keepout {
-            let holes: HashSet<Point> = k.holes().collect();
-            if body.iter().any(|p| holes.contains(p)) {
-                let name = if k.name.is_empty() { String::new() } else { format!(" ({})", k.name) };
-                out.push(format!("{} is on the keep-out at {:?}-{:?}{name}", comp.reference, k.from, k.to));
-            }
-        }
-    }
-    out
 }
