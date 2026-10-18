@@ -7,7 +7,9 @@
 //!     cargo run --release -- place my_sketch.diy  # read a rough DIYLC layout, score it, and fit it on the board
 //!     cargo run --release -- nets my_sketch.diy   # just show the parts and connections the program understood
 //!     cargo run --release -- check sketches/      # place, write and re-read every .diy: same connections?
+//!     cargo run --release -- bench                # the benchmark: place a fixed set of circuits, record the costs
 
+mod bench;
 mod board;
 mod constraints;
 mod diylc;
@@ -27,6 +29,8 @@ use rand::{Rng, SeedableRng, rngs::StdRng, seq::SliceRandom};
 use std::time::Instant;
 
 const MODEL: &str = "out/model.json";
+/// How hard the placer tries, unless `--steps` says otherwise. `bench` always uses it.
+const DEFAULT_STEPS: usize = 20_000;
 
 struct Args {
     command: String,
@@ -44,7 +48,7 @@ fn parse_args() -> Args {
         command: "place".into(),
         circuit: "circuits/555_blinker.net".into(),
         judge: "rules".into(),
-        steps: 20_000,
+        steps: DEFAULT_STEPS,
         seed: 1,
         board: None,
         power: None,
@@ -59,7 +63,7 @@ fn parse_args() -> Args {
             "--board" => args.board = Some(it.next().and_then(|s| parse_size(&s)).expect("--board <width>x<height>, like 18x12")),
             "--power" => args.power = Some(it.next().expect("--power <net name>")),
             "--ground" => args.ground = Some(it.next().expect("--ground <net name>")),
-            "place" | "train" | "evolve" | "nets" | "check" => args.command = a,
+            "place" | "train" | "evolve" | "nets" | "check" | "bench" => args.command = a,
             path => args.circuit = path.into(),
         }
     }
@@ -75,8 +79,10 @@ fn parse_size(s: &str) -> Option<BoardSize> {
 fn main() {
     let args = parse_args();
     std::fs::create_dir_all("out").unwrap();
-    if args.command == "check" {
-        return check_cmd(&args);
+    match args.command.as_str() {
+        "check" => return check_cmd(&args),
+        "bench" => return bench::run(),
+        _ => {}
     }
     let loaded = load(&args.circuit, &args);
     if let Some(path) = &loaded.board_file {
@@ -144,19 +150,21 @@ fn load(path: &str, args: &Args) -> Loaded {
 
 /// Places every case of the board file's rules, from the sketch if there is one, and keeps the
 /// layout the judge likes best. Returns which case it was, where it started, and the layout.
+/// With `report`, prints a line for each case when there are several.
 fn place_cases(
     cases: &[Circuit],
     judge: impl Fn(&Measures) -> f64,
     steps: usize,
     rng: &mut StdRng,
     sketch: Option<&board::Placement>,
+    report: bool,
 ) -> (usize, board::Placement, board::Placement) {
     let mut best: Option<(usize, board::Placement, board::Placement, f64)> = None;
     for (k, c) in cases.iter().enumerate() {
         let mut start = sketch.cloned().unwrap_or_else(|| board::random_placement(c, rng));
         constraints::apply(c, &mut start);
         let layout = place::anneal(c, &judge, steps, rng, Some(start.clone()), |_| {});
-        if cases.len() > 1 {
+        if report && cases.len() > 1 {
             println!("{}", board::report(c, &layout, &format!("Case {} of {} ({})", k + 1, cases.len(), case_name(c))));
         }
         let score = judge(&board::measure(c, &layout));
@@ -226,7 +234,7 @@ fn check_one(path: &str, args: &Args) -> Outcome {
     let round_trip = || {
         let sketch = loaded.sketch.as_ref().expect("a .diy file has a sketch");
         let mut rng = StdRng::seed_from_u64(args.seed);
-        let (k, _, best) = place_cases(&loaded.cases, board::score, args.steps, &mut rng, Some(sketch));
+        let (k, _, best) = place_cases(&loaded.cases, board::score, args.steps, &mut rng, Some(sketch), true);
         let c = &loaded.cases[k];
         let written = "out/check.diy";
         std::fs::write(written, diylc::write(c, &best, "check")).unwrap();
@@ -337,7 +345,7 @@ fn place_cmd(cases: &[Circuit], args: &Args, sketch: Option<board::Placement>) {
     };
 
     let start_label = if sketch.is_some() { "Your sketch" } else { "Random start" };
-    let (k, start, best) = place_cases(cases, judge, args.steps, &mut rng, sketch.as_ref());
+    let (k, start, best) = place_cases(cases, judge, args.steps, &mut rng, sketch.as_ref(), true);
     let c = &cases[k];
     if cases.len() > 1 {
         println!("\nBest: case {} of {}\n", k + 1, cases.len());
