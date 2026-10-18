@@ -5,7 +5,7 @@ Harmonia turns parts, fits them on a perfboard and wires them up.
 
 Rust, with four small crates (`rand`, `serde`, `serde_json`, and `roxmltree` to read DIYLC files).
 Every placer step routes the whole board, so commands take seconds: on the 555, `place` takes about
-2s, `train` 5s and `evolve` 6s; placing the bigger cat-feeder board about 12s (its board file makes two cases). A board file
+2.6s, `train` 7s and `evolve` 8s; placing the bigger cat-feeder board about 17s (its board file makes two cases). A board file
 whose `one-of`s make cases (below) is placed once per case, so it takes that many times longer. Anything up to
 the time to make and drink an espresso is fine.
 
@@ -260,13 +260,14 @@ Then how good it is. `src/board.rs` measures eleven things (weights in `WEIGHTS`
 
 - **wire**: total length of copper trace, in holes, as routed (below).
 - **turns**: how hard the traces' bends are to make. Traces are laid with copper wire, and each
-  bend is one more to make by hand, so a straight trace beats a zig-zag. A right angle, the easiest,
+  bend is one more to make by hand, while a longer straight run is hardly more work: so a right
+  angle costs as much as five holes of trace. A right angle, the easiest,
   counts 1; a gentle 45° turn, onto or off a diagonal, counts 2, since it's harder to land on the
   right hole; a sharp 135° turn counts 3. A pin or a wire's leg is free, since a trace starts
   there, and so is a junction where three or more steps meet, which is soldered like a pin.
   Jumpers never bend: each is one straight wire.
-- **diagonal**: steps of copper trace laid at 45°, each costing three holes of trace on top of its
-  length. Straight traces are easier to lay along the holes and line up side by side; a board full of
+- **diagonal**: steps of copper trace laid at 45°, each costing three corners (fifteen holes of
+  trace) on top of its length. Straight traces are easier to lay along the holes and line up side by side; a board full of
   diagonals (V shapes and staircases) is hard to build and couldn't be a stripboard. So the router
   takes a diagonal only where nothing straight gets through. Jumpers and solder-side wires are wires,
   free to go at 45°: they don't count.
@@ -275,21 +276,24 @@ Then how good it is. `src/board.rs` measures eleven things (weights in `WEIGHTS`
   a stripboard the strips run one way and copper the other way needs a wire; on perfboard too,
   parallel traces in one direction are the easiest to lay. So the placer prefers layouts where most
   copper runs one way. Some always runs the other way, since not every pin of a net can be on one line.
-- **jumpers**: how many jumpers (on the parts' side) the router needed where a trace couldn't get through.
-- **jumper_len**: total length of jumpers and solder-side wires. A hole of it costs twice a hole of
-  trace, so they stay short.
-- **bottom**: how many wires on the solder side, the last resort. Each costs as much as twenty jumpers,
-  so the placer finds room for jumpers instead.
+- **jumpers**: how many jumpers (on the parts' side) the router needed where a trace couldn't get
+  through. Each costs three corners: cut, bend both legs, solder both ends.
+- **jumper_len**: total length of jumpers and solder-side wires. A hole of it costs half a hole of
+  trace. A jumper 10 holes long is no more work than one 3 holes long, but it lies over holes that
+  later jumpers can't cross; with length almost free, jumpers got three times longer and the last
+  runs needed solder-side wires.
+- **bottom**: how many wires on the solder side, the last resort. Each costs a hundred corners
+  (more than thirty jumpers), so the placer finds room for jumpers instead.
 - **unrouted**: connections the router couldn't make at all: a pin walled in by other copper so that
   not even a wire fits (a wire's leg needs a hole of its own, never a pin's).
-  Each costs a thousand holes of trace, far more than any wiring, so the placer keeps away from such
+  Each costs five thousand holes of trace (as much as ten solder-side wires), far more than any wiring, so the placer keeps away from such
   layouts; one that's left is drawn as a thin dotted line, with a `!!` line naming the pin. It stays
   a cost, not part of "allowed": it's only known once the board is routed, it's the greedy router's
   limit rather than the board's (another order might route it, and a wire added by hand fixes it),
-  and at the placer's low temperatures a thousand already works like a "never".
+  and at the placer's low temperatures that already works like a "never".
 - **power**: for every supply pin, the distance to the nearest ground pin (keeps supply and ground close).
 - **crowding**: pairs of neighbouring holes (across or down) taken by two different parts, where the
-  soldering iron has no room. A pair of pins a solder blob would wrongly join (on different nets, or
+  soldering iron has no room, four holes of trace each. A pair of pins a solder blob would wrongly join (on different nets, or
   one on a net and one unused) counts twice. So parts get room around them and spread over the board. Beyond that, being far
   apart earns nothing, and wire length keeps them from drifting. If you want a smaller layout, give
   it a smaller board.
@@ -298,7 +302,7 @@ Then how good it is. `src/board.rs` measures eleven things (weights in `WEIGHTS`
 
 The weighted sum is the *cost*; the score is `100 * exp(-cost / 150)`, so 100 is perfect.
 The placer itself compares costs, not scores: for a big circuit the score is low and flat (a cost
-of 400 scores about 6), so comparing scores would make it accept almost any bad move. Scores are
+of 700, a good cat feeder, scores under 1), so comparing scores would make it accept almost any bad move. Scores are
 for reading; for a big circuit they're low even when the layout is good.
 
 ### How it routes
@@ -311,11 +315,14 @@ two branches of the same star net.
 - A **copper trace** is on the solder side. It goes hole to neighbouring hole: across, down, or at 45°.
   It touches every hole it passes, so it can't pass a hole with another run's pin or trace, or a
   keep-out, and two diagonals can't cross between four holes. It can run under parts, since it's on
-  the other side. A right angle costs as much as a hole of trace, a 45° turn two and a 135° turn three
-  (the `turns` weight), so the router takes a straight way over a slightly shorter zig-zag. A diagonal
-  step pays three holes on top of its length (the `diagonal` weight), so the router goes across and
-  down instead unless nothing straight gets through. Making turns dearer than that was tried: the
-  router then detours, boxes later runs in, and needs more jumpers. The `crosswise` measurement isn't
+  the other side. A right angle costs as much as five holes of trace, a 45° turn twice that and a
+  135° turn three times (the `turns` weight), so the router takes a straight way over a zig-zag
+  even when the zig-zag is a few holes shorter. A diagonal step pays three corners on top of its
+  length (the `diagonal` weight), so the router goes across and down instead unless nothing
+  straight gets through. Dearer corners alone (when a jumper still cost 5 plus 2 a hole) made the
+  router detour, box later runs in and need more jumpers; priced together with jumpers, as three
+  corners each and cheap per hole, they give far fewer corners and about as many jumpers (the
+  numbers are in the comment on `WEIGHTS`). The `crosswise` measurement isn't
   priced by the router, since the main direction is only known once the board is routed; a trace
   from one pin to another takes the same steps across and down whichever way it turns.
 - A **jumper** is a wire on the parts' side, used where traces can't get through: traces run up to a
@@ -349,8 +356,8 @@ boards it never saw and save it to `out/model.json` (so the last one you ran is 
   random, keep whichever of the 20 is least wrong, repeat 1,000 times. It never works out a
   direction; it only needs to know which copy did better.
 
-Typical result on the 555: `train` is off by about 0.6 points on unseen boards (0.6 for seeds 1-3) in 5s, `evolve` by
-about 1.1 points (0.9 to 1.6, depending on the seed) in 6s, after trying 19,000 networks. When you have a right answer for every example,
+Typical result on the 555: `train` is off by about 0.7 points on unseen boards (0.6 to 0.9) in 7s, `evolve` by
+about 1.1 points (0.9 to 1.3, depending on the seed) in 8s, after trying 19,000 networks. When you have a right answer for every example,
 gradient descent wins. Evolution is the tool when all you can say is "this one did better than that one",
 such as a network that proposes whole layouts.
 
@@ -402,7 +409,7 @@ It places each circuit listed in `circuits/bench.txt` (the 555, the cat feeder a
 circuits in `circuits/bench/`) from a random start, with three seeds and `place`'s default steps,
 the way `place` does, and prints each seed's best cost, the best and mean of the three, and the time
 per run. It takes no options, so every run measures the same thing. The runs go several at a time,
-one per processor core (about 21s on an 18-core Mac); each has its own random numbers from its seed,
+one per processor core (about 26s on an 18-core Mac); each has its own random numbers from its seed,
 so the costs are the same as running them one by one. Costs only compare within a circuit, and only
 under the same weights: a change to a measurement or a weight changes what a cost means, so run the
 benchmark before and after it and compare the layouts, not the old numbers.
@@ -431,8 +438,8 @@ benchmark before and after it and compare the layouts, not the old numbers.
   in a board file.
 - **Angled parts from DIYLC.** A two-legged part drawn at an angle only takes its two leg holes, so the
   placer treats it like a module: low parts may go under it, and jumpers may pass over it.
-- **Scores of big circuits are low.** The weights were set on the 555; the cat-feeder board scores
-  in single digits even when it's good. Compare costs between layouts of the same circuit, not across circuits.
+- **Scores of big circuits are low.** The score's scale (`SCORE_SCALE`) was set on the 555, under
+  cheaper corners; the cat-feeder board scores under 1 even when it's good. Compare costs between layouts of the same circuit, not across circuits.
 
 ## Principles
 
@@ -451,10 +458,10 @@ benchmark before and after it and compare the layouts, not the old numbers.
 ## Where the neural network fits
 
 Right now the network learns to copy the rules. On boards it has never seen it is off by
-under a point, and as the placer's judge it does about as well as the rules on the 555 (seeds 1-3:
-costs 113.5, 110.5 and 104.5, against the rules' 103, 122 and 112.5). It learns from allowed boards
+under a point, and as the placer's judge it does a little worse than the rules on the 555 (seeds 1-3,
+in the rules' cost: 148.5, 132 and 129.9, against the rules' own 128, 127.5 and 133). It learns from allowed boards
 only, and the placer can't make any other kind, so it never has to learn that a collision is bad.
-Its 0-100 score is still flat for big circuits (below 10 for the cat feeder), so as a judge there it
+Its 0-100 score is still flat for big circuits (under 1 for the cat feeder), so as a judge there it
 would likely do worse; training it on the cost instead would help. Even at its best it isn't useful
 on its own, since we already have the rules. It proves the plumbing works.
 

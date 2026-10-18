@@ -15,17 +15,29 @@ pub type Point = (i32, i32);
 pub const FEATURES: [&str; 11] = ["wire", "turns", "diagonal", "crosswise", "jumpers", "jumper_len", "bottom", "unrouted", "power", "crowding", "near"];
 
 /// How much each measurement costs, in the same order as FEATURES. Lower total cost = better board.
+///
+/// Built by hand, a perfboard's work is in its corners and jumpers, not its lengths: a straight run
+/// of copper or a jumper is about as much work 3 holes long as 10. So a corner costs five holes of
+/// trace, and a jumper three corners (the maintainer's exchange rate). Against the weights before
+/// (a corner 1, a jumper 5 plus 2 per hole, a solder-side wire 100, a diagonal 3, crowding 2), on
+/// the benchmark circuits placed with seeds 1-3 / 4-6: corners + 3 x jumpers 619 / 585 -> 455 / 443
+/// (corners 400 / 402 -> 242 / 230, jumpers 73 / 61 -> 71 / 71), solder-side wires 1 / 1 -> 1 / 3,
+/// diagonal steps 12 / 12 -> 3 / 3, crowding 123 / 123 -> 82 / 76; copper between `near` pins
+/// 42 / 41 -> 63 / 35 and 5V-to-ground 431 / 437 -> 481 / 471. Making near and power five times
+/// dearer too packed the parts again (crowding 132 / 104) and the cat feeder came out much messier.
+/// From random starts (`bench`): corners + 3 x jumpers 651 -> 485, solder-side wires 5 -> 5,
+/// crowding 115 -> 83.
 pub const WEIGHTS: [f64; 11] = [
     1.0,  // wire: per hole of copper trace, as routed (see route.rs, whose costs match these)
-    1.0,  // turns: per right angle's worth of bending a trace (45° is 2, 135° is 3; see route::bend)
-    3.0,  // diagonal: per diagonal step of copper trace, on top of its length (jumpers and wires don't count)
+    5.0,  // turns: per right angle's worth of bending a trace (45° is 2, 135° is 3; see route::bend): a corner is the work, not the length
+    15.0, // diagonal: per diagonal step of copper trace, on top of its length, three corners' worth (jumpers and wires don't count)
     0.5,  // crosswise: per straight step of trace running against the board's main direction (see route.rs)
-    5.0,  // jumpers: per jumper on the parts' side, where a trace couldn't get through (not priced by the router: it takes a jumper whenever one fits)
-    2.0,  // jumper_len: per hole of jumper or solder-side wire: twice a trace, so they stay short
-    100.0, // bottom: per wire on the solder side, the last resort (not priced by the router: it takes one only when no jumper fits)
-    1000.0, // unrouted: per connection the router couldn't make at all (a pin walled in; nothing for the router to price)
+    15.0, // jumpers: per jumper on the parts' side, three corners' worth (not priced by the router: it takes a jumper whenever one fits)
+    0.5,  // jumper_len: per hole of jumper or solder-side wire. Not the work (a long jumper is no harder), but a long jumper takes room later jumpers can't cross: almost free (0.1) brought solder-side wires back
+    500.0, // bottom: per wire on the solder side, the last resort, a hundred corners (not priced by the router: it takes one only when no jumper fits)
+    5000.0, // unrouted: per connection the router couldn't make at all (a pin walled in; nothing for the router to price): a thousand corners, ten solder-side wires
     1.5,  // power: per hole between each 5V pin and its nearest GND pin
-    2.0,  // crowding: per pair of neighbouring holes taken by two parts (twice for pins of two nets)
+    4.0,  // crowding: per pair of neighbouring holes taken by two parts (twice for pins of two nets): room to solder; at 2 the parts packed with the board half empty
     4.0,  // near: per hole between two pins the board file wants near (along copper) or close (straight)
 ];
 

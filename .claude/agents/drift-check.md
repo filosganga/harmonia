@@ -66,8 +66,8 @@ touches, and every constant the diff changes, grep the whole repo for the old va
 - `STRAIGHT`, `DIAGONAL`, `DIAGONAL_EXTRA`, `TURN`, `JUMPER_PER_HOLE`, `MAX_JUMP` in `src/route.rs` against
   README "How it routes" ("2 to 10 holes long") and against `WEIGHTS`: the router's costs are the
   matching weights times ten (wire, turns, diagonal, jumper_len), so the router and the score agree on
-  what's cheaper. `DIAGONAL_EXTRA` reads `WEIGHTS[2]` by position: a measurement inserted before
-  `diagonal` breaks it silently. The jumpers, bottom, crosswise and unrouted weights have no router
+  what's cheaper. `TURN`, `DIAGONAL_EXTRA` and `JUMPER_PER_HOLE` read `WEIGHTS[1]`, `[2]` and `[5]`
+  by position: a measurement inserted before `jumper_len` breaks them silently. The jumpers, bottom, crosswise and unrouted weights have no router
   constant on purpose (see their comments).
 - `SCORE_SCALE` against the score formula in README.
 - Timings and errors (README intro, "Two ways to train", "Known limits", CLAUDE.md). You can't run

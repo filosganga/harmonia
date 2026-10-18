@@ -16,9 +16,9 @@ A measurement is in five places that the compiler only partly ties together.
    FEATURES**. The compiler checks the length, not the order.
 3. `src/route.rs`: the router's costs are the matching weights × 10 (`STRAIGHT`/`DIAGONAL` for wire,
    `TURN` for turns, `DIAGONAL_EXTRA` for diagonal, `JUMPER_PER_HOLE` for jumper length; `crosswise`
-   isn't priced, see `Routing::crosswise_steps`). `DIAGONAL_EXTRA` reads `WEIGHTS[2]` by position:
-   inserting a measurement before `diagonal` means changing that index too. Change both together, or the router picks routes the score
-   doesn't prefer.
+   isn't priced, see `Routing::crosswise_steps`). `TURN`, `DIAGONAL_EXTRA` and `JUMPER_PER_HOLE`
+   read `WEIGHTS[1]`, `WEIGHTS[2]` and `WEIGHTS[5]` by position: inserting a measurement before
+   `jumper_len` means changing those indexes too, or the router silently prices the wrong thing.
 4. The text report, the SVG legend and the layout file (`src/layout.rs`, measurements by name) print every
    measurement themselves; nothing to change there. A layout file saved before a measurement was added,
    removed or renamed is refused by `draw` (its names no longer match `FEATURES`): place it again.

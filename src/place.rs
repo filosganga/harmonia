@@ -16,8 +16,8 @@ use rand::Rng;
 /// A nudge can't get a part past its neighbours (every place in between collides, so it isn't
 /// allowed); a jump can. For a part with placement rules it's also the only way across to another
 /// option of a one-of that's far away (the other edge) or a half turn off. Set on the benchmark
-/// circuits placed with `place` (total cost, seeds 1-3, and seeds 4-6 to check it on seeds it
-/// wasn't picked on): 0.1 gave 7,137 and 9,250, 0.3 gave 6,419 and 6,978, 0.5 gave 6,734 and 7,155.
+/// circuits placed with `place` (total cost under the weights before corners got dearer, seeds 1-3,
+/// and seeds 4-6 to check it on seeds it wasn't picked on): 0.1 gave 7,137 and 9,250, 0.3 gave 6,419 and 6,978, 0.5 gave 6,734 and 7,155.
 /// With jumps only for parts with placement rules (as before collisions were a check) it was 7,912
 /// on seeds 1-3, about what the placer did before (7,930).
 const JUMP: f64 = 0.3;
@@ -43,7 +43,7 @@ pub fn anneal(
     let movable: Vec<usize> = (0..c.components.len()).filter(|&i| c.constraints.allowed[i].as_ref().is_none_or(|a| a.len() > 1)).collect();
     let mut cur = start;
     // Compare boards by cost, not by the 0-100 score: the score flattens out for big circuits (at
-    // cost 400 a much worse move barely changes it), which would make the placer accept anything.
+    // cost 700 a much worse move barely changes it), which would make the placer accept anything.
     let cost_of = |p: &Placement| cost(&measure(c, p));
     let mut cur_s = cost_of(&cur);
     let (mut best, mut best_s) = (cur.clone(), cur_s);
