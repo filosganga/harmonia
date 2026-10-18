@@ -118,7 +118,7 @@ fn load(path: &str) -> Vec<Circuit> {
 /// A DIYLC sketch starts from random too, not from where it was drawn.
 fn best_cost(cases: &[Circuit], seed: u64) -> f64 {
     let mut rng = StdRng::seed_from_u64(seed);
-    let (k, _, layout) = crate::place_cases(cases, board::score, STEPS, &mut rng, None, false);
+    let (k, _, layout) = crate::place_cases(cases, board::cost, STEPS, &mut rng, None, false);
     board::cost(&board::measure(&cases[k], &layout))
 }
 

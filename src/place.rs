@@ -3,15 +3,16 @@
 //! It keeps nudging, rotating and swapping parts, keeping changes the judge
 //! likes and, early on, sometimes accepting worse ones so it doesn't get stuck.
 
-use crate::board::{Circuit, Measures, Placement, SCORE_SCALE, measure, random_placement};
+use crate::board::{Circuit, Measures, Placement, measure, random_placement};
 use crate::constraints;
 use rand::Rng;
 
-/// `judge` scores a board 0-100. `on_step` sees every accepted-or-not current board
-/// (used by training to collect examples). Returns the best placement found.
+/// `cost` is what a board costs, lower is better: the rules' cost, or what the network's score stands
+/// for. `on_step` sees every accepted-or-not current board (used by training to collect examples).
+/// Returns the best placement found.
 pub fn anneal(
     c: &Circuit,
-    judge: impl Fn(&Measures) -> f64,
+    cost: impl Fn(&Measures) -> f64,
     steps: usize,
     rng: &mut impl Rng,
     start: Option<Placement>,
@@ -21,9 +22,11 @@ pub fn anneal(
     // Parts the placer may touch: everything except the ones the board file allows only one place.
     let movable: Vec<usize> = (0..c.components.len()).filter(|&i| c.constraints.allowed[i].as_ref().is_none_or(|a| a.len() > 1)).collect();
     let mut cur = start.unwrap_or_else(|| random_placement(c, rng));
-    // Compare boards by cost, not by the 0-100 score: the score flattens out for big circuits
-    // (at cost 400 a much worse move barely changes it), which would make the placer accept anything.
-    let cost_of = |p: &Placement| -SCORE_SCALE * (judge(&measure(c, p)).max(1e-9) / 100.0).ln();
+    // Compare boards by cost, not by the 0-100 score: the score flattens out for big circuits (at
+    // cost 400 a much worse move barely changes it), which would make the placer accept anything.
+    // (It used to turn the score back into a cost, kept above 1e-9, so every board costing over
+    // 3,800 looked the same: a crowded board's random start, or a few unrouted pins, are more.)
+    let cost_of = |p: &Placement| cost(&measure(c, p));
     let mut cur_s = cost_of(&cur);
     let (mut best, mut best_s) = (cur.clone(), cur_s);
     if movable.is_empty() {

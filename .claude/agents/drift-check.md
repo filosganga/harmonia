@@ -40,7 +40,7 @@ Places that restate the code and drift with it:
 - README "Each `place` run ... writes": every file in `out/` and what it contains
   (`src/main.rs` `place_cmd`, `src/layout.rs`, `src/svg.rs`, `src/diylc.rs`, `src/kicad_pcb.rs`);
   and README "The layout file": the fields of `out/<judge>.layout.json` (`src/layout.rs`), including
-  "the nine measurements by name".
+  "the twelve measurements by name".
 - README "The board file" and the doc comment at the top of `src/constraints.rs`: every kind of
   `Rule`, and examples that would actually load (pins that exist and are on that net).
 - README "The pieces": one row per file in `src/` and `circuits/`.
@@ -63,10 +63,12 @@ touches, and every constant the diff changes, grep the whole repo for the old va
   It went stale twice, each time a measurement was added.
 - `SCALE` in `src/nn.rs` must list one scale per measurement **in the same order as `FEATURES`**.
   The compiler checks the length, not the order.
-- `STRAIGHT`, `DIAGONAL`, `TURN`, `JUMPER_PER_HOLE`, `MAX_JUMP` in `src/route.rs` against README "How it
-  routes" ("2 to 10 holes long") and against `WEIGHTS`: the router's costs are the matching weights
-  times ten (wire, turns, jumper_len), so the router and the score agree on what's cheaper. The jumpers and
-  bottom weights have no router constant on purpose: the router takes a jumper whenever one fits.
+- `STRAIGHT`, `DIAGONAL`, `DIAGONAL_EXTRA`, `TURN`, `JUMPER_PER_HOLE`, `MAX_JUMP` in `src/route.rs` against
+  README "How it routes" ("2 to 10 holes long") and against `WEIGHTS`: the router's costs are the
+  matching weights times ten (wire, turns, diagonal, jumper_len), so the router and the score agree on
+  what's cheaper. `DIAGONAL_EXTRA` reads `WEIGHTS[2]` by position: a measurement inserted before
+  `diagonal` breaks it silently. The jumpers, bottom, crosswise and unrouted weights have no router
+  constant on purpose (see their comments).
 - `SCORE_SCALE` against the score formula in README.
 - Timings and errors (README intro, "Two ways to train", "Known limits", CLAUDE.md). You can't run
   anything, so when a change touches the placer, router, `measure` or training, flag every timing and

@@ -62,9 +62,9 @@ Before any network, decide how "better" is measured, and record today's numbers.
   seeds 1, 2, 3, 20,000 steps, random start) several at a time, one per core: about 21s on the
   maintainer's 18-core Mac, so no subset or smaller step count is needed. The costs come out the
   same as one run at a time (checked by running it twice and comparing); seed 1 on the 555 gives
-  `place`'s 84.6. Results go to `out/bench.json`.
+  `place`'s 84.6 (under the weights then). Results go to `out/bench.json`.
 
-Today's numbers, the plain placer (best cost per seed; lower is better; times are per run with up to
+Today's numbers (under the weights of 2026-10-17, before the `diagonal`, `crosswise` and `unrouted` measurements: they don't compare with costs measured since), the plain placer (best cost per seed; lower is better; times are per run with up to
 18 runs sharing the machine):
 
 | circuit | parts | nets | seed 1 | seed 2 | seed 3 | best | mean | s/run |

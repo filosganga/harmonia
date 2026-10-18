@@ -5,7 +5,7 @@ Harmonia turns parts, fits them on a perfboard and wires them up.
 
 Rust, with four small crates (`rand`, `serde`, `serde_json`, and `roxmltree` to read DIYLC files).
 Every placer step routes the whole board, so commands take seconds: on the 555, `place` takes about
-2.4s, `train` 6s and `evolve` 7s; placing the bigger cat-feeder board about 16s (its board file makes two cases). A board file
+1.9s, `train` 5s and `evolve` 6s; placing the bigger cat-feeder board about 11s (its board file makes two cases). A board file
 whose `one-of`s make cases (below) is placed once per case, so it takes that many times longer. Anything up to
 the time to make and drink an espresso is fine.
 
@@ -48,6 +48,7 @@ for each case and which was best) and writes, in `out/` (named `rules` or `net` 
   real ones without moving anything.
 - `rules.diy`: the layout for DIY Layout Creator, on a perfboard, with the routed copper traces (solder
   side) and jumpers, coloured by net (power red, ground near-black); solder-side wires as red jumpers.
+  A connection the router couldn't make (a `!!` line says which) is missing from it.
 
 ### The layout file
 
@@ -71,8 +72,9 @@ file of another version is refused, with a message):
 - **nets**: each net's name and pins.
 - **runs**: what the router joins with one piece of copper (a net, or a branch of a star net, with
   its `star` point), in the order it laid them, with that copper: `traces` as straight pieces,
-  `[from hole, to hole]`, then `jumpers` and `solder_wires` the same way.
-- **score**: the score, the cost and the nine measurements by name (below), and the `!!` **problems**.
+  `[from hole, to hole]`, then `jumpers` and `solder_wires` the same way, and `unrouted` (only when
+  there are any): connections the router couldn't make.
+- **score**: the score, the cost and the twelve measurements by name (below), and the `!!` **problems**.
 
 Not in it: the net colours (worked out from the nets), the start (only `rules.html` shows it), and
 the board file's rules about where parts may go, `near` and `close`.
@@ -231,20 +233,20 @@ text board. Pins are named like the `nets` command prints them.
 | `src/sexpr.rs` | Reads KiCad's bracket format, `(comp (ref "R1") ...)`, into a tree. |
 | `src/netlist.rs` | Turns a KiCad netlist plus `footprints.json` into the circuit the placer works on. |
 | `src/board.rs` | Places parts, works out where every pin lands, measures the board and gives it a score. |
-| `src/route.rs` | The router: joins every net with copper traces, and hops over with a jumper (or, last, a solder-side wire) where a trace can't get through. |
+| `src/route.rs` | The router: joins every net with copper traces, and hops over with a jumper (or, last, a solder-side wire) where a trace can't get through; a pin walled in so that not even a wire fits is left unrouted. |
 | `src/layout.rs` | The finished board, routed and measured once (`Layout`), which the three writers below draw; and the layout file: writing it, and reading it back for `draw`. |
 | `src/svg.rs` | Draws the layout as an SVG picture, from the parts' side or the solder side. |
 | `src/kicad_pcb.rs` | Writes the layout as a KiCad board. |
 | `src/diylc_import.rs` | Reads a DIYLC sketch: its parts, its modules (groups), and which pins connect. |
 | `src/diylc.rs` | Writes the layout as a DIYLC project (your own parts, moved, if it came from one). |
 | `src/place.rs` | The auto-placer: keeps nudging/rotating/swapping parts (and jumping a part with placement rules to another place they allow) and keeps changes the judge likes. |
-| `src/nn.rs` | The neural network, written out by hand (8 hidden neurons, 89 weights). |
+| `src/nn.rs` | The neural network, written out by hand (8 hidden neurons, 113 weights). |
 | `src/bench.rs` | The benchmark: places every circuit of `circuits/bench.txt` with three seeds, several runs at once, and records the best costs. |
 | `src/main.rs` | The commands: `place`, `train`, `evolve`, `nets`, `check`, `draw` and `bench`; `place` and `check` place every case of the board file's rules and keep the best. `train` and `evolve` make ~1,200 example boards (going through the board file's cases in turn, up to 12), have the rules score them, and train the network to match. |
 
 ## How a board is judged
 
-`src/board.rs` measures nine things (weights in `WEIGHTS`):
+`src/board.rs` measures twelve things (weights in `WEIGHTS`):
 
 - **wire**: total length of copper trace, in holes, as routed (below).
 - **turns**: how hard the traces' bends are to make. Traces are laid with copper wire, and each
@@ -253,10 +255,25 @@ text board. Pins are named like the `nets` command prints them.
   right hole; a sharp 135° turn counts 3. A pin or a wire's leg is free, since a trace starts
   there, and so is a junction where three or more steps meet, which is soldered like a pin.
   Jumpers never bend: each is one straight wire.
+- **diagonal**: steps of copper trace laid at 45°, each costing three holes of trace on top of its
+  length. Straight traces are easier to lay along the holes and line up side by side; a board full of
+  diagonals (V shapes and staircases) is hard to build and couldn't be a stripboard. So the router
+  takes a diagonal only where nothing straight gets through. Jumpers and solder-side wires are wires,
+  free to go at 45°: they don't count.
+- **crosswise**: straight steps of copper trace in the board's minority direction, half a hole each:
+  whichever of across and down this layout's traces take less (the other is the main direction). On
+  a stripboard the strips run one way and copper the other way needs a wire; on perfboard too,
+  parallel traces in one direction are the easiest to lay. So the placer prefers layouts where most
+  copper runs one way. Some always runs the other way, since not every pin of a net can be on one line.
 - **jumpers**: how many jumpers (on the parts' side) the router needed where a trace couldn't get through.
 - **jumper_len**: total length of jumpers and solder-side wires. A hole of it costs twice a hole of
   trace, so they stay short.
-- **bottom**: how many wires on the solder side, the last resort. Each costs as much as six jumpers.
+- **bottom**: how many wires on the solder side, the last resort. Each costs as much as twenty jumpers,
+  so the placer finds room for jumpers instead.
+- **unrouted**: connections the router couldn't make at all: a pin walled in by other copper so that
+  not even a wire fits (a wire's leg needs a hole of its own, never a pin's), or a pin off the board.
+  Each costs a thousand holes of trace, far more than any wiring, so the placer keeps away from such
+  layouts; one that's left is drawn as a thin dotted line, with a `!!` line naming the pin.
 - **power**: for every supply pin, the distance to the nearest ground pin (keeps supply and ground close).
 - **overlap**: holes where two parts collide, a part hangs off the board, sits on a keep-out, or sits under a module without being low enough (very expensive).
 - **crowding**: pairs of neighbouring holes (across or down) taken by two different parts, where the
@@ -283,9 +300,12 @@ two branches of the same star net.
   It touches every hole it passes, so it can't pass a hole with another run's pin or trace, or a
   keep-out, and two diagonals can't cross between four holes. It can run under parts, since it's on
   the other side. A right angle costs as much as a hole of trace, a 45° turn two and a 135° turn three
-  (the `turns` weight), so the router takes a straight way over a slightly shorter zig-zag, and a
-  right angle over two 45° turns unless the diagonal saves a lot. Making turns dearer than that
-  was tried: the router then detours, boxes later runs in, and needs more jumpers.
+  (the `turns` weight), so the router takes a straight way over a slightly shorter zig-zag. A diagonal
+  step pays three holes on top of its length (the `diagonal` weight), so the router goes across and
+  down instead unless nothing straight gets through. Making turns dearer than that was tried: the
+  router then detours, boxes later runs in, and needs more jumpers. The `crosswise` measurement isn't
+  priced by the router, since the main direction is only known once the board is routed; a trace
+  from one pin to another takes the same steps across and down whichever way it turns.
 - A **jumper** is a wire on the parts' side, used where traces can't get through: traces run up to a
   free hole, the jumper hops over, and traces carry on from where it lands. It goes across, down or at
   45°, 2 to 10 holes long. It can't pass over a part, a pin or a keep-out (it can go under a module's
@@ -299,13 +319,9 @@ two branches of the same star net.
 
 Runs are routed one at a time, shortest first. Each run grows like a tree: from what's joined so far,
 the cheapest way to the nearest pin not joined yet, trying holes in the direction of that pin first
-("A*" search). Two kinds of solder-side wire break the rules above, and both still count as one:
-
-- If no wire fits on either side (walled in on both ends), a wire goes straight from the nearest hole
-  already joined to the pin, at any angle and length. It may end on the pin and cross other wires or a
-  keep-out; wires routed after it keep off it.
-- A pin of a part hanging off the board gets one straight from its run's first pin, so hanging a part
-  off the board never saves wiring. (The part is boxed in red too.)
+("A*" search). A pin that can't be reached, because it's walled in so that not even a wire fits or
+it's off the board, is left out of its run: `unrouted`, above. No wire ever ends on a pin.
+(A part hanging off the board is boxed in red too.)
 
 In the pictures, jumpers are solid blue and solder-side wires dashed red. In the `.diy`, both are
 DIYLC jumpers (DIYLC has no wire on the solder side), the solder-side ones red and named "(solder side)".
@@ -317,13 +333,13 @@ boards it never saw and save it to `out/model.json` (so the last one you ran is 
 
 - **`train` (gradient descent):** for each board, compare the network's guess with the rules'
   score and nudge every weight in the direction that makes it less wrong. One example points
-  all 89 weights the right way at once.
+  all 113 weights the right way at once.
 - **`evolve` (evolution):** make 19 copies of the network with every weight changed a little at
   random, keep whichever of the 20 is least wrong, repeat 1,000 times. It never works out a
   direction; it only needs to know which copy did better.
 
-Typical result on the 555: `train` is off by about 0.9 points on unseen boards (0.7 to 1.0) in 6s, `evolve` by
-about 1.3 points (1.1 to 1.6, depending on the seed) in 7s, after trying 19,000 networks. When you have a right answer for every example,
+Typical result on the 555: `train` is off by about 0.7 points on unseen boards (0.6 to 0.8) in 5s, `evolve` by
+about 1.9 points (1.3 to 2.3, depending on the seed) in 6s, after trying 19,000 networks. When you have a right answer for every example,
 gradient descent wins. Evolution is the tool when all you can say is "this one did better than that one",
 such as a network that proposes whole layouts.
 
@@ -351,8 +367,8 @@ need. For each file it says one of:
   layout file read back came out different; it says which of the files did.
 - **STOPPED**: the program stopped after reading the file (in the placer, the router, the writer, or
   reading back what it wrote), with the message and where in the code.
-- **unfinished**: the connections differ, but when the placer stopped some pins still shared a hole or
-  hung off the board, which joins nets by itself. Try more `--steps`.
+- **unfinished**: the connections differ, but when the placer stopped some pins still shared a hole,
+  hung off the board (which joins nets by itself) or couldn't be reached by the router. Try more `--steps`.
 - **skipped**: no connections, or the reader refuses the file (a part it doesn't support), with why.
 
 It exits with an error if any file was WRONG or STOPPED. Try two or three seeds: a layout where
@@ -365,8 +381,7 @@ measurements; one trained when a measurement meant something else loads silently
 ### The benchmark
 
 After a change meant to make layouts better (the placer, the router, a network), run the benchmark
-and compare the costs with the last run (`out/bench.json`) or with the baseline, the plain placer's numbers recorded in
-[docs/plans/placing-network.md](docs/plans/placing-network.md):
+and compare the costs with the last run (`out/bench.json`), made before the change:
 
 ```bash
 cargo run --release -- bench
@@ -392,7 +407,13 @@ benchmark before and after it and compare the layouts, not the old numbers.
   more `--steps` and two or three `--seed`s, and compare the costs.
 - **The router is greedy.** It routes one run at a time, shortest first, and never undoes one. A
   different order can sometimes avoid a jumper it needed. A connection gets at most one wire; if that's
-  not enough it gets one solder-side wire straight to the pin.
+  not enough, the pin is left unrouted (very expensive, so the placer finds another layout).
+- **Big penalties make the placer's search stiff.** A collision costs more than a solder-side wire
+  and an unrouted pin far more, so the placer rarely lets a part pass through another to reach a
+  better place. A crowded board started at random can end with collisions or unrouted pins: the cat
+  feeder in `bench` (random starts) does, though placed from the sketch it doesn't, and short `check`
+  runs on sketches with modules drawn on top of each other end unfinished more often. Making
+  collisions an exact check instead of a cost ("Next steps" 1) is the way out.
 - **Collisions and keep-outs are only a cost.** They're the `overlap` measurement, heavily weighted, so
   the placer avoids them, but with `--judge net` it's the network that decides how bad they are.
   (A part with placement rules never sits on a keep-out or off the board.)
@@ -425,14 +446,18 @@ benchmark before and after it and compare the layouts, not the old numbers.
 ## Where the neural network fits
 
 Right now the network learns to copy the rules. On boards it has never seen it is off by
-about a point, and the placer does just as well using it as the judge. On its own that
-isn't useful, since we already have the rules. It proves the plumbing works.
+under a point, but as the placer's judge it fails: with today's big penalties (collisions,
+solder-side wires, unrouted pins) almost every example board scores about 0, so it learns little
+more than "bad", and `place --judge net` leaves parts on top of each other (on the 555, seeds 1-3:
+19 to 21 holes of collision, costs about 3,000 against the rules' 104 to 109). Training it on the
+cost instead of the 0-100 score would likely help. Even at its best it isn't useful on its own,
+since we already have the rules. It proves the plumbing works.
 
 It becomes useful when the "right answers" come from something the rules can't express:
 
 1. **Your taste.** Rate layouts yourself; the network learns what you like, including things
    that are hard to write down as a rule.
-2. **Richer input.** Feed it the board itself (which hole holds what) instead of nine numbers,
+2. **Richer input.** Feed it the board itself (which hole holds what) instead of twelve numbers,
    so it can spot patterns no rule measures. That's when a library like Burn starts paying off.
 3. **Placing directly.** Train a network that proposes where the parts go, so the placer starts
    from a good layout instead of a random one. Tried and parked:

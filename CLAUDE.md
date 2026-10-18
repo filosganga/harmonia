@@ -2,7 +2,7 @@
 
 Goal: a neural network that scores and improves component placement on perfboard, from a netlist
 with pinouts and component sizes in perfboard hole coordinates. Good-practice signals: 5V and GND
-close together, short wiring, few bends in the traces, few jumpers, no collisions, room around
+close together, short wiring, few bends in the traces, straight traces running mostly one way (no diagonals, stripboard-like), few jumpers, no collisions, room around
 parts to solder, and the board's own rules.
 
 README.md is the documentation for people and for you: commands, files, rules, how a change is
