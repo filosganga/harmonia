@@ -370,14 +370,17 @@ fn body_of(class: &str, item: Node, pins: &[(String, Inches)]) -> Vec<Point> {
     (x0..=x1).flat_map(|x| (y0..=y1).map(move |y| (x, y))).collect()
 }
 
-/// The holes inside a rectangle given by two corner points.
+/// The holes inside a rectangle given by two corner points. A hole counts only if the rectangle
+/// reaches clearly past its centre (a fifth of a hole, about 0.5mm, as for footprints): a module's
+/// board drawn with its edge on a line of holes, one hole beyond its headers, ends there, and the
+/// headers sit on its edge.
 fn covered(corners: &[Inches]) -> Vec<Point> {
     if corners.len() < 2 {
         return Vec::new();
     }
     let (a, b) = (corners[0], corners[1]);
-    let lo = |u: f64, v: f64| (u.min(v) / HOLE - 0.01).ceil() as i32;
-    let hi = |u: f64, v: f64| (u.max(v) / HOLE + 0.01).floor() as i32;
+    let lo = |u: f64, v: f64| (u.min(v) / HOLE + 0.2).ceil() as i32;
+    let hi = |u: f64, v: f64| (u.max(v) / HOLE - 0.2).floor() as i32;
     let (x0, x1, y0, y1) = (lo(a.0, b.0), hi(a.0, b.0), lo(a.1, b.1), hi(a.1, b.1));
     (x0..=x1).flat_map(|x| (y0..=y1).map(move |y| (x, y))).collect()
 }
