@@ -61,7 +61,9 @@ fn shape(comp: &Component) -> &str {
         Some(p) => &p.part,
         // A group with nothing free under it (say, a header and its label) is drawn like a header.
         None if comp.footprint == "DIYLC:module" && full => "PinHeader",
-        None if !full => "module",
+        // A footprints.json module. (A DIYLC part drawn at an angle only takes its legs too, but it's
+        // still drawn as itself, below.)
+        None if !full && !comp.footprint.starts_with("DIYLC:") => "module",
         None => comp.footprint.strip_prefix("DIYLC:").unwrap_or(""),
     }
 }
