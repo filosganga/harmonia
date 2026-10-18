@@ -1,5 +1,5 @@
 //! The router: joins every run with copper traces on the solder side, and hops over with a
-//! jumper where a trace can't get through.
+//! jumper where a trace can't get through (or leaves a walled-in pin unrouted, below).
 //!
 //! A trace goes from a hole to a neighbouring one: across, down, or diagonally (45°). It touches
 //! every hole it passes, so it can't pass a hole that belongs to another run (another run's pin or
@@ -14,12 +14,15 @@
 //! Where no jumper fits, the last resort is the same kind of wire on the solder side. Nothing sits
 //! there but copper, so it may pass under parts and over traces and pins (it's insulated); it still
 //! keeps off keep-outs and other runs' solder-side wires. It's only used when no jumper fits, and
-//! it costs a lot in the score, so the placer avoids it.
+//! it costs a lot in the score, so the placer avoids it. A wire's leg needs a hole of its own,
+//! never a pin's: a pin walled in so that not even a wire fits is left `unrouted`, costing more
+//! than any wiring.
 //!
 //! Runs are routed one at a time, shortest first, and each one is grown like a tree: from the
 //! pins joined so far, find the cheapest way to the nearest pin not joined yet ("A*" search: try
-//! the most promising holes first, guided by the straight-line distance still to go). A trace
-//! pays for its length and for each turn, since every bend is one more to make in copper wire.
+//! the most promising holes first, guided by a guess of the cost still to go that's never too
+//! high). A trace pays for its length, for each turn, since every bend is one more to make in
+//! copper wire, and extra for each diagonal step, since straight traces are easier to lay.
 
 use crate::board::{Circuit, Geometry, Point};
 use std::cmp::Reverse;
@@ -34,12 +37,35 @@ pub struct Routing {
     pub jumpers: Vec<(usize, Point, Point)>,
     /// A wire on the solder side, the last resort.
     pub bottom: Vec<(usize, Point, Point)>,
+    /// A connection the router couldn't make, as (run, the nearest hole already joined, the pin):
+    /// the pin is walled in, so not even a wire fits (a wire's leg needs a hole of its own, never a
+    /// pin's), or it's off the board. Only shown, never copper.
+    pub unrouted: Vec<(usize, Point, Point)>,
 }
 
 impl Routing {
     /// Length of copper trace, in holes.
     pub fn trace_length(&self) -> f64 {
         self.traces.iter().map(|&(_, a, b)| distance(a, b)).sum::<f64>() + 0.0 // + 0.0: no traces is 0, not -0
+    }
+
+    /// How many steps of copper trace go diagonally. Traces are laid in copper wire along the holes,
+    /// and straight ones are easier to lay and can line up in parallel (or come from a stripboard's
+    /// strips); jumpers and solder-side wires are wires, free to go at 45°, so they don't count.
+    pub fn diagonal_steps(&self) -> f64 {
+        self.traces.iter().filter(|&&(_, a, b)| a.0 != b.0 && a.1 != b.1).count() as f64
+    }
+
+    /// How many straight steps of copper trace run against the board's main direction: across or
+    /// down, whichever has fewer. On a stripboard the strips run one way and every piece of copper the
+    /// other way needs a wire; on perfboard too, traces side by side in one direction are the easiest
+    /// to lay. The router doesn't price this, since the main direction is only known once the whole
+    /// board is routed; it matters little, as a trace from one pin to another takes the same steps
+    /// across and down whichever way it turns.
+    pub fn crosswise_steps(&self) -> f64 {
+        let across = self.traces.iter().filter(|&&(_, a, b)| a.1 == b.1).count();
+        let down = self.traces.iter().filter(|&&(_, a, b)| a.0 == b.0).count();
+        across.min(down) as f64
     }
 
     /// Length of jumper and solder-side wire, in holes.
@@ -66,7 +92,11 @@ impl Routing {
         loop {
             let closest = best.iter().filter(|(p, _)| !done.contains(*p)).min_by(|a, b| a.1.total_cmp(b.1));
             let Some((&p, &d)) = closest else {
-                panic!("the router left {from:?} and {to:?} unjoined, but it joins every pin of a net");
+                // Not joined: one of them must be a pin the router couldn't reach (`unrouted`),
+                // which costs plenty already. Straight across, then.
+                let left_out = |hole: Point| self.unrouted.iter().any(|&(_, _, pin)| pin == hole);
+                assert!(left_out(from) || left_out(to), "the router left {from:?} and {to:?} unjoined, but neither is unrouted");
+                return distance(from, to);
             };
             if p == to {
                 return d;
@@ -121,10 +151,32 @@ impl Routing {
     }
 }
 
+/// The `!!` lines for connections the router couldn't make, naming each pin left out.
+pub fn unrouted_problems(c: &Circuit, g: &Geometry, routing: &Routing) -> Vec<String> {
+    let name_of = |hole: Point| {
+        let pins = c.components.iter().enumerate().flat_map(|(ci, comp)| comp.pins.iter().enumerate().map(move |(pi, pin)| (ci, pi, pin)));
+        pins.filter(|&(ci, pi, _)| g.pins[ci][pi] == hole)
+            .map(|(ci, _, pin)| format!("{}.{}", c.components[ci].reference, pin.name))
+            .next()
+            .unwrap_or_else(|| format!("the pin at {hole:?}"))
+    };
+    routing
+        .unrouted
+        .iter()
+        .map(|&(run, _, pin)| {
+            let net = &c.nets[c.runs[run].net].name;
+            format!("{} isn't connected to the rest of {net}: walled in so not even a wire fits, or off the board", name_of(pin))
+        })
+        .collect()
+}
+
 /// Costs, in tenths of a hole of trace. A straight step is one hole, a diagonal about 1.4.
 /// They match the score's weights (board::WEIGHTS) times ten, so the router and the score agree.
 const STRAIGHT: u32 = 10;
 const DIAGONAL: u32 = 14;
+/// What a diagonal step pays on top of its length: the score's `diagonal` weight times ten. (2 is
+/// `diagonal`'s place in board::FEATURES: change it if a measurement goes in before it.)
+const DIAGONAL_EXTRA: u32 = (crate::board::WEIGHTS[2] * 10.0) as u32;
 /// What a trace pays for each right angle's worth of bending (see `bend`), except at a pin, where
 /// it starts anyway.
 const TURN: u32 = 10;
@@ -398,31 +450,20 @@ pub fn route(c: &Circuit, g: &Geometry) -> Routing {
         let start = g.pins[start.0][start.1];
         let (mut remaining, off): (Vec<Point>, Vec<Point>) =
             holes_of(r).into_iter().filter(|&p| p != start).partition(|&p| grid.on_board(p) && grid.on_board(start));
-        // A pin off the board can't be routed to. It still costs a solder-side wire straight to it,
-        // or a part hanging off the board would save the wiring it should need.
-        out.bottom.extend(off.into_iter().map(|p| (r, start, p)));
+        // A pin off the board can't be routed to: it's left unrouted, which costs more than any
+        // wiring, so hanging a part off the board never saves any.
+        out.unrouted.extend(off.into_iter().map(|p| (r, start, p)));
         let mut tree = vec![start];
         while !remaining.is_empty() {
             // The pin nearest to what's joined so far.
             let (k, _) = remaining.iter().enumerate().min_by_key(|&(_, &p)| tree.iter().map(|&t| octile(t, p)).min().unwrap()).unwrap();
             let target = remaining.swap_remove(k);
             let Some(path) = connect(&grid, &mut mem, &shapes, &tree, target, r, run.net) else {
-                // Walled in even for a wire on either side: a solder-side wire from the nearest hole
-                // already joined straight to the pin, at any angle and length, so the run still joins
-                // up. It breaks the wire rules (it may end on a pin, cross other wires or a keep-out),
-                // but later wires keep off it.
+                // Walled in even for a wire on either side. A wire can't end on the pin (its leg
+                // needs a hole of its own), so the pin is left unrouted: very expensive, so the
+                // placer keeps away from layouts like this one.
                 let from = *tree.iter().min_by_key(|&&t| octile(t, target)).unwrap();
-                out.bottom.push((r, from, target));
-                grid.wires[Side::Bottom as usize].push((r, from, target));
-                // Straight or at 45° it lies over holes, which later wires must keep off too; at
-                // another angle it passes between them, and the crossing test covers it.
-                let (dx, dy) = ((target.0 - from.0).abs(), (target.1 - from.1).abs());
-                let over = (dx == 0 || dy == 0 || dx == dy).then(|| holes_between(from, target)).into_iter().flatten();
-                for p in over.chain([from, target]) {
-                    let i = grid.at(p);
-                    grid.wire_at[Side::Bottom as usize][i] = Some(r);
-                }
-                tree.push(target);
+                out.unrouted.push((r, from, target));
                 continue;
             };
             for (a, b, step) in path {
@@ -469,10 +510,13 @@ pub fn order(c: &Circuit, g: &Geometry) -> Vec<usize> {
     order
 }
 
-/// Distance in tenths of a hole if nothing were in the way (diagonals where they help).
+/// The cost in tenths of a hole if nothing were in the way: diagonals where they're cheaper than
+/// a step across and one down. The search's guess must never be more than the real cost, or it can
+/// miss the cheapest way.
 fn octile(a: Point, b: Point) -> u32 {
     let (dx, dy) = ((a.0 - b.0).unsigned_abs(), (a.1 - b.1).unsigned_abs());
-    STRAIGHT * dx.max(dy) + (DIAGONAL - STRAIGHT) * dx.min(dy)
+    let diagonal = (DIAGONAL + DIAGONAL_EXTRA).min(2 * STRAIGHT);
+    STRAIGHT * dx.max(dy) + (diagonal - STRAIGHT) * dx.min(dy)
 }
 
 /// The search doesn't just go from hole to hole: it remembers which way it came in, so that a
@@ -557,7 +601,7 @@ fn spread(grid: &Grid, mem: &mut Scratch, from: &[Point], towards: Option<Point>
             let diagonal = dx != 0 && dy != 0;
             if grid.on_board(q) && grid.open(q, run, net) && (!diagonal || grid.diagonal_free(p, q, run)) {
                 let turn = if heading == START || grid.pin[i] { 0 } else { bend(DIRS[heading], DIRS[k]) * TURN };
-                let c = so_far + if diagonal { DIAGONAL } else { STRAIGHT } + turn;
+                let c = so_far + if diagonal { DIAGONAL + DIAGONAL_EXTRA } else { STRAIGHT } + turn;
                 let j = grid.at(q);
                 let t = j * HEADINGS + k;
                 let beaten = popped[j] == round && (grid.pin[j] || c >= cost[first[j]] + AHEAD[first[j] % HEADINGS][k] * TURN);

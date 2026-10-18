@@ -9,12 +9,12 @@
 //! `mutated` supports the other way to train it, evolution: make randomly
 //! changed copies and keep whichever copy is least wrong.
 
-use crate::board::{FEATURES, Measures};
+use crate::board::{FEATURES, Measures, SCORE_SCALE};
 use rand::{Rng, SeedableRng, rngs::StdRng};
 use serde::{Deserialize, Serialize};
 
 /// Rough size of each measurement, so all inputs land around 0..1. Same order as FEATURES.
-const SCALE: [f64; FEATURES.len()] = [100.0, 10.0, 5.0, 20.0, 2.0, 20.0, 20.0, 20.0, 10.0];
+const SCALE: [f64; FEATURES.len()] = [100.0, 10.0, 30.0, 30.0, 5.0, 20.0, 2.0, 1.0, 20.0, 20.0, 20.0, 10.0];
 
 pub fn inputs(m: &Measures) -> Vec<f64> {
     m.0.iter().zip(SCALE).map(|(v, s)| v / s).collect()
@@ -56,6 +56,14 @@ impl Net {
     /// Predicted score 0-100 for a board's measurements.
     pub fn predict(&self, m: &Measures) -> f64 {
         100.0 * self.forward(&inputs(m)).0
+    }
+
+    /// The cost the network's score stands for, for the placer to compare (the score formula turned
+    /// round). Its guesses near 0 are the least sure, so they're kept above 1e-9: every board the
+    /// network thinks is that bad costs about the same, rather than the network's noise down there
+    /// steering the placer.
+    pub fn cost(&self, m: &Measures) -> f64 {
+        -SCORE_SCALE * (self.predict(m).max(1e-9) / 100.0).ln()
     }
 
     /// One learning step on one example. Returns the squared error before the step.

@@ -10,18 +10,21 @@ use std::fmt::Write;
 
 pub type Point = (i32, i32);
 
-/// The nine things the rules measure. They are also the network's inputs.
-pub const FEATURES: [&str; 9] = ["wire", "turns", "jumpers", "jumper_len", "bottom", "power", "overlap", "crowding", "near"];
+/// The twelve things the rules measure. They are also the network's inputs.
+pub const FEATURES: [&str; 12] = ["wire", "turns", "diagonal", "crosswise", "jumpers", "jumper_len", "bottom", "unrouted", "power", "overlap", "crowding", "near"];
 
 /// How much each measurement costs, in the same order as FEATURES. Lower total cost = better board.
-pub const WEIGHTS: [f64; 9] = [
+pub const WEIGHTS: [f64; 12] = [
     1.0,  // wire: per hole of copper trace, as routed (see route.rs, whose costs match these)
     1.0,  // turns: per right angle's worth of bending a trace (45° is 2, 135° is 3; see route::bend)
-    5.0,  // jumpers: per jumper on the parts' side, where a trace couldn't get through
+    3.0,  // diagonal: per diagonal step of copper trace, on top of its length (jumpers and wires don't count)
+    0.5,  // crosswise: per straight step of trace running against the board's main direction (see route.rs)
+    5.0,  // jumpers: per jumper on the parts' side, where a trace couldn't get through (not priced by the router: it takes a jumper whenever one fits)
     2.0,  // jumper_len: per hole of jumper or solder-side wire: twice a trace, so they stay short
-    30.0, // bottom: per wire on the solder side, the last resort
+    100.0, // bottom: per wire on the solder side, the last resort (not priced by the router: it takes one only when no jumper fits)
+    1000.0, // unrouted: per connection the router couldn't make at all (a pin walled in, or off the board; nothing for the router to price)
     1.5,  // power: per hole between each 5V pin and its nearest GND pin
-    40.0, // overlap: per hole where two parts collide or a part hangs off the board
+    150.0, // overlap: per hole where two parts collide or a part hangs off the board: like unrouted, it can't be built
     2.0,  // crowding: per pair of neighbouring holes taken by two parts (twice for pins of two nets)
     4.0,  // near: per hole between two pins the board file wants near (along copper) or close (straight)
 ];
@@ -240,9 +243,12 @@ pub fn measure_routed(c: &Circuit, g: &Geometry, routing: &crate::route::Routing
     Measures([
         routing.trace_length(),
         routing.turns(g) as f64,
+        routing.diagonal_steps(),
+        routing.crosswise_steps(),
         routing.jumpers.len() as f64,
         routing.jumper_length(),
         routing.bottom.len() as f64,
+        routing.unrouted.len() as f64,
         power as f64, overlap as f64, crowding as f64, near])
 }
 

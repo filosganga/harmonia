@@ -88,7 +88,8 @@ impl Layout {
         let g = board::geometry(&circuit, &placement);
         let routing = route::route(&circuit, &g);
         let measures = board::measure_routed(&circuit, &g, &routing);
-        let problems = constraints::problems(&circuit, &placement);
+        let mut problems = constraints::problems(&circuit, &placement);
+        problems.extend(route::unrouted_problems(&circuit, &g, &routing));
         // Put the runs in the order the router laid them, numbering the copper to match. It's
         // the same copper; only the run numbers change. The file then lists the runs in that
         // order, and reading it back gives the copper in the same order.
@@ -98,7 +99,12 @@ impl Layout {
             renumbered[old] = new;
         }
         let renumber = |list: Vec<(usize, Point, Point)>| list.into_iter().map(|(run, a, b)| (renumbered[run], a, b)).collect();
-        let routing = Routing { traces: renumber(routing.traces), jumpers: renumber(routing.jumpers), bottom: renumber(routing.bottom) };
+        let routing = Routing {
+            traces: renumber(routing.traces),
+            jumpers: renumber(routing.jumpers),
+            bottom: renumber(routing.bottom),
+            unrouted: renumber(routing.unrouted),
+        };
         let mut circuit = circuit;
         circuit.runs = order.iter().map(|&old| circuit.runs[old].clone()).collect();
         Layout { circuit, placement, routing, measures, problems, title: title.to_string(), made }
@@ -206,6 +212,9 @@ struct RunEntry {
     jumpers: Vec<[Point; 2]>,
     /// Wires on the solder side, the last resort.
     solder_wires: Vec<[Point; 2]>,
+    /// Connections the router couldn't make: [nearest hole joined, pin]. Left out when there are none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    unrouted: Vec<[Point; 2]>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -277,6 +286,7 @@ pub fn to_json(layout: &Layout) -> String {
             traces: of_run(&straight, r),
             jumpers: of_run(&layout.routing.jumpers, r),
             solder_wires: of_run(&layout.routing.bottom, r),
+            unrouted: of_run(&layout.routing.unrouted, r),
         })
         .collect();
     let m = &layout.measures;
@@ -366,6 +376,7 @@ pub fn from_json(text: &str) -> Layout {
         }
         routing.jumpers.extend(entry.jumpers.iter().map(|&[a, b]| (r, a, b)));
         routing.bottom.extend(entry.solder_wires.iter().map(|&[a, b]| (r, a, b)));
+        routing.unrouted.extend(entry.unrouted.iter().map(|&[a, b]| (r, a, b)));
     }
     c.runs = runs;
 

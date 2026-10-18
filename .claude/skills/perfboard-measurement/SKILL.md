@@ -15,7 +15,9 @@ A measurement is in five places that the compiler only partly ties together.
 2. `src/nn.rs`: `SCALE`, one rough size per measurement so inputs land around 0..1, **same order as
    FEATURES**. The compiler checks the length, not the order.
 3. `src/route.rs`: the router's costs are the matching weights × 10 (`STRAIGHT`/`DIAGONAL` for wire,
-   `TURN` for turns, `JUMPER_PER_HOLE` for jumper length). Change both together, or the router picks routes the score
+   `TURN` for turns, `DIAGONAL_EXTRA` for diagonal, `JUMPER_PER_HOLE` for jumper length; `crosswise`
+   isn't priced, see `Routing::crosswise_steps`). `DIAGONAL_EXTRA` reads `WEIGHTS[2]` by position:
+   inserting a measurement before `diagonal` means changing that index too. Change both together, or the router picks routes the score
    doesn't prefer.
 4. The text report, the SVG legend and the layout file (`src/layout.rs`, measurements by name) print every
    measurement themselves; nothing to change there. A layout file saved before a measurement was added,
@@ -33,7 +35,7 @@ means something else with the same count, an old model loads silently and judges
 - "Two ways to train": "all N weights" with N = inputs × 8 + 8 + 8 + 1, and the typical errors and times.
 - "The pieces", the `src/nn.rs` row: the same weight count.
 - "Where the neural network fits": how many numbers the network gets.
-- "The layout file": the score has "the nine measurements by name".
+- "The layout file": the score has "the twelve measurements by name".
 - The timings at the top, if the change touched routing or measuring.
 - The benchmark's recorded numbers (`docs/plans/placing-network.md`) were costs under the old
   weights: rerun `bench` and say the old table no longer compares.

@@ -153,11 +153,12 @@ fn load(path: &str, args: &Args) -> Loaded {
 }
 
 /// Places every case of the board file's rules, from the sketch if there is one, and keeps the
-/// layout the judge likes best. Returns which case it was, where it started, and the layout.
-/// With `report`, prints a line for each case when there are several.
+/// cheapest layout by `cost` (the rules' cost, or what the network's score stands for). Returns which
+/// case it was, where it started, and the layout. With `report`, prints a line for each case when
+/// there are several.
 fn place_cases(
     cases: &[Circuit],
-    judge: impl Fn(&Measures) -> f64,
+    cost: impl Fn(&Measures) -> f64,
     steps: usize,
     rng: &mut StdRng,
     sketch: Option<&board::Placement>,
@@ -167,13 +168,13 @@ fn place_cases(
     for (k, c) in cases.iter().enumerate() {
         let mut start = sketch.cloned().unwrap_or_else(|| board::random_placement(c, rng));
         constraints::apply(c, &mut start);
-        let layout = place::anneal(c, &judge, steps, rng, Some(start.clone()), |_| {});
+        let layout = place::anneal(c, &cost, steps, rng, Some(start.clone()), |_| {});
         if report && cases.len() > 1 {
             println!("{}", board::report(c, &layout, &format!("Case {} of {} ({})", k + 1, cases.len(), case_name(c))));
         }
-        let score = judge(&board::measure(c, &layout));
-        if best.as_ref().is_none_or(|b| score > b.3) {
-            best = Some((k, start, layout, score));
+        let this = cost(&board::measure(c, &layout));
+        if best.as_ref().is_none_or(|b| this < b.3) {
+            best = Some((k, start, layout, this));
         }
     }
     let (k, start, layout, _) = best.expect("there's at least one case");
@@ -240,7 +241,7 @@ fn check_one(path: &str, args: &Args) -> Outcome {
     let round_trip = || {
         let sketch = loaded.sketch.as_ref().expect("a .diy file has a sketch");
         let mut rng = StdRng::seed_from_u64(args.seed);
-        let (k, _, best) = place_cases(&loaded.cases, board::score, args.steps, &mut rng, Some(sketch), true);
+        let (k, _, best) = place_cases(&loaded.cases, board::cost, args.steps, &mut rng, Some(sketch), true);
         let c = &loaded.cases[k];
         let made = made(args, path, loaded.board_file.clone(), "sketch", &loaded.cases, k);
         let layout = Layout::new(c.clone(), best.clone(), "check", made);
@@ -262,10 +263,30 @@ fn check_one(path: &str, args: &Args) -> Outcome {
         // Pins sharing a hole, or off the board, explain joined nets without any fault in the writer.
         let (w, h) = (c.board.width, c.board.height);
         let mut seen = std::collections::HashSet::new();
-        let pins = board::geometry(c, &best).pins;
-        let clashing = pins.iter().flatten().filter(|&&(x, y)| x < 0 || x >= w || y < 0 || y >= h || !seen.insert((x, y))).count();
+        let g = board::geometry(c, &best);
+        let clashing = g.pins.iter().flatten().filter(|&&(x, y)| x < 0 || x >= w || y < 0 || y >= h || !seen.insert((x, y))).count();
         if clashing > 0 {
             return Outcome::Unfinished(clashing);
+        }
+        // Pins the router couldn't reach aren't joined in the drawing at all. Leave them out on both
+        // sides: if everything else matches, only they are missing; if not, the writer is wrong.
+        let holes: std::collections::HashSet<board::Point> = layout.routing.unrouted.iter().map(|&(_, _, hole)| hole).collect();
+        let mut unrouted = std::collections::HashSet::new();
+        for (ci, comp) in c.components.iter().enumerate() {
+            for (pi, pin) in comp.pins.iter().enumerate() {
+                if holes.contains(&g.pins[ci][pi]) {
+                    unrouted.insert(format!("{}.{}", comp.reference, pin.name));
+                }
+            }
+        }
+        let without = |nets: &[Vec<String>]| -> Vec<Vec<String>> {
+            let mut out: Vec<Vec<String>> = nets.iter().map(|n| n.iter().filter(|p| !unrouted.contains(*p)).cloned().collect::<Vec<_>>()).filter(|n| n.len() > 1).collect();
+            out.sort();
+            out
+        };
+        let (before, after) = (without(&before), without(&after));
+        if before == after {
+            return Outcome::Unfinished(unrouted.len());
         }
         let missing = before.iter().filter(|n| !after.contains(n)).cloned().collect();
         let extra = after.iter().filter(|n| !before.contains(n)).cloned().collect();
@@ -320,7 +341,7 @@ fn check_cmd(args: &Args) {
             }
             Outcome::Unfinished(pins) => {
                 unfinished += 1;
-                println!("  unfinished  {name}: {pins} pins still share a hole or hang off the board; try more --steps");
+                println!("  unfinished  {name}: {pins} pins still share a hole, hang off the board or couldn't be reached; try more --steps");
             }
             Outcome::Different(missing, extra) => {
                 wrong += 1;
@@ -391,8 +412,8 @@ fn place_cmd(cases: &[Circuit], args: &Args, sketch: Option<board::Placement>, b
     let mut rng = StdRng::seed_from_u64(args.seed);
     let net = (args.judge == "net").then(|| Net::load(MODEL));
     let judge = |m: &Measures| match &net {
-        Some(net) => net.predict(m),
-        None => board::score(m),
+        Some(net) => net.cost(m),
+        None => board::cost(m),
     };
 
     let (start_label, start_name) = if sketch.is_some() { ("Your sketch", "sketch") } else { ("Random start", "random") };
@@ -414,13 +435,13 @@ fn place_cmd(cases: &[Circuit], args: &Args, sketch: Option<board::Placement>, b
         println!("  (the network thought it would score {:.0}; the rules say {:.0})", net.predict(&m), board::score(&m));
     }
     println!("{}", board::ascii_board(c, &best));
-    for problem in constraints::problems(c, &best) {
-        println!("  !! {problem}");
-    }
 
     // The finished board, routed and measured once: the layout file, and every drawing made from it.
     let made = made(args, &args.circuit, board_file, start_name, cases, k);
     let layout = Layout::new(c.clone(), best, &label, made.clone());
+    for problem in &layout.problems {
+        println!("  !! {problem}");
+    }
     let saved = format!("out/{}.layout.json", args.judge);
     std::fs::write(&saved, layout::to_json(&layout)).unwrap();
     // The start, for the page that shows it next to the result. It isn't in the layout file.
@@ -477,7 +498,7 @@ fn make_examples(cases: &[Circuit], rng: &mut StdRng) -> (Vec<Measures>, Vec<Mea
     for i in 0..12 {
         let c = &cases[i % cases.len()];
         let mut snap_rng = StdRng::seed_from_u64(rng.random());
-        place::anneal(c, board::score, 4000, rng, None, |p| {
+        place::anneal(c, board::cost, 4000, rng, None, |p| {
             if snap_rng.random::<f64>() < 0.02 {
                 examples.push(board::measure(c, p));
             }
