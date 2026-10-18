@@ -3,7 +3,7 @@
 Status: parked (2026-10-18). All stages were built and measured on the branch `better-placing`
 (pushed to GitHub), where this plan has the full results: the network starts the placer about 5%
 better on average on the benchmark, but not on the cat feeder, and the maintainer thinks beating the
-plain placer needs examples or ratings from him (README "Next steps" 2). Only what helps the plain
+plain placer needs examples or ratings from him (README "Next steps" 1, since 2026-10-18; it was 2 when this was written). Only what helps the plain
 placer too was brought over from it: the benchmark (stage 0, below), the checked footprints, module
 footprints, and the layout file. Written 2026-10-17.
 

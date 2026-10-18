@@ -138,16 +138,16 @@ pub fn draw(layout: &Layout, side: Side) -> String {
     }
     let pin_color = |p: (usize, usize)| net_of.get(&p).map_or(LONE, |&n| colors[n]);
 
-    // Parts that collide, hang off the board, sit on a keep-out or don't fit under a module.
-    let misplaced: HashSet<usize> = board::under_modules(c, &g).into_iter().map(|(p, _)| p).collect();
-    let mut taken: HashMap<Point, usize> = HashMap::new();
-    for &p in g.bodies.iter().flatten() {
-        *taken.entry(p).or_default() += 1;
+    // Parts that collide, hang off the board, sit on a keep-out or don't fit under a module (both
+    // parts of a collision): only in a layout that isn't allowed, like a sketch as you drew it.
+    let mut misplaced: HashSet<usize> = HashSet::new();
+    for clash in board::clashes(c, &g, &vec![true; c.components.len()]) {
+        misplaced.insert(clash.part);
+        if let board::Why::OnPart(other) = clash.why {
+            misplaced.insert(other);
+        }
     }
-    let off = |p: &Point| p.0 < 0 || p.0 >= w || p.1 < 0 || p.1 >= h;
-    let clashes = |i: usize| {
-        g.bodies[i].iter().any(|p| taken[p] > 1 || c.constraints.keepout_holes.contains(p)) || g.outlines[i].iter().any(off) || misplaced.contains(&i)
-    };
+    let clashes = |i: usize| misplaced.contains(&i);
 
     // The picture is built in layers, drawn bottom to top.
     let (mut base, mut wires, mut holes, mut parts, mut labels, mut names) = (String::new(), String::new(), String::new(), String::new(), String::new(), String::new());
@@ -357,11 +357,16 @@ pub fn draw(layout: &Layout, side: Side) -> String {
     for text in wrap(&format!("{title}, {side_name}"), 48) {
         line(&mut legend, &mut ly, &text, "legend-title");
     }
-    line(&mut legend, &mut ly, &format!("score {:.0}/100, cost {:.1} (lower is better)", board::score(&m), board::cost(&m)), "legend");
-    let measures: Vec<String> = board::FEATURES.iter().zip(m.0).map(|(k, v)| format!("{k} {v:.0}")).collect();
-    // Wrapped too: twelve measurements don't fit on one line beside the board.
-    for text in wrap(&measures.join(" · "), 60) {
-        line(&mut legend, &mut ly, &text, "note");
+    if misplaced.is_empty() {
+        line(&mut legend, &mut ly, &format!("score {:.0}/100, cost {:.1} (lower is better)", board::score(&m), board::cost(&m)), "legend");
+        let measures: Vec<String> = board::FEATURES.iter().zip(m.0).map(|(k, v)| format!("{k} {v:.0}")).collect();
+        // Wrapped too: eleven measurements don't fit on one line beside the board.
+        for text in wrap(&measures.join(" · "), 60) {
+            line(&mut legend, &mut ly, &text, "note");
+        }
+    } else {
+        // Like the text report: a layout that can't be built isn't scored (a sketch as you drew it).
+        line(&mut legend, &mut ly, "not allowed, so not scored", "legend");
     }
     ly += line_h * 0.5;
     if (0..c.components.len()).any(clashes) {

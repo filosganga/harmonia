@@ -14,6 +14,7 @@ description: Procedure for adding or changing a rule in the perfboard board file
 | Kind | Example | Where |
 |---|---|---|
 | Hard limit on where a part goes | fixed, edge, orientation, within | a `Rule` with a part: `Rule::one_part` and `Rule::part` (name the part; `part` also checks the rule alone) and `Rule::allows` (does it allow this place). `resolve` lists each part's allowed places and `apply` keeps the part on them; nothing else to wire |
+| Hard limit on what may share the board, for every part | keep-out holes under parts, no two parts on a hole | `board::clashes` (with words in `board::clash_words`): the placer starts from an allowed layout (`place::allowed_start`) and throws away any move that isn't allowed, before routing it. A new kind of clash is a `board::Why` variant, and is named in svg.rs's "Boxed in red" note and README's lists of what's allowed ("How a board is judged", "Or sketch it in DIYLC") |
 | Hard limit on copper | keep-out holes, star separation | `src/route.rs` grid (`owner`, `keepout`), or `constraints::runs` for how a net splits |
 | Preference | near, close | a measurement with a fixed weight (both count in `near`); a new one: use the `perfboard-measurement` skill |
 

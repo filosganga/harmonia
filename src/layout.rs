@@ -31,7 +31,7 @@
 //! file's rules about where parts may go, near and close. The score is kept as it was measured.
 
 use crate::board::{self, BoardSize, Circuit, Component, Measures, Net, Pin, Place, Placement, Point, Run};
-use crate::constraints::{self, Constraints, Keepout};
+use crate::constraints::{Constraints, Keepout};
 use crate::diylc;
 use crate::diylc_import::Source;
 use crate::route::{self, Routing};
@@ -75,7 +75,7 @@ pub struct Layout {
     pub placement: Placement,
     pub routing: Routing,
     pub measures: Measures,
-    /// Plain-language problems, the `!!` lines (`constraints::problems`).
+    /// Plain-language problems, the `!!` lines: what isn't allowed (`board::clash_words`), and pins left unrouted.
     pub problems: Vec<String>,
     /// What the pictures and the DIYLC project are called, like "Placed by rules".
     pub title: String,
@@ -88,7 +88,9 @@ impl Layout {
         let g = board::geometry(&circuit, &placement);
         let routing = route::route(&circuit, &g);
         let measures = board::measure_routed(&circuit, &g, &routing);
-        let mut problems = constraints::problems(&circuit, &placement);
+        // A layout from the placer is always allowed; a sketch as you drew it may not be.
+        let clashes = board::clashes(&circuit, &g, &vec![true; placement.len()]);
+        let mut problems = board::clash_words(&circuit, &clashes);
         problems.extend(route::unrouted_problems(&circuit, &g, &routing));
         // Put the runs in the order the router laid them, numbering the copper to match. It's
         // the same copper; only the run numbers change. The file then lists the runs in that

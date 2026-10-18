@@ -154,8 +154,10 @@ fn load(path: &str, args: &Args) -> Loaded {
 
 /// Places every case of the board file's rules, from the sketch if there is one, and keeps the
 /// cheapest layout by `cost` (the rules' cost, or what the network's score stands for). Returns which
-/// case it was, where it started, and the layout. With `report`, prints a line for each case when
-/// there are several.
+/// case it was, where it started (the sketch as you drew it, or the random start), and the layout.
+/// The placer starts from the sketch made allowed (`place::allowed_start`); a case with no room for
+/// some part is left out, and if every case is, the program stops. With `report`, prints a line for
+/// each case when there are several, and why a case was left out.
 fn place_cases(
     cases: &[Circuit],
     cost: impl Fn(&Measures) -> f64,
@@ -165,19 +167,44 @@ fn place_cases(
     report: bool,
 ) -> (usize, board::Placement, board::Placement) {
     let mut best: Option<(usize, board::Placement, board::Placement, f64)> = None;
+    let mut no_room = Vec::new();
     for (k, c) in cases.iter().enumerate() {
-        let mut start = sketch.cloned().unwrap_or_else(|| board::random_placement(c, rng));
-        constraints::apply(c, &mut start);
-        let layout = place::anneal(c, &cost, steps, rng, Some(start.clone()), |_| {});
+        let start = match sketch {
+            Some(sketch) => place::allowed_start(c, sketch),
+            None => place::random_start(c, rng),
+        };
+        let start = match start {
+            Ok(start) => start,
+            Err(why) => {
+                let why = if cases.len() > 1 { format!("case {} of {} ({}): {why}", k + 1, cases.len(), case_name(c)) } else { why };
+                if report {
+                    println!("Left out: {why}");
+                }
+                no_room.push(why);
+                continue;
+            }
+        };
+        let layout = place::anneal(c, &cost, steps, rng, start.clone(), |_| {});
         if report && cases.len() > 1 {
             println!("{}", board::report(c, &layout, &format!("Case {} of {} ({})", k + 1, cases.len(), case_name(c))));
         }
         let this = cost(&board::measure(c, &layout));
         if best.as_ref().is_none_or(|b| this < b.3) {
-            best = Some((k, start, layout, this));
+            // Show the sketch as you drew it (only its placement rules applied), not as it was moved apart.
+            let shown = match sketch {
+                Some(sketch) => {
+                    let mut drawn = sketch.clone();
+                    constraints::apply(c, &mut drawn);
+                    drawn
+                }
+                None => start,
+            };
+            best = Some((k, shown, layout, this));
         }
     }
-    let (k, start, layout, _) = best.expect("there's at least one case");
+    let Some((k, start, layout, _)) = best else {
+        panic!("no case has room for every part:\n  {}", no_room.join("\n  "));
+    };
     (k, start, layout)
 }
 
@@ -204,8 +231,8 @@ enum Outcome {
     NoConnections,
     /// The reader refuses the file (say, a part it doesn't support): nothing to compare.
     Unreadable(String),
-    /// When the placer stopped, this many pins still shared a hole or hung off the board, so their
-    /// nets may join for that reason alone.
+    /// When the placer stopped, the router couldn't reach this many pins, so the written file
+    /// doesn't join them.
     Unfinished(usize),
     /// Nets in the file but not in what was written back, and the other way round.
     Different(Vec<Vec<String>>, Vec<Vec<String>>),
@@ -260,16 +287,10 @@ fn check_one(path: &str, args: &Args) -> Outcome {
         if before == after {
             return Outcome::Same;
         }
-        // Pins sharing a hole, or off the board, explain joined nets without any fault in the writer.
-        let (w, h) = (c.board.width, c.board.height);
-        let mut seen = std::collections::HashSet::new();
-        let g = board::geometry(c, &best);
-        let clashing = g.pins.iter().flatten().filter(|&&(x, y)| x < 0 || x >= w || y < 0 || y >= h || !seen.insert((x, y))).count();
-        if clashing > 0 {
-            return Outcome::Unfinished(clashing);
-        }
-        // Pins the router couldn't reach aren't joined in the drawing at all. Leave them out on both
+        // The placer's layouts are allowed, so no two pins share a hole and none is off the board:
+        // nets can't join by themselves. Pins the router couldn't reach aren't joined in the drawing at all. Leave them out on both
         // sides: if everything else matches, only they are missing; if not, the writer is wrong.
+        let g = board::geometry(c, &best);
         let holes: std::collections::HashSet<board::Point> = layout.routing.unrouted.iter().map(|&(_, _, hole)| hole).collect();
         let mut unrouted = std::collections::HashSet::new();
         for (ci, comp) in c.components.iter().enumerate() {
@@ -341,7 +362,7 @@ fn check_cmd(args: &Args) {
             }
             Outcome::Unfinished(pins) => {
                 unfinished += 1;
-                println!("  unfinished  {name}: {pins} pins still share a hole, hang off the board or couldn't be reached; try more --steps");
+                println!("  unfinished  {name}: {pins} pins couldn't be reached by the router; try more --steps");
             }
             Outcome::Different(missing, extra) => {
                 wrong += 1;
@@ -491,14 +512,15 @@ fn draw_cmd(path: &str) {
 }
 
 /// Example boards for training: (to learn from, kept aside to test).
-/// Random boards, plus boards caught part-way through auto-placement so there are good ones too,
+/// Random boards (allowed ones, like every board the placer sees), plus boards caught part-way through auto-placement so there are good ones too,
 /// taking the cases of the board file's rules in turn.
 fn make_examples(cases: &[Circuit], rng: &mut StdRng) -> (Vec<Measures>, Vec<Measures>) {
     let mut examples: Vec<Measures> = Vec::new();
     for i in 0..12 {
         let c = &cases[i % cases.len()];
         let mut snap_rng = StdRng::seed_from_u64(rng.random());
-        place::anneal(c, board::cost, 4000, rng, None, |p| {
+        let start = place::random_start(c, rng).unwrap_or_else(|why| panic!("{why}"));
+        place::anneal(c, board::cost, 4000, rng, start, |p| {
             if snap_rng.random::<f64>() < 0.02 {
                 examples.push(board::measure(c, p));
             }
@@ -506,7 +528,8 @@ fn make_examples(cases: &[Circuit], rng: &mut StdRng) -> (Vec<Measures>, Vec<Mea
     }
     for i in 0..examples.len() / 4 {
         let c = &cases[i % cases.len()];
-        examples.push(board::measure(c, &board::random_placement(c, rng)));
+        let board = place::random_start(c, rng).unwrap_or_else(|why| panic!("{why}"));
+        examples.push(board::measure(c, &board));
     }
     examples.shuffle(rng);
     let test = examples.split_off(examples.len() * 4 / 5);
