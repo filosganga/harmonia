@@ -115,7 +115,7 @@ fn load(path: &str) -> Vec<Circuit> {
 }
 
 /// Places every case from a random start, as `place --seed <seed>` does, and returns the best cost.
-/// A DIYLC sketch starts from random too, not from where it was drawn: so will the network.
+/// A DIYLC sketch starts from random too, not from where it was drawn.
 fn best_cost(cases: &[Circuit], seed: u64) -> f64 {
     let mut rng = StdRng::seed_from_u64(seed);
     let (k, _, layout) = crate::place_cases(cases, board::score, STEPS, &mut rng, None, false);

@@ -76,6 +76,8 @@ DIYLC. For a DIYLC part the reader refuses, see `.claude/skills/perfboard-diylc-
    - `"about"`: what the part is and which pad is which.
    - `"low": true` if the part lies flat enough to sit under a module on headers (a resistor, a
      ceramic disc, a diode lying down). Leave it out otherwise.
+   - `"module": true` for a module on headers (KiCad's `Module` library: an Arduino Nano, a Pico, a
+     breakout board): only its pins take holes, and low parts can go under its board.
    - `"diylc"`, if DIYLC has a matching part: `{ "part": "Resistor" }` and the others README "Using
      your own circuit" lists, with `"legs"` for a polarised two-legged part. Without it the part is
      drawn in the `.diy` as a labelled box.

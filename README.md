@@ -103,6 +103,9 @@ DIYLC's first leg: that's + on a capacitor but the anode on an LED, which is KiC
 `"diylc"` entry the part is drawn as a labelled box.
 
 `"low": true` marks a part low enough to sit under a module on headers (see below); leave it out otherwise.
+`"module": true` marks a module on headers (an Arduino Nano, a Pico, a motor driver breakout): only its
+pins take holes, and low parts can go under its board, like a DIYLC group (below). `footprints.json`
+has five, from KiCad's `Module` library.
 
 ## Or sketch it in DIYLC
 
@@ -430,8 +433,8 @@ It becomes useful when the "right answers" come from something the rules can't e
 2. **Richer input.** Feed it the board itself (which hole holds what) instead of nine numbers,
    so it can spot patterns no rule measures. That's when a library like Burn starts paying off.
 3. **Placing directly.** Train a network that proposes where the parts go, so the placer starts
-   from a good layout instead of a random one. Under way: [docs/plans/placing-network.md](docs/plans/placing-network.md)
-   (its status line says how far it got).
+   from a good layout instead of a random one. Tried and parked:
+   [docs/plans/placing-network.md](docs/plans/placing-network.md) (the code is on the branch `better-placing`).
 
 ## Next steps
 
@@ -443,7 +446,7 @@ In order:
    from those picks ("Your taste" above). Then more circuits to learn from.
 3. **Faster routing**, if waits grow past an espresso (see Known limits).
 
-Meanwhile, a network that places parts is being built, stage by stage:
+A network that places parts was built and parked (on the branch `better-placing`); see
 [docs/plans/placing-network.md](docs/plans/placing-network.md).
 
 Smaller ideas, in the maintainer's words, are in [TODO.md](TODO.md).

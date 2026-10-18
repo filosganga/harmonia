@@ -38,7 +38,9 @@ Real examples from this project, all shipped and fixed later:
 Places that restate the code and drift with it:
 
 - README "Each `place` run ... writes": every file in `out/` and what it contains
-  (`src/main.rs` `place_cmd`, `src/svg.rs`, `src/diylc.rs`, `src/kicad_pcb.rs`).
+  (`src/main.rs` `place_cmd`, `src/layout.rs`, `src/svg.rs`, `src/diylc.rs`, `src/kicad_pcb.rs`);
+  and README "The layout file": the fields of `out/<judge>.layout.json` (`src/layout.rs`), including
+  "the nine measurements by name".
 - README "The board file" and the doc comment at the top of `src/constraints.rs`: every kind of
   `Rule`, and examples that would actually load (pins that exist and are on that net).
 - README "The pieces": one row per file in `src/` and `circuits/`.

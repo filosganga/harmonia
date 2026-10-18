@@ -185,11 +185,13 @@ pub fn write(layout: &Layout) -> String {
                 two_legged(&mut s, &id(), class, &comp.reference, size, [body, border, label, "cccccc"], to_inch(first), to_inch(second), "NAME", &extra);
             }
             None => {
-                // No DIYLC part for this footprint: a box over its body, with its name on it.
-                let body = &g.bodies[ci];
-                let (x0, x1) = (body.iter().map(|p| p.0).min().unwrap(), body.iter().map(|p| p.0).max().unwrap());
-                let (y0, y1) = (body.iter().map(|p| p.1).min().unwrap(), body.iter().map(|p| p.1).max().unwrap());
-                labelled_box(&mut s, [id(), id()], &comp.reference, ((x0, y0), (x1, y1)), "ffffff", 100);
+                // No DIYLC part for this footprint: a box over its outline, with its name on it; for a
+                // module, see-through, since low parts sit under its board.
+                let outline = &g.outlines[ci];
+                let (x0, x1) = (outline.iter().map(|p| p.0).min().unwrap(), outline.iter().map(|p| p.0).max().unwrap());
+                let (y0, y1) = (outline.iter().map(|p| p.1).min().unwrap(), outline.iter().map(|p| p.1).max().unwrap());
+                let alpha = if g.bodies[ci].len() < outline.len() { 30 } else { 100 };
+                labelled_box(&mut s, [id(), id()], &comp.reference, ((x0, y0), (x1, y1)), "ffffff", alpha);
             }
         }
     }

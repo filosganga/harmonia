@@ -1,6 +1,11 @@
 # Plan: a network that places parts
 
-Status: stage 0 done (2026-10-17); stage 1 next. Written 2026-10-17.
+Status: parked (2026-10-18). All stages were built and measured on the branch `better-placing`
+(pushed to GitHub), where this plan has the full results: the network starts the placer about 5%
+better on average on the benchmark, but not on the cat feeder, and the maintainer thinks beating the
+plain placer needs examples or ratings from him (README "Next steps" 2). Only what helps the plain
+placer too was brought over from it: the benchmark (stage 0, below), the checked footprints, module
+footprints, and the layout file. Written 2026-10-17.
 
 ## Goal
 
@@ -52,7 +57,7 @@ Before any network, decide how "better" is measured, and record today's numbers.
   training ones. Instead the set is the 555, the cat feeder, and ten classic hobby circuits written
   as KiCad netlists after datasheet applications and well-known designs (`circuits/bench/`, each
   with its source in the title block), listed in `circuits/bench.txt`. They needed eleven new
-  footprints in `footprints.json` (DIP-14 isn't used yet; it's there for stage 1's random circuits).
+  footprints in `footprints.json` (DIP-14 isn't used by any circuit yet).
 - **All of it, every step count.** `cargo run --release -- bench` runs the 36 runs (12 circuits x
   seeds 1, 2, 3, 20,000 steps, random start) several at a time, one per core: about 21s on the
   maintainer's 18-core Mac, so no subset or smaller step count is needed. The costs come out the

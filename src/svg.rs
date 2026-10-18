@@ -53,12 +53,17 @@ const STYLE: &str = "
   .warn { font-size: 11px; fill: #b00020; }
 ";
 
-/// What to draw a part as: DIYLC's name for it, or "module" for a DIYLC group parts can go under.
+/// What to draw a part as: DIYLC's name for it, or "module" for a part parts can go under (a DIYLC
+/// group, or a footprint with "module": true).
 fn shape(comp: &Component) -> &str {
+    let full = comp.body.len() == (comp.w * comp.h) as usize;
     match &comp.diylc {
         Some(p) => &p.part,
         // A group with nothing free under it (say, a header and its label) is drawn like a header.
-        None if comp.footprint == "DIYLC:module" && comp.body.len() == (comp.w * comp.h) as usize => "PinHeader",
+        None if comp.footprint == "DIYLC:module" && full => "PinHeader",
+        // A footprints.json module. (A DIYLC part drawn at an angle only takes its legs too, but it's
+        // still drawn as itself, below.)
+        None if !full && !comp.footprint.starts_with("DIYLC:") => "module",
         None => comp.footprint.strip_prefix("DIYLC:").unwrap_or(""),
     }
 }
@@ -292,15 +297,18 @@ pub fn draw(layout: &Layout, side: Side) -> String {
         // nothing): grouped by header ("ESP32C6-L.5v" is on ESP32C6-L), each header boxed and
         // named. A row of pins has its names turned to fit.
         if pins.len() > 2 || matches!(shape(comp), "PinHeader" | "module") {
-            let mut groups: Vec<(&str, Vec<usize>)> = Vec::new();
+            // A module from footprints.json has plain pin numbers, no header names: its headers are
+            // the columns of its footprint, each named after the part.
+            let unnamed_module = shape(comp) == "module" && comp.pins.iter().all(|pin| split_pin(&pin.name).0.is_empty());
+            let mut groups: Vec<(String, &str, Vec<usize>)> = Vec::new(); // (key, name, pins)
             for (pi, pin) in comp.pins.iter().enumerate() {
-                let (group, _) = split_pin(&pin.name);
-                match groups.iter_mut().find(|(g, _)| *g == group) {
-                    Some((_, members)) => members.push(pi),
-                    None => groups.push((group, vec![pi])),
+                let (key, group) = if unnamed_module { (format!("column {}", pin.at.0), "") } else { (split_pin(&pin.name).0.to_string(), split_pin(&pin.name).0) };
+                match groups.iter_mut().find(|(k, _, _)| *k == key) {
+                    Some((_, _, members)) => members.push(pi),
+                    None => groups.push((key, group, vec![pi])),
                 }
             }
-            for (group, members) in groups {
+            for (_, group, members) in groups {
                 let holes: Vec<Point> = members.iter().map(|&pi| pins[pi]).collect();
                 let in_a_row = holes.len() > 1 && holes.iter().all(|p| p.1 == holes[0].1);
                 for (&pi, &p) in members.iter().zip(&holes) {
