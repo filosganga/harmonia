@@ -178,8 +178,8 @@ const DIAGONAL: u32 = 14;
 /// `diagonal`'s place in board::FEATURES: change it if a measurement goes in before it.)
 const DIAGONAL_EXTRA: u32 = (crate::board::WEIGHTS[2] * 10.0) as u32;
 /// What a trace pays for each right angle's worth of bending (see `bend`), except at a pin, where
-/// it starts anyway.
-const TURN: u32 = 10;
+/// it starts anyway: the score's `turns` weight times ten (1 is its place in board::FEATURES).
+const TURN: u32 = (crate::board::WEIGHTS[1] * 10.0) as u32;
 /// How hard each turn is to bend in copper wire, counted in right angles, which are the easiest.
 /// A gentle 45° turn, onto or off a diagonal, is harder to bend so it lands on the right hole, and
 /// a sharp 135° turn harder still.
@@ -230,11 +230,11 @@ const AHEAD: [[u32; HEADINGS]; HEADINGS] = {
     }
     table
 };
-/// Each hole of a jumper or solder-side wire costs twice a hole of trace. What each wire costs on
-/// top of its length (the "jumpers" and "bottom" weights) doesn't change the router's choice: it
-/// takes a jumper whenever one fits and a solder-side wire only when none does, and compares wires
-/// of the same side by length.
-const JUMPER_PER_HOLE: f64 = 20.0;
+/// What each hole of a jumper or solder-side wire costs: the score's `jumper_len` weight times ten
+/// (5 is its place in board::FEATURES). What each wire costs on top of its length (the "jumpers"
+/// and "bottom" weights) doesn't change the router's choice: it takes a jumper whenever one fits
+/// and a solder-side wire only when none does, and compares wires of the same side by length.
+const JUMPER_PER_HOLE: f64 = crate::board::WEIGHTS[5] * 10.0;
 /// The longest jumper or solder-side wire the router tries, in holes.
 const MAX_JUMP: i32 = 10;
 
