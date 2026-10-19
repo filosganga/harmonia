@@ -5,7 +5,7 @@
 //! rotation (0..3, in 90 degree steps).
 
 use rand::Rng;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt::Write;
 
 pub type Point = (i32, i32);
@@ -254,7 +254,8 @@ pub fn measure_routed(c: &Circuit, placement: &[Place], g: &Geometry, routing: &
     let on_keepouts: f64 = if soft.is_empty() {
         0.0
     } else {
-        let mut covered: HashSet<Point> = g.bodies.iter().flatten().filter(|p| soft.contains_key(p)).copied().collect();
+        // In a fixed order (a BTreeSet), so the weights add up the same way every run.
+        let mut covered: BTreeSet<Point> = g.bodies.iter().flatten().filter(|p| soft.contains_key(p)).copied().collect();
         covered.extend(routing.copper_holes().into_iter().filter(|p| soft.contains_key(p)));
         covered.iter().map(|p| soft[p]).sum()
     };

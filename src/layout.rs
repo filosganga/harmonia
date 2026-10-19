@@ -67,6 +67,24 @@ pub struct Made {
     pub case: usize,
     pub cases: usize,
     pub choices: Vec<String>,
+    /// The command that makes this layout again, like `cargo run --release -- place
+    /// circuits/cat_feeder.diy --seed 1 --steps 20000`: the same with the same code (`version`)
+    /// and the same circuit and board file. Empty in a file saved before it was kept.
+    #[serde(default)]
+    pub command: String,
+    /// Which program made it: its version and commit, like "harmonia 0.1.0, commit 73bf7c9".
+    #[serde(default)]
+    pub version: String,
+}
+
+impl Made {
+    /// One line for the drawings: the seed, and how to make the layout again.
+    pub fn again(&self) -> String {
+        match self.command.as_str() {
+            "" => format!("seed {}, {} steps", self.seed, self.steps),
+            command => format!("seed {}: to make it again, {command} ({})", self.seed, self.version),
+        }
+    }
 }
 
 /// A finished board, in memory: everything the drawings need.

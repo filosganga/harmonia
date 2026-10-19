@@ -32,7 +32,13 @@ inside its folder, which also holds `footprints.json` and the example circuits: 
 `./harmonia place circuits/cat_feeder.diy`, and so on, the same commands without `cargo run --release --`.
 
 Each `place` run prints the board as text (when the board file's `one-of`s make cases, first a line
-for each case and which was best) and writes, in `out/` (named `rules` or `net` after the judge):
+for each case and which was best), then the seed and the command that makes the same layout again,
+with the program's version and commit (`cargo run --release -- place circuits/cat_feeder.diy --seed 1
+--steps 20000`). Every output says it too: the pictures under their title, KiCad in the title block,
+DIYLC in the project's description, the layout file in `made`. The same seed, steps, circuit, board
+file and code always make the same layout, byte for byte. A changed board file (a weight tuned) or
+code makes another one, so keep a copy of the board file with a layout you like. `train` and `evolve`
+print their seed and command the same way. `place` writes, in `out/` (named `rules` or `net` after the judge):
 
 - `rules.layout.json`: the finished board as one plain file (below). The two pictures, the KiCad
   board and the DIYLC project are all drawn from it, and so is the result in the html.
@@ -58,7 +64,8 @@ file of another version is refused, with a message):
 
 - **made**: how it was made: the circuit file, the board file, the judge, where the placer started
   (`random` or `sketch`), the seed, the steps, and which case of the board file's rules
-  won (counted from 1, out of how many, and the option it took in each one-of). And a **title**, the
+  won (counted from 1, out of how many, and the option it took in each one-of); the **command**
+  that makes it again and the program's **version** and commit. And a **title**, the
   one the pictures show.
 - **board**: its width and height in holes, and the keep-outs (name, from, to, and a soft one's weight).
 - **power** and **ground**: the two net names.
@@ -254,6 +261,7 @@ text board. Pins are named like the `nets` command prints them.
 | `circuits/bench.txt` | The benchmark set: the circuits `bench` places. Never used to train a network. |
 | `circuits/bench/` | Ten classic hobby circuits for the benchmark (a 7805 supply, a transistor flasher, an LM386 amp, a 555 + 4017 LED chaser, ...), written as KiCad netlists after datasheet applications and well-known designs, each with a board file (its size, power, ground, and the connectors on edges). |
 | `footprints.json` | Footprint name → size in holes and where each pad is. |
+| `build.rs` | Runs before compiling: tells the program the git commit it's built from, for the "make it again" line on every output. |
 | `dev/kicad_footprint.py` | A dev tool (Python, not needed to run the program): drafts a `footprints.json` entry from a KiCad footprint file. |
 | `src/sexpr.rs` | Reads KiCad's bracket format, `(comp (ref "R1") ...)`, into a tree. |
 | `src/netlist.rs` | Turns a KiCad netlist plus `footprints.json` into the circuit the placer works on. |
@@ -450,7 +458,8 @@ benchmark before and after it and compare the layouts, not the old numbers.
   only what a move changes, or placing the cases at the same time, would make it quicker; neither is
   built.
 - **Layouts depend on the seed.** On the cat feeder, different seeds land on quite different layouts
-  and costs. Try more `--steps` and two or three `--seed`s, and compare the costs.
+  and costs. Try more `--steps` and two or three `--seed`s, and compare the costs. Each output names
+  its seed, so a layout you like can be made again (with the same code and board file).
 - **The router is greedy.** It routes one run at a time, shortest first, and never undoes one. A
   different order can sometimes avoid a jumper it needed. A connection gets at most one wire; if that's
   not enough, the pin is left unrouted (very expensive, so the placer finds another layout).

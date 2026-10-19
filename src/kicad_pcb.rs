@@ -40,6 +40,8 @@ pub fn write(layout: &Layout) -> String {
     let mut s = String::new();
     s += "(kicad_pcb\n  (version 20241229)\n  (generator \"perfboard\")\n  (generator_version \"0.1\")\n";
     s += "  (general (thickness 1.6))\n  (paper \"A4\")\n";
+    // The title block (File > Board Setup in KiCad): what it is, and how to make it again.
+    writeln!(s, "  (title_block (title {}) (comment 1 {}))", quote(&layout.title), quote(&layout.made.again())).unwrap();
     s += "  (layers\n    (0 \"F.Cu\" signal)\n    (2 \"B.Cu\" signal)\n    (5 \"F.SilkS\" user \"F.Silkscreen\")\n    (7 \"B.SilkS\" user \"B.Silkscreen\")\n    (1 \"F.Mask\" user)\n    (3 \"B.Mask\" user)\n    (25 \"Edge.Cuts\" user)\n    (31 \"F.CrtYd\" user \"F.Courtyard\")\n    (29 \"B.CrtYd\" user \"B.Courtyard\")\n    (35 \"F.Fab\" user)\n    (33 \"B.Fab\" user)\n  )\n";
     s += "  (setup (pad_to_mask_clearance 0))\n";
 
