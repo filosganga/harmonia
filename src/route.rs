@@ -33,7 +33,7 @@
 
 use crate::board::{Circuit, Geometry, Point};
 use std::cmp::Reverse;
-use std::collections::{BinaryHeap, HashMap, HashSet};
+use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet};
 
 /// Where the copper goes. Each entry is (run, from hole, to hole).
 #[derive(Default, Clone)]
@@ -103,8 +103,11 @@ impl Routing {
             }
         }
         // The shortest way along those links (Dijkstra): keep taking the closest hole not done
-        // yet, and see how far its neighbours are through it.
-        let mut best: HashMap<Point, f64> = HashMap::from([(from, 0.0)]);
+        // yet, and see how far its neighbours are through it. A BTreeMap, not a HashMap: its order
+        // is the same every run, so two holes equally close are taken in the same order, and the
+        // lengths are added up the same way (adding fractions in another order can change the last
+        // digit, and a placer comparing two equal costs could then go another way).
+        let mut best: BTreeMap<Point, f64> = BTreeMap::from([(from, 0.0)]);
         let mut done: HashSet<Point> = HashSet::new();
         loop {
             let closest = best.iter().filter(|(p, _)| !done.contains(*p)).min_by(|a, b| a.1.total_cmp(b.1));

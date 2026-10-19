@@ -119,6 +119,8 @@ pub fn write(layout: &Layout) -> String {
     let mut s = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\" ?>\n<project>\n");
     s += "<fileVersion><major>6</major><minor>6</minor><build>0</build></fileVersion>\n";
     writeln!(s, "<title>{}</title>\n<author>perfboard</author>", xml(title)).unwrap();
+    // DIYLC shows this in the project's settings: how the layout was made, to make it again.
+    writeln!(s, "<description>{}</description>", xml(&layout.made.again())).unwrap();
     // The page, in cm, with a little room around the board.
     writeln!(s, r#"<width value="{:.2}" unit="cm"/><height value="{:.2}" unit="cm"/>"#, (w + 3) as f64 * 0.254, (h + 3) as f64 * 0.254).unwrap();
     s += "<gridSpacing value=\"0.1\" unit=\"in\"/>\n<dotSpacing>1</dotSpacing>\n<components>\n";

@@ -357,6 +357,10 @@ pub fn draw(layout: &Layout, side: Side) -> String {
     for text in wrap(&format!("{title}, {side_name}"), 48) {
         line(&mut legend, &mut ly, &text, "legend-title");
     }
+    // How it was made, so a picture you like can be made again.
+    for text in wrap(&layout.made.again(), 60) {
+        line(&mut legend, &mut ly, &text, "note");
+    }
     if misplaced.is_empty() {
         line(&mut legend, &mut ly, &format!("score {:.0}/100, cost {:.1} (lower is better)", board::score(&m), board::cost(&m)), "legend");
         let measures: Vec<String> = board::FEATURES.iter().zip(m.0).map(|(k, v)| format!("{k} {v:.0}")).collect();

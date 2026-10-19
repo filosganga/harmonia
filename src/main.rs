@@ -97,8 +97,8 @@ fn main() {
     }
     let cases = &loaded.cases;
     match args.command.as_str() {
-        "train" => train(cases, args.seed),
-        "evolve" => evolve(cases, args.seed),
+        "train" => train(cases, args.seed, &again(&args, "train", &args.circuit)),
+        "evolve" => evolve(cases, args.seed, &again(&args, "evolve", &args.circuit)),
         "nets" => print_nets(cases),
         _ => place_cmd(cases, &args, loaded.sketch, loaded.board_file),
     }
@@ -412,6 +412,32 @@ fn print_nets(cases: &[Circuit]) {
     }
 }
 
+/// Which program this is, for the outputs: its version and the commit it was built from (build.rs).
+fn version() -> String {
+    format!("harmonia {}, commit {}", env!("CARGO_PKG_VERSION"), env!("HARMONIA_COMMIT"))
+}
+
+/// The command that runs `command` on the circuit at `path` again, with the flags in `args` that
+/// change what it makes. The steps only count for placing.
+fn again(args: &Args, command: &str, path: &str) -> String {
+    let mut out = format!("cargo run --release -- {command} {path} --seed {}", args.seed);
+    if command == "place" {
+        out += &format!(" --steps {}", args.steps);
+        if args.judge != "rules" {
+            out += &format!(" --judge {}", args.judge);
+        }
+    }
+    if let Some(b) = args.board {
+        out += &format!(" --board {}x{}", b.width, b.height);
+    }
+    for (flag, value) in [("--power", &args.power), ("--ground", &args.ground)] {
+        if let Some(v) = value {
+            out += &format!(" {flag} {v}");
+        }
+    }
+    out
+}
+
 /// How a layout was made, for its layout file: from `args`, the circuit at `path`, its board file,
 /// where the placer started, and which case `k` of `cases` won.
 fn made(args: &Args, path: &str, board_file: Option<String>, start: &str, cases: &[Circuit], k: usize) -> Made {
@@ -425,6 +451,9 @@ fn made(args: &Args, path: &str, board_file: Option<String>, start: &str, cases:
         case: k + 1,
         cases: cases.len(),
         choices: cases[k].constraints.choices.clone(),
+        // `check` places a sketch just as `place` does, so `place` makes its layouts again too.
+        command: again(args, "place", path),
+        version: version(),
     }
 }
 
@@ -460,13 +489,14 @@ fn place_cmd(cases: &[Circuit], args: &Args, sketch: Option<board::Placement>, b
     // The finished board, routed and measured once: the layout file, and every drawing made from it.
     let made = made(args, &args.circuit, board_file, start_name, cases, k);
     let layout = Layout::new(c.clone(), best, &label, made.clone());
+    let made = &layout.made;
     for problem in &layout.problems {
         println!("  !! {problem}");
     }
     let saved = format!("out/{}.layout.json", args.judge);
     std::fs::write(&saved, layout::to_json(&layout)).unwrap();
     // The start, for the page that shows it next to the result. It isn't in the layout file.
-    let start = Layout::new(c.clone(), start, start_label, made);
+    let start = Layout::new(c.clone(), start, start_label, made.clone());
     let path = format!("out/{}.html", args.judge);
     let html = format!(
         "<!doctype html><meta charset='utf-8'><title>Perfboard layout</title>\
@@ -476,7 +506,8 @@ fn place_cmd(cases: &[Circuit], args: &Args, sketch: Option<board::Placement>, b
     );
     std::fs::write(&path, html).unwrap();
     let [picture, solder, kicad, diy] = write_drawings(&layout, &format!("out/{}", args.judge));
-    println!("\nLayout: {saved} (`draw {saved}` draws it again)");
+    println!("\nSeed {}. To make this layout again: {} ({})", made.seed, made.command, made.version);
+    println!("Layout: {saved} (`draw {saved}` draws it again)");
     println!("Pictures: {picture}, {solder} (turned over to solder), {path} (before and after)");
     println!("For KiCad: {kicad}   For DIYLC: {diy}   ({:.2}s)", t0.elapsed().as_secs_f64());
 }
@@ -502,7 +533,7 @@ fn draw_cmd(path: &str) {
     let text = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("can't read {path}: {e}"));
     let layout = layout::from_json(&text);
     let (m, made) = (&layout.measures, &layout.made);
-    println!("{path}: {}, from {} (seed {}, {} steps)", layout.title, made.circuit, made.seed, made.steps);
+    println!("{path}: {}, from {} ({})", layout.title, made.circuit, made.again());
     println!("  score {:.0}/100, cost {:.1}", board::score(m), board::cost(m));
     for problem in &layout.problems {
         println!("  !! {problem}");
@@ -548,7 +579,7 @@ fn pairs(boards: &[Measures]) -> Vec<(Vec<f64>, f64)> {
 /// 2. Ask the rules for each board's score: that's the "right answer".
 /// 3. Show the network each board many times, nudging every weight in the direction that makes it less wrong.
 /// 4. Test it on boards it has never seen.
-fn train(cases: &[Circuit], seed: u64) {
+fn train(cases: &[Circuit], seed: u64, again: &str) {
     let t0 = Instant::now();
     let mut rng = StdRng::seed_from_u64(seed);
     let (train, test) = make_examples(cases, &mut rng);
@@ -563,7 +594,7 @@ fn train(cases: &[Circuit], seed: u64) {
             println!("  round {epoch:3}: typical error {:5.1} points", 100.0 * loss.sqrt());
         }
     }
-    finish(&net, &test, t0);
+    finish(&net, &test, t0, seed, again);
 }
 
 /// The same job as `train`, done by evolution instead:
@@ -572,7 +603,7 @@ fn train(cases: &[Circuit], seed: u64) {
 /// 2. Make 19 children, each a copy of the parent with every weight changed a little at random.
 /// 3. Keep whichever of the 20 is least wrong on the example boards; it becomes the new parent.
 /// 4. Repeat. Changes get smaller towards the end, to fine-tune.
-fn evolve(cases: &[Circuit], seed: u64) {
+fn evolve(cases: &[Circuit], seed: u64, again: &str) {
     const CHILDREN: usize = 19;
     const GENERATIONS: usize = 1000;
     let t0 = Instant::now();
@@ -603,11 +634,12 @@ fn evolve(cases: &[Circuit], seed: u64) {
         }
     }
     println!("\nTried {} children; in {improved} of {GENERATIONS} generations the best child beat its parent.", GENERATIONS * CHILDREN);
-    finish(&parent, &test, t0);
+    finish(&parent, &test, t0, seed, again);
 }
 
-/// Test the trained network on boards it never saw, and save it for `place --judge net`.
-fn finish(net: &Net, test: &[Measures], t0: Instant) {
+/// Test the trained network on boards it never saw, and save it for `place --judge net`. `seed`
+/// and `again` say how to make the same network again.
+fn finish(net: &Net, test: &[Measures], t0: Instant, seed: u64, again: &str) {
     let mean_err = test.iter().map(|m| (net.predict(m) - board::score(m)).abs()).sum::<f64>() / test.len() as f64;
     println!("\nOn {} unseen boards the network is off by {mean_err:.1} points on average.", test.len());
     println!("A few of them:");
@@ -619,4 +651,5 @@ fn finish(net: &Net, test: &[Measures], t0: Instant) {
 
     net.save(MODEL);
     println!("\nSaved to {MODEL} in {:.2}s. Try: cargo run --release -- place --judge net", t0.elapsed().as_secs_f64());
+    println!("Seed {seed}. To make this network again: {again} ({})", version());
 }
