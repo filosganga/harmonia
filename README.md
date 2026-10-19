@@ -60,7 +60,7 @@ file of another version is refused, with a message):
   (`random` or `sketch`), the seed, the steps, and which case of the board file's rules
   won (counted from 1, out of how many, and the option it took in each one-of). And a **title**, the
   one the pictures show.
-- **board**: its width and height in holes, and the keep-outs (name, from, to).
+- **board**: its width and height in holes, and the keep-outs (name, from, to, and a soft one's weight).
 - **power** and **ground**: the two net names.
 - **parts**: each part's reference, value and footprint; `at` and `rot`, meaning what they mean in
   the board file's `fixed` rule; its `size` in holes before turning, whether it's `low`, the
@@ -77,7 +77,7 @@ file of another version is refused, with a message):
 - **score**: the score, the cost and the eleven measurements by name (below), and the `!!` **problems**.
 
 Not in it: the net colours (worked out from the nets), the start (only `rules.html` shows it), and
-the board file's rules about where parts may go, `near` and `close`.
+the board file's rules about where parts may go, `near` and `close`, and where a soft star's runs joined.
 
 `draw` reads a layout file and draws it again next to it: `draw out/rules.layout.json` writes
 `out/rules.svg`, `out/rules-solder.svg`, `out/rules.kicad_pcb` and `out/rules.diy`, the same files
@@ -119,7 +119,7 @@ your sketch ("Your sketch: score ...") and then fits everything onto the real bo
 the board file or `--board`, so the sketch can be drawn on a bigger board than the real one.
 
 - **Your sketch doesn't have to be allowed.** Parts drawn on top of each other, off the real board,
-  on a keep-out or under a module are moved, each to the nearest place where it fits, before the
+  on a keep-out (without a weight) or under a module are moved, each to the nearest place where it fits, before the
   placer starts (biggest parts first, so the small one moves). The run says what was wrong ("Your
   sketch: not allowed, so not scored: ..."), and the start in `rules.html` boxes those parts in red
   and isn't scored either.
@@ -168,7 +168,8 @@ Next to the netlist, a JSON file with the same name (`circuits/555_blinker.json`
         { "kind": "orientation", "part": "R3", "rot": 3 },
         { "kind": "within", "part": "R3", "from": [17, 0], "to": [17, 11] } ] } ] },
     { "kind": "keepout", "name": "M3 screw", "from": [16, 0], "to": [17, 1] },
-    { "kind": "near",    "name": "C2 by CTRL", "pins": ["C2.1", "U1.5"] },
+    { "kind": "edge",    "name": "D1 on the right, if it can", "part": "D1", "edge": "right", "weight": 0.01 },
+    { "kind": "near",    "name": "C2 by CTRL", "pins": ["C2.1", "U1.5"], "weight": 0.05 },
     { "kind": "close",   "pins": ["D1.2", "U1.3"] },
     { "kind": "star",    "at": "C1.2", "runs": [["U1.1", "C2.2"], ["D1.1"]] }
   ]
@@ -197,27 +198,47 @@ Next to the netlist, a JSON file with the same name (`circuits/555_blinker.json`
   The example says "R3 stands along the left or the right edge"; "a USB socket's side is on one of
   the board's edges" is a one-of of four all-ofs, each an orientation and a `within` strip as deep as
   the part. "One of these near rules" places each and keeps the cheaper.
-- **keepout**: holes no part may cover, from one corner to the other. Shown as `x` on the text board, a
-  grey box in the pictures and in DIYLC, and a "rule area" in KiCad, which keeps enforcing it while you edit.
+- **keepout**: holes no part may cover, from one corner to the other, and no copper either. Shown as `x` on the text board, a
+  grey box in the pictures and in DIYLC, and a "rule area" in KiCad, which keeps enforcing it while you
+  edit (a soft one's area allows everything, and only marks the place).
 - **near**: two pins of the same net should be joined by as little copper as possible, like a resistor
   guarding a GPIO or a decoupling capacitor by its chip. It's measured along the copper the router
   laid (traces, jumpers and wires), not in a straight line. On a star net, two pins in different
-  runs are only joined through the star point, so that's the way it's measured. A preference: it
-  costs per hole of copper.
+  runs are only joined through the star point (or a join, if the star has a weight), so that's the way it's measured. It costs per hole
+  of copper: without a `weight` (below), as if it had a weight of 1.
 - **close**: two pins of any nets should be as close together as possible, straight across the
   board. For a connection the board doesn't carry, like a wire from pads under a module to a header.
-  A preference, at the same cost per hole as near, and counted with it.
+  It costs per hole like near, is counted with it, and takes a `weight` too.
+- **weight**, on any rule: how much it matters, from 0 to 1. Left out, the rule is hard: the placer
+  never breaks it (below). With one, it may be broken, at a cost of the weight times a thousand for
+  each hole it's broken by. At 1 that's as much as two solder-side wires, so the placer trades any
+  corners, jumpers or crowding to keep it, and only three solder-side wires or an unrouted pin cost
+  more: nearly hard, but still a cost. Smaller weights trade against the wiring: 0.005 makes a hole
+  cost as much as a corner, 0.015 as much as a jumper, and 0 costs nothing. How a rule is broken:
+  - fixed, edge, orientation, within: by how many holes the part is away from where the rule wants
+    it (for within, how far its outline sticks out of the rectangle), and each quarter turn off counts
+    as one. With a weight the part may go anywhere, paying that.
+  - near and close: every hole between the two pins counts. Copper between two pins is only known
+    once the board is routed, so the placer can't keep them out of a layout the way it does the
+    others: left without a weight, they cost as at weight 1. Before weights they cost 4 a hole, a
+    weight of 0.004.
+  - keepout: each of its holes a part or copper covers.
+  - star: each time a run joins another run of the net away from the star point (see "How it routes").
+  - all-of, one-of: a weight here is the weight of every rule inside that has none of its own. A
+    one-of about where one part goes counts its least broken option.
+
+  The `rules` measurement adds it all up.
 - **star**: how the net of the `at` pin is wired. Every run starts at `at` and goes its own way, never
-  sharing copper with another run, so one part's current doesn't shift the voltage another part sees.
+  sharing copper with another run (unless the rule has a weight, see "How it routes"), so one part's current doesn't shift the voltage another part sees.
   Each run in `runs` joins its pins in a chain; any other pin of the net gets a run of its own, straight
   from `at`. A net can have one star rule.
 
-fixed, edge, orientation and within are hard limits. In each case, each part they're about gets the
-list of places (position and turn) that meet all its rules, while staying on the board and off the
-keep-outs. After every move the placer puts the part back on the nearest of them, keeping its turn if
+Without a weight, fixed, edge, orientation and within are hard limits. In each case, each part they're about gets the
+list of places (position and turn) that meet all its hard rules, while staying on the board and off the
+hard keep-outs. After every move the placer puts the part back on the nearest of them, keeping its turn if
 it can; now and then it also jumps the part to any of them, so it can get across to another option
 of a one-of, like the other edge. A case where some part has no such place is left out (the run says why); if every case is,
-the program stops. A keep-out is a hard limit for every part: no part ever covers one (see what's
+the program stops. A keep-out without a weight is a hard limit for every part: no part ever covers one (see what's
 allowed, in "How a board is judged" below). Coordinates are holes, counted like the numbers around the
 text board. Pins are named like the `nets` command prints them.
 
@@ -251,7 +272,7 @@ text board. Pins are named like the `nets` command prints them.
 ## How a board is judged
 
 First, whether it's **allowed**: whether it can be built at all. A layout isn't allowed if two parts
-take the same hole, a part hangs off the board (a module's board too), a part sits on a keep-out, or
+take the same hole, a part hangs off the board (a module's board too), a part sits on a keep-out (one without a weight), or
 a part that isn't low sits under a module's board (`board::clashes`). That's a yes-or-no check, not
 a cost: the placer never makes a layout that isn't allowed, so the score below only ever compares
 layouts that can be built.
@@ -297,12 +318,14 @@ Then how good it is. `src/board.rs` measures eleven things (weights in `WEIGHTS`
   one on a net and one unused) counts twice. So parts get room around them and spread over the board. Beyond that, being far
   apart earns nothing, and wire length keeps them from drifting. If you want a smaller layout, give
   it a smaller board.
-- **near**: for each `near` rule in the board file, the length of copper between its two pins, as
-  routed; and for each `close` rule, the distance between its two pins, straight across the board.
+- **rules**: how much the board file's rules with a weight are broken, each times its weight
+  ("The board file" says how each kind is broken), a thousand per hole of that. That includes, for each `near` rule, the length of copper between its two pins, as
+  routed, and for each `close` rule, the distance between its two pins, straight across the board,
+  at weight 1 if left out: a rule at 1 outweighs everything but an unrouted pin.
 
 The weighted sum is the *cost*; the score is `100 * exp(-cost / 150)`, so 100 is perfect.
-The placer itself compares costs, not scores: for a big circuit the score is low and flat (a cost
-of 700, a good cat feeder, scores under 1), so comparing scores would make it accept almost any bad move. Scores are
+The placer itself compares costs, not scores: for a big circuit the score is low and flat (the cat
+feeder's wiring alone costs about 700, which scores under 1), so comparing scores would make it accept almost any bad move. Scores are
 for reading; for a big circuit they're low even when the layout is good.
 
 ### How it routes
@@ -310,11 +333,17 @@ for reading; for a big circuit they're low even when the layout is good.
 Every placer step routes the whole board (`src/route.rs`), so the placer sees which layouts need jumpers.
 
 Each net is one run, or one run per branch for a star net. Two runs never share copper or wire, even
-two branches of the same star net.
+two branches of the same star net, unless its star rule has a weight: then a run may start from
+another run's copper instead of its own, a join, which costs the weight times a thousand. The router
+takes a join where it's cheaper than the run's own way, counting a jumper or a solder-side wire on
+that way at what the score charges (the `jumpers` and `bottom` weights).
+
+A soft keep-out (with a weight) is open to traces and wires, but each hole of it a trace steps into
+or a wire lies over costs the weight times a thousand, so the router goes round it unless that costs more.
 
 - A **copper trace** is on the solder side. It goes hole to neighbouring hole: across, down, or at 45°.
   It touches every hole it passes, so it can't pass a hole with another run's pin or trace, or a
-  keep-out, and two diagonals can't cross between four holes. It can run under parts, since it's on
+  hard keep-out, and two diagonals can't cross between four holes. It can run under parts, since it's on
   the other side. A right angle costs as much as five holes of trace, a 45° turn twice that and a
   135° turn three times (the `turns` weight), so the router takes a straight way over a zig-zag
   even when the zig-zag is a few holes shorter. A diagonal step pays three corners on top of its
@@ -327,13 +356,13 @@ two branches of the same star net.
   from one pin to another takes the same steps across and down whichever way it turns.
 - A **jumper** is a wire on the parts' side, used where traces can't get through: traces run up to a
   free hole, the jumper hops over, and traces carry on from where it lands. It goes across, down or at
-  45°, 2 to 10 holes long. It can't pass over a part, a pin or a keep-out (it can go under a module's
+  45°, 2 to 10 holes long. It can't pass over a part, a pin or a hard keep-out (it can go under a module's
   board, like low parts), or over or across another run's jumper. A jumper is like a part: its legs
   need holes of their own, never a pin's. It may lie over a hole where a solder-side wire ends:
   hopping over things is what it's for.
 - A **wire on the solder side** is the last resort: it's only used when no jumper fits, however long
   the traces to a jumper would be. Same shape and legs, but nothing sits on that side except copper,
-  so it can pass under parts and over traces and pins (it's insulated). It still keeps off keep-outs
+  so it can pass under parts and over traces and pins (it's insulated). It still keeps off hard keep-outs
   and other runs' solder-side wires.
 
 Runs are routed one at a time, shortest first. Each run grows like a tree: from what's joined so far,
@@ -439,7 +468,9 @@ benchmark before and after it and compare the layouts, not the old numbers.
 - **Angled parts from DIYLC.** A two-legged part drawn at an angle only takes its two leg holes, so the
   placer treats it like a module: low parts may go under it, and jumpers may pass over it.
 - **Scores of big circuits are low.** The score's scale (`SCORE_SCALE`) was set on the 555, under
-  cheaper corners; the cat-feeder board scores under 1 even when it's good. Compare costs between layouts of the same circuit, not across circuits.
+  cheaper corners; the cat-feeder board scores under 1 even when it's good, and a board file with a
+  near or close rule at weight 1 always scores 0 (each costs a thousand a hole, and copper between
+  two pins is at least a hole). Compare costs between layouts of the same circuit, not across circuits.
 
 ## Principles
 
@@ -448,10 +479,11 @@ benchmark before and after it and compare the layouts, not the old numbers.
 - **Hard rules, preferences, taste.** Facts about the hardware and limits of a board (fixed parts,
   edges, keep-outs, collisions) are hard rules the placer enforces, never learned: the placement
   rules and what's allowed ("How a board is judged"). What one board wants goes in its board file:
-  `near` and `close` with a fixed cost per hole, `star` as how its nets are split into runs. The network is for
+  every rule there is hard unless a `weight` (0-1) softens it into a cost (`near` and `close`, which
+  can only be measured once routed, cost as at weight 1), and `star` says how its nets are split into runs. The network is for
   taste among layouts that are already allowed.
-- **Model settings are the author's job.** Hidden neurons, learning rates, generations and the rule
-  weights are constants in the code, not flags. Flags are for your problem: the circuit, the board,
+- **Model settings are the author's job.** Hidden neurons, learning rates, generations and the score's
+  weights (`WEIGHTS`) are constants in the code, not flags. Flags are for your problem: the circuit, the board,
   power and ground, the seed, how hard the placer tries.
 - **Plain code over clever code**, with comments that explain why in plain words.
 
@@ -479,9 +511,11 @@ It becomes useful when the "right answers" come from something the rules can't e
 
 In order:
 
-1. **A `rate` command**: show two layouts, you pick the better one, and the network learns your taste
+1. **Tune the rule weights** on real boards (the cat feeder first), then put the score's own
+   weights on the same 0-1 scale.
+2. **A `rate` command**: show two layouts, you pick the better one, and the network learns your taste
    from those picks ("Your taste" above). Then more circuits to learn from.
-2. **Faster routing**, if waits grow past an espresso (see Known limits).
+3. **Faster routing**, if waits grow past an espresso (see Known limits).
 
 A network that places parts was built and parked (on the branch `better-placing`); see
 [docs/plans/placing-network.md](docs/plans/placing-network.md).

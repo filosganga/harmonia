@@ -3,20 +3,27 @@
 //!
 //! A trace goes from a hole to a neighbouring one: across, down, or diagonally (45°). It touches
 //! every hole it passes, so it can't pass a hole that belongs to another run (another run's pin or
-//! trace, or a keep-out), and two diagonals can't cross between four holes. It may run under parts:
+//! trace, or a hard keep-out), and two diagonals can't cross between four holes. It may run under parts:
 //! it's on the other side of the board. (A run is a net, or one branch of a star net.)
 //!
 //! A jumper is a wire on the parts' side. It lies straight between two free holes, across, down or
-//! at 45°, up to 10 holes long, but never over a part, a pin or a keep-out, and never over or across
+//! at 45°, up to 10 holes long, but never over a part, a pin or a hard keep-out, and never over or across
 //! another run's jumper. It may pass under a module's board, like low parts. A trace carries on from
 //! where it lands.
 //!
 //! Where no jumper fits, the last resort is the same kind of wire on the solder side. Nothing sits
 //! there but copper, so it may pass under parts and over traces and pins (it's insulated); it still
-//! keeps off keep-outs and other runs' solder-side wires. It's only used when no jumper fits, and
+//! keeps off hard keep-outs and other runs' solder-side wires. It's only used when no jumper fits, and
 //! it costs a lot in the score, so the placer avoids it. A wire's leg needs a hole of its own,
 //! never a pin's: a pin walled in so that not even a wire fits is left `unrouted`, costing more
 //! than any wiring.
+//!
+//! A soft keep-out (one with a weight) takes copper, but each hole of it costs: the router pays
+//! that on every step of trace into it and every hole a wire lies over.
+//!
+//! A soft star net (a star rule with a weight) may break its rule: a run may join another run of
+//! its net away from the star point, at a price. The router takes a join when it's cheaper than
+//! the run's own way round, counting a jumper or a solder-side wire at what the score charges.
 //!
 //! Runs are routed one at a time, shortest first, and each one is grown like a tree: from the
 //! pins joined so far, find the cheapest way to the nearest pin not joined yet ("A*" search: try
@@ -41,6 +48,9 @@ pub struct Routing {
     /// the pin is walled in, so not even a wire fits (a wire's leg needs a hole of its own, never a
     /// pin's), or it's off the board. Only shown, never copper.
     pub unrouted: Vec<(usize, Point, Point)>,
+    /// Where a run of a soft star net joined another run of its net, away from the star point:
+    /// (run, the other run's hole it starts from). Its copper is in `traces`, as the run's own.
+    pub joins: Vec<(usize, Point)>,
 }
 
 impl Routing {
@@ -73,9 +83,16 @@ impl Routing {
         self.jumpers.iter().chain(&self.bottom).map(|&(_, a, b)| distance(a, b)).sum::<f64>() + 0.0
     }
 
+    /// Every hole with copper in it or a wire over it.
+    pub fn copper_holes(&self) -> HashSet<Point> {
+        let traces = self.traces.iter().flat_map(|&(_, a, b)| [a, b]);
+        let wires = self.jumpers.iter().chain(&self.bottom).flat_map(|&(_, a, b)| holes_between(a, b).chain([a, b]));
+        traces.chain(wires).collect()
+    }
+
     /// Length of copper (traces, jumpers and solder-side wires), in holes, between two holes the
     /// same net joins, going the way the router laid it. A star net's runs only meet at the star
-    /// point, so between two runs it goes through there.
+    /// point (unless they joined, see `joins`), so between two runs it goes through there.
     pub fn copper_between(&self, c: &Circuit, net: usize, from: Point, to: Point) -> f64 {
         // Every piece of copper of that net, as links between holes, both ways.
         let mut links: HashMap<Point, Vec<(Point, f64)>> = HashMap::new();
@@ -232,9 +249,18 @@ const AHEAD: [[u32; HEADINGS]; HEADINGS] = {
 };
 /// What each hole of a jumper or solder-side wire costs: the score's `jumper_len` weight times ten
 /// (5 is its place in board::FEATURES). What each wire costs on top of its length (the "jumpers"
-/// and "bottom" weights) doesn't change the router's choice: it takes a jumper whenever one fits
-/// and a solder-side wire only when none does, and compares wires of the same side by length.
+/// and "bottom" weights) doesn't change the router's choice between wires: it takes a jumper
+/// whenever one fits and a solder-side wire only when none does, and compares wires of the same
+/// side by length. Only a soft star's join is weighed against them (`JUMPER`, `SOLDER_WIRE`).
 const JUMPER_PER_HOLE: f64 = crate::board::WEIGHTS[5] * 10.0;
+/// What a jumper and a solder-side wire cost on top of their length: the score's `jumpers` and
+/// `bottom` weights times ten (4 and 6 in board::FEATURES). Only to weigh one against a soft star's
+/// join (see `connect`): among themselves the router takes a jumper whenever one fits.
+const JUMPER: u32 = (crate::board::WEIGHTS[4] * 10.0) as u32;
+const SOLDER_WIRE: u32 = (crate::board::WEIGHTS[6] * 10.0) as u32;
+/// What breaking a soft rule costs per hole (or join) at weight 1: the score's `rules` weight times
+/// ten (10 in board::FEATURES).
+const RULE: f64 = crate::board::WEIGHTS[10] * 10.0;
 /// The longest jumper or solder-side wire the router tries, in holes.
 const MAX_JUMP: i32 = 10;
 
@@ -284,8 +310,10 @@ struct Grid {
     pin: Vec<bool>,
     /// Holes under a part's body on the parts' side (not a module's: a jumper fits under its board).
     body: Vec<bool>,
-    /// Keep-out holes: no part, trace or wire.
+    /// Hard keep-out holes: no part, trace or wire.
     keepout: Vec<bool>,
+    /// What copper pays for each hole, on top of its usual cost: a soft keep-out's price.
+    extra: Vec<u32>,
     /// For each square of four holes (by its top-left hole): the run whose diagonal crosses it,
     /// and which diagonal (true = top-left to bottom-right).
     diag: Vec<Option<(usize, bool)>>,
@@ -354,6 +382,12 @@ impl Grid {
         !self.pin[i] && (self.owner[i] == Owner::Free || self.owner[i] == Owner::Run(run)) && self.passable(i, run, side)
     }
 
+    /// What a wire from `a` to `b` pays for the holes it lies over (see `extra`). Its legs pay as
+    /// the traces' ends.
+    fn wire_extra(&self, a: Point, b: Point) -> u32 {
+        holes_between(a, b).map(|p| self.extra[self.at(p)]).sum()
+    }
+
     /// Can a wire for `run` lie straight from `a` to `b` on `side`, without crossing another run's?
     fn clear(&self, a: Point, b: Point, run: usize, side: Side) -> bool {
         holes_between(a, b).all(|p| self.passable(self.at(p), run, side))
@@ -387,6 +421,7 @@ pub fn route(c: &Circuit, g: &Geometry) -> Routing {
         pin: vec![false; n],
         body: vec![false; n],
         keepout: vec![false; n],
+        extra: vec![0; n],
         diag: vec![None; n],
         wires: [Vec::new(), Vec::new()],
         wire_at: [vec![None; n], vec![None; n]],
@@ -403,10 +438,16 @@ pub fn route(c: &Circuit, g: &Geometry) -> Routing {
             }
         }
     }
-    // A keep-out (a screw hole, say) takes no copper either.
+    // A keep-out (a screw hole, say) takes no copper either; a soft one does, at its price.
     for &p in &c.constraints.keepout_holes {
         let i = grid.at(p);
         (grid.keepout[i], grid.owner[i]) = (true, Owner::Blocked);
+    }
+    // Not under a part, though: the part pays for that hole already, and the score counts it once.
+    let under_parts: HashSet<Point> = g.bodies.iter().flatten().copied().collect();
+    for (&p, &weight) in c.constraints.soft_keepout.iter().filter(|(p, _)| !under_parts.contains(p)) {
+        let i = grid.at(p);
+        grid.extra[i] = (RULE * weight).round() as u32;
     }
     // Every pin's hole belongs to its run; a pin on no run blocks its hole.
     for &p in g.pins.iter().flatten() {
@@ -454,17 +495,34 @@ pub fn route(c: &Circuit, g: &Geometry) -> Routing {
         // allowed has one (a sketch as you drew it); the placer never makes such a layout.
         out.unrouted.extend(off.into_iter().map(|p| (r, start, p)));
         let mut tree = vec![start];
+        // A soft star's weight, if this run is a branch of one.
+        let soft_star = c.constraints.stars.iter().find(|s| run.star.is_some() && s.net == run.net).and_then(|s| s.weight);
         while !remaining.is_empty() {
             // The pin nearest to what's joined so far.
             let (k, _) = remaining.iter().enumerate().min_by_key(|&(_, &p)| tree.iter().map(|&t| octile(t, p)).min().unwrap()).unwrap();
             let target = remaining.swap_remove(k);
-            let Some(path) = connect(&grid, &mut mem, &shapes, &tree, target, r, run.net) else {
-                // Walled in even for a wire on either side. A wire can't end on the pin (its leg
-                // needs a hole of its own), so the pin is left unrouted: very expensive, so the
-                // placer keeps away from layouts like this one.
-                let from = *tree.iter().min_by_key(|&&t| octile(t, target)).unwrap();
-                out.unrouted.push((r, from, target));
-                continue;
+            let own = connect(&grid, &mut mem, &shapes, &tree, target, r, run.net);
+            // A soft star's run may join another run of its net instead, if that's cheaper.
+            let joined = soft_star.and_then(|weight| {
+                let others = out.traces.iter().chain(&out.jumpers).chain(&out.bottom).filter(|&&(o, ..)| o != r && c.runs[o].net == run.net);
+                // Not the star point: starting there is the run's own way, not a join.
+                let others: Vec<Point> = others.flat_map(|&(_, a, b)| [a, b]).filter(|&p| p != start).collect();
+                join(&grid, &mut mem[0], &others, target, r, run.net).map(|(cost, path)| (cost + (RULE * weight).round() as u32, path))
+            });
+            let path = match (own, joined) {
+                (own, Some((cost, path))) if own.as_ref().is_none_or(|(own_cost, _)| cost < *own_cost) => {
+                    out.joins.push((r, path[0].0));
+                    path
+                }
+                (Some((_, path)), _) => path,
+                (None, _) => {
+                    // Walled in even for a wire on either side. A wire can't end on the pin (its leg
+                    // needs a hole of its own), so the pin is left unrouted: very expensive, so the
+                    // placer keeps away from layouts like this one.
+                    let from = *tree.iter().min_by_key(|&&t| octile(t, target)).unwrap();
+                    out.unrouted.push((r, from, target));
+                    continue;
+                }
             };
             for (a, b, step) in path {
                 if let Step::Wire(side) = step {
@@ -601,8 +659,8 @@ fn spread(grid: &Grid, mem: &mut Scratch, from: &[Point], towards: Option<Point>
             let diagonal = dx != 0 && dy != 0;
             if grid.on_board(q) && grid.open(q, run, net) && (!diagonal || grid.diagonal_free(p, q, run)) {
                 let turn = if heading == START || grid.pin[i] { 0 } else { bend(DIRS[heading], DIRS[k]) * TURN };
-                let c = so_far + if diagonal { DIAGONAL + DIAGONAL_EXTRA } else { STRAIGHT } + turn;
                 let j = grid.at(q);
+                let c = so_far + if diagonal { DIAGONAL + DIAGONAL_EXTRA } else { STRAIGHT } + turn + grid.extra[j];
                 let t = j * HEADINGS + k;
                 let beaten = popped[j] == round && (grid.pin[j] || c >= cost[first[j]] + AHEAD[first[j] % HEADINGS][k] * TURN);
                 if !beaten && (seen[t] != round || c < cost[t]) {
@@ -615,15 +673,24 @@ fn spread(grid: &Grid, mem: &mut Scratch, from: &[Point], towards: Option<Point>
     false
 }
 
-/// The cheapest way from any hole of `tree` to `target`, as a list of (from, to, what it is).
+/// A way from one hole to another: (from, to, what it is) for each step.
+type Path = Vec<(Point, Point, Step)>;
+
+/// Steps of trace along a list of neighbouring holes.
+fn steps(holes: Vec<Point>) -> Path {
+    holes.windows(2).map(|w| (w[0], w[1], Step::Trace)).collect()
+}
+
+/// The cheapest way from any hole of `tree` to `target`, as a list of (from, to, what it is), and
+/// what it costs (in the search's tenths, a wire's own price included: `JUMPER`, `SOLDER_WIRE`).
 /// Traces only if they get through; otherwise traces up to one wire and on from where it lands:
 /// a jumper on top whenever one fits, however long the traces to it, and a solder-side wire only
 /// when none does. None if no wire fits on either side.
-fn connect(grid: &Grid, mem: &mut [Scratch; 2], shapes: &[(Point, u32)], tree: &[Point], target: Point, run: usize, net: usize) -> Option<Vec<(Point, Point, Step)>> {
-    let steps = |holes: Vec<Point>| holes.windows(2).map(|w| (w[0], w[1], Step::Trace)).collect::<Vec<_>>();
+fn connect(grid: &Grid, mem: &mut [Scratch; 2], shapes: &[(Point, u32)], tree: &[Point], target: Point, run: usize, net: usize) -> Option<(u32, Path)> {
     let [near, far] = mem;
     if spread(grid, near, tree, Some(target), run, net, |p, _| p == target) {
-        return Some(steps(near.path_to(grid, grid.at(target))));
+        let i = grid.at(target);
+        return Some((near.reached(i).unwrap(), steps(near.path_to(grid, i))));
     }
     // `near` now knows every hole traces can reach from the tree. Spread from the target too, and
     // from each hole it reaches try a wire back to one of those, shortest first, keeping the best
@@ -649,7 +716,7 @@ fn connect(grid: &Grid, mem: &mut [Scratch; 2], shapes: &[(Point, u32)], tree: &
                 }
                 let a = grid.at(pa);
                 if let Some(to_a) = near.reached(a).filter(|_| grid.leg(pa, run, side)) {
-                    let total = to_a + length + from_b;
+                    let total = to_a + length + from_b + grid.wire_extra(pa, pb);
                     if !beaten(best[side as usize], total) && grid.clear(pa, pb, run, side) {
                         best[side as usize] = Some((total, a, grid.at(pb)));
                     }
@@ -658,7 +725,7 @@ fn connect(grid: &Grid, mem: &mut [Scratch; 2], shapes: &[(Point, u32)], tree: &
         }
         false
     });
-    let (side, (_, a, b)) = match best {
+    let (side, (cost, a, b)) = match best {
         [Some(top), _] => (Side::Top, top),
         [None, Some(bottom)] => (Side::Bottom, bottom),
         [None, None] => return None,
@@ -668,5 +735,16 @@ fn connect(grid: &Grid, mem: &mut [Scratch; 2], shapes: &[(Point, u32)], tree: &
     let mut path = steps(near.path_to(grid, a));
     path.push((grid.hole(a), grid.hole(b), Step::Wire(side)));
     path.extend(steps(back));
-    Some(path)
+    Some((cost + if side == Side::Top { JUMPER } else { SOLDER_WIRE }, path))
+}
+
+/// For a run of a soft star net: the cheapest way in traces from any hole of `others` (the copper
+/// of the net's other runs) to `target`, and its cost, without the join's own price. None if
+/// traces don't get through, or there's no other copper yet.
+fn join(grid: &Grid, mem: &mut Scratch, others: &[Point], target: Point, run: usize, net: usize) -> Option<(u32, Path)> {
+    if others.is_empty() || !spread(grid, mem, others, Some(target), run, net, |p, _| p == target) {
+        return None;
+    }
+    let i = grid.at(target);
+    Some((mem.reached(i).unwrap(), steps(mem.path_to(grid, i))))
 }

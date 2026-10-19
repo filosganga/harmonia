@@ -43,7 +43,7 @@ pub fn anneal(
     let movable: Vec<usize> = (0..c.components.len()).filter(|&i| c.constraints.allowed[i].as_ref().is_none_or(|a| a.len() > 1)).collect();
     let mut cur = start;
     // Compare boards by cost, not by the 0-100 score: the score flattens out for big circuits (at
-    // cost 700 a much worse move barely changes it), which would make the placer accept anything.
+    // cost 700, the cat feeder's wiring, a much worse move barely changes it), which would make the placer accept anything.
     let cost_of = |p: &Placement| cost(&measure(c, p));
     let mut cur_s = cost_of(&cur);
     let (mut best, mut best_s) = (cur.clone(), cur_s);
