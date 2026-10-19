@@ -44,8 +44,9 @@ A KiCad netlist names each part's footprint but not where its legs are, so every
 uses needs an entry in `footprints.json`. When one is missing, `place` stops with "R5 uses footprint
 X, which isn't in the built-in footprints.json yet". The repo's `footprints.json` is built into the
 program: `cargo run` rebuilds it by itself, an installed `harmonia` needs `cargo install --path .`
-again. A part only one project uses can go in a `footprints.json` next to that netlist instead,
-which adds entries (or replaces ones with the same name) for circuits in that folder. (DIYLC sketches don't need entries: their parts come from
+again. Outside the repo, your own parts go in `~/.config/harmonia/footprints.json` (every circuit)
+or a `footprints.json` next to a netlist (that folder's circuits); both add entries or replace ones
+with the same name (the more local wins, with a note when it differs). Add a part here when everyone should have it. (DIYLC sketches don't need entries: their parts come from
 DIYLC. For a DIYLC part the reader refuses, see `.claude/skills/perfboard-diylc-part`.)
 
 1. **The name** is the footprint's name after the `:`, exactly as the netlist writes it:

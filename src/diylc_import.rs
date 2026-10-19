@@ -285,6 +285,7 @@ fn components(path: &str, root: &Node, parts: &[Drawn], decorations: &HashMap<St
             body: body.into_iter().map(local).collect(),
             source: Some(Source { xml, group, origin: (x0, y0) }),
             low: single && is_low(&first.class),
+            footprint_from: None,
         });
         places.push((x0, y0));
     };

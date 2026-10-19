@@ -9,7 +9,7 @@
 //!     cargo run --release -- check sketches/      # place, write and re-read every .diy: same connections?
 //!     cargo run --release -- draw out/rules.layout.json  # draw a saved layout again, without placing it
 //!     cargo run --release -- bench                # the benchmark: place a fixed set of circuits, record the costs
-//!     cargo run --release -- footprints           # the footprints a netlist can use (with a my_circuit.net: and those next to it)
+//!     cargo run --release -- footprints           # the footprints a netlist can use (built in, yours, and next to a my_circuit.net)
 //!
 //! Installed (`cargo install --path .`), `harmonia place my_circuit.net --out my_folder` is the same.
 
@@ -64,7 +64,8 @@ harmonia: places parts on a perfboard, routes the copper, and draws it.
 
   harmonia place <circuit>       place and route a KiCad netlist (.net) or a DIYLC sketch (.diy)
   harmonia nets <circuit>        list the parts and nets it understood
-  harmonia footprints [<circuit>] the parts it knows (with a circuit: and a footprints.json next to it)
+  harmonia footprints [<circuit>] the parts it knows: built in, yours (~/.config/harmonia/footprints.json),
+                                 and with a circuit, a footprints.json next to it
   harmonia draw <x.layout.json>  draw a saved layout again
   harmonia check <file or folder of .diy>  place, write and read back: same connections?
   harmonia train | evolve | bench  the network and the benchmark (from the repo)
@@ -181,6 +182,7 @@ fn load(path: &str, args: &Args) -> Loaded {
         board: args.board.or(from_file).unwrap_or(BoardSize { width: 18, height: 12 }),
         power: args.power.clone().or(board_file.power.clone()),
         ground: args.ground.clone().or(board_file.ground.clone()),
+        user_footprints: args.command != "bench",
     };
     let (circuit, sketch) = if path.ends_with(".diy") {
         let (c, s) = diylc_import::load(path, opts);
@@ -521,6 +523,12 @@ fn made(args: &Args, path: &str, board_file: Option<String>, start: &str, cases:
         // `check` places a sketch just as `place` does, so `place` makes its layouts again too.
         command: again(args, "place", path),
         version: version(),
+        footprints: {
+            let mut from: Vec<String> = cases[k].components.iter().filter_map(|c| c.footprint_from.clone()).collect();
+            from.sort();
+            from.dedup();
+            from
+        },
     }
 }
 
@@ -574,6 +582,9 @@ fn place_cmd(cases: &[Circuit], args: &Args, sketch: Option<board::Placement>, b
     std::fs::write(&path, html).unwrap();
     let [picture, solder, kicad, diy] = write_drawings(&layout, &format!("{}/{}", args.out, args.judge));
     println!("\nSeed {}. To make this layout again: {} ({})", made.seed, made.command, made.version);
+    for footprint in &made.footprints {
+        println!("  It also needs {footprint}.");
+    }
     println!("Layout: {saved} (`draw {saved}` draws it again)");
     println!("Pictures: {picture}, {solder} (turned over to solder), {path} (before and after)");
     println!("For KiCad: {kicad}   For DIYLC: {diy}   ({:.2}s)", t0.elapsed().as_secs_f64());
