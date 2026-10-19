@@ -2,7 +2,7 @@
   "board": "20x14",
   "power": "+5V",
   "ground": "GND",
-  "constraints": [
+  "rules": [
     {
       "kind": "edge",
       "part": "J1",

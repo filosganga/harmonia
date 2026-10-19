@@ -7,7 +7,7 @@ description: Procedure for adding or changing a rule in the perfboard board file
 
 ## First
 
-- Read `TODO.md`: the maintainer writes there how they want the board file to grow. Every rule is an entry of the `constraints` list with a `kind` and an optional
+- Read `TODO.md`: the maintainer writes there how they want the board file to grow. Every rule is an entry of the board file's `rules` list (or of an all-of's or one-of's `rules`) with a `kind` and an optional
   `name`; follow that format or ask, don't invent a parallel one.
 - Decide what kind of rule it is (README "Principles"). This decides where the code goes:
 

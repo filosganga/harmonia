@@ -2,7 +2,7 @@
   "board": "24x18",
   "power": "5v",
   "ground": "GND",
-  "constraints": [
+  "rules": [
     {
       "kind": "near",
       "name": "R1 guards GPIO2",

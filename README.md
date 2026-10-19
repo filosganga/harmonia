@@ -155,7 +155,7 @@ Next to the netlist, a JSON file with the same name (`circuits/555_blinker.json`
 {
   "board": "18x12",
   "power": "+5V", "ground": "GND",
-  "constraints": [
+  "rules": [
     { "kind": "fixed",       "part": "U1", "at": [6, 3], "rot": 0 },
     { "kind": "edge",        "part": "J1", "edge": "left" },
     { "kind": "orientation", "part": "C1", "rot": 1 },
@@ -176,7 +176,7 @@ Next to the netlist, a JSON file with the same name (`circuits/555_blinker.json`
 ```
 
 - **board / power / ground**: the same as the flags. A flag still wins, for a quick experiment.
-- **constraints**: your rules, in any order. Each says its `kind`, and may have a `name`: messages
+- **rules**: your rules, in any order, and all of them hold (like an `all-of`, below). Each says its `kind`, and may have a `name`: messages
   about the rule use it, and a keep-out's is written on it in the pictures and DIYLC (in KiCad it
   names the rule area).
 - **fixed**: the part goes exactly there, and the placer never moves it. `at` is the top-left hole of the
