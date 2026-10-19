@@ -401,6 +401,17 @@ pub fn clash_words(c: &Circuit, clashes: &[Clash]) -> Vec<String> {
         .collect()
 }
 
+/// A measurement as the report and the pictures show it: whole numbers, except `rules`, which is
+/// weighted (0.004 of a rule broken still costs 4) and so keeps up to three decimals.
+pub fn shown(name: &str, v: f64) -> String {
+    if name == "rules" {
+        let s = format!("{v:.3}");
+        s.trim_end_matches('0').trim_end_matches('.').to_string()
+    } else {
+        format!("{v:.0}")
+    }
+}
+
 pub fn cost(m: &Measures) -> f64 {
     m.0.iter().zip(WEIGHTS).map(|(v, w)| v * w).sum()
 }
@@ -418,7 +429,7 @@ pub fn report(c: &Circuit, placement: &[Place], title: &str) -> String {
         return format!("{title}: not allowed, so not scored: {}", clash_words(c, &wrong).join("; "));
     }
     let m = measure(c, placement);
-    let parts: Vec<String> = FEATURES.iter().zip(m.0).map(|(k, v)| format!("{k}={v:.0}")).collect();
+    let parts: Vec<String> = FEATURES.iter().zip(m.0).map(|(k, v)| format!("{k}={}", shown(k, v))).collect();
     format!("{title}: score {:.0}/100  (cost {:.1}: {})", score(&m), cost(&m), parts.join(", "))
 }
 

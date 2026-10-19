@@ -363,7 +363,7 @@ pub fn draw(layout: &Layout, side: Side) -> String {
     }
     if misplaced.is_empty() {
         line(&mut legend, &mut ly, &format!("score {:.0}/100, cost {:.1} (lower is better)", board::score(&m), board::cost(&m)), "legend");
-        let measures: Vec<String> = board::FEATURES.iter().zip(m.0).map(|(k, v)| format!("{k} {v:.0}")).collect();
+        let measures: Vec<String> = board::FEATURES.iter().zip(m.0).map(|(k, v)| format!("{k} {}", board::shown(k, v))).collect();
         // Wrapped too: eleven measurements don't fit on one line beside the board.
         for text in wrap(&measures.join(" · "), 60) {
             line(&mut legend, &mut ly, &text, "note");

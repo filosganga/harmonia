@@ -9,6 +9,9 @@
 //!     cargo run --release -- check sketches/      # place, write and re-read every .diy: same connections?
 //!     cargo run --release -- draw out/rules.layout.json  # draw a saved layout again, without placing it
 //!     cargo run --release -- bench                # the benchmark: place a fixed set of circuits, record the costs
+//!     cargo run --release -- footprints           # the footprints a netlist can use (with a my_circuit.net: and those next to it)
+//!
+//! Installed (`cargo install --path .`), `harmonia place my_circuit.net --out my_folder` is the same.
 
 mod bench;
 mod board;
@@ -31,7 +34,12 @@ use svg::Side;
 use rand::{Rng, SeedableRng, rngs::StdRng, seq::SliceRandom};
 use std::time::Instant;
 
-const MODEL: &str = "out/model.json";
+/// Where the outputs go, unless `--out` says otherwise.
+const OUT: &str = "out";
+/// The trained network, in the output folder.
+fn model_path(out: &str) -> String {
+    format!("{out}/model.json")
+}
 /// How hard the placer tries, unless `--steps` says otherwise. `bench` always uses it.
 const DEFAULT_STEPS: usize = 20_000;
 
@@ -44,7 +52,33 @@ struct Args {
     board: Option<BoardSize>,
     power: Option<String>,
     ground: Option<String>,
+    /// The folder the outputs go in.
+    out: String,
+    /// The board file to use instead of the one next to the circuit.
+    board_file: Option<String>,
 }
+
+/// What `--help` (or no arguments at all) prints.
+const USAGE: &str = "\
+harmonia: places parts on a perfboard, routes the copper, and draws it.
+
+  harmonia place <circuit>       place and route a KiCad netlist (.net) or a DIYLC sketch (.diy)
+  harmonia nets <circuit>        list the parts and nets it understood
+  harmonia footprints [<circuit>] the parts it knows (with a circuit: and a footprints.json next to it)
+  harmonia draw <x.layout.json>  draw a saved layout again
+  harmonia check <file or folder of .diy>  place, write and read back: same connections?
+  harmonia train | evolve | bench  the network and the benchmark (from the repo)
+
+Options:
+  --seed N           the placer's random start (default 1); the same seed makes the same layout
+  --steps N          how hard the placer tries (default 20000)
+  --board WxH        board size in holes (default: the board file's, else 18x12)
+  --power NET, --ground NET   supply and ground nets (default: the board file's, else guessed)
+  --board-file F     the board file to use (default: the circuit's name with .json, next to it)
+  --out DIR          where place, check, train and evolve write (default out)
+  --judge rules|net  who scores layouts (default rules)
+
+The board file (rules, weights) and the outputs are described in the README.";
 
 fn parse_args() -> Args {
     let mut args = Args {
@@ -56,17 +90,33 @@ fn parse_args() -> Args {
         board: None,
         power: None,
         ground: None,
+        out: OUT.into(),
+        board_file: None,
     };
+    if std::env::args().len() == 1 {
+        println!("{USAGE}");
+        std::process::exit(0);
+    }
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
         match a.as_str() {
+            "--help" | "-h" | "help" => {
+                println!("{USAGE}");
+                std::process::exit(0);
+            }
             "--judge" => args.judge = it.next().expect("--judge rules|net"),
             "--steps" => args.steps = it.next().and_then(|s| s.parse().ok()).expect("--steps <number>"),
             "--seed" => args.seed = it.next().and_then(|s| s.parse().ok()).expect("--seed <number>"),
             "--board" => args.board = Some(it.next().and_then(|s| parse_size(&s)).expect("--board <width>x<height>, like 18x12")),
             "--power" => args.power = Some(it.next().expect("--power <net name>")),
             "--ground" => args.ground = Some(it.next().expect("--ground <net name>")),
-            "place" | "train" | "evolve" | "nets" | "check" | "draw" | "bench" => args.command = a,
+            "--out" => args.out = it.next().expect("--out <folder>"),
+            "--board-file" => args.board_file = Some(it.next().expect("--board-file <file.json>")),
+            "place" | "train" | "evolve" | "nets" | "check" | "draw" | "bench" | "footprints" => args.command = a,
+            flag if flag.starts_with('-') => {
+                eprintln!("unknown option {flag}\n\n{USAGE}");
+                std::process::exit(2);
+            }
             path => args.circuit = path.into(),
         }
     }
@@ -81,10 +131,15 @@ fn parse_size(s: &str) -> Option<BoardSize> {
 
 fn main() {
     let args = parse_args();
-    std::fs::create_dir_all("out").unwrap();
+    // Only the commands that write there make the output folder (bench writes to out/ itself).
+    if matches!(args.command.as_str(), "place" | "check" | "train" | "evolve" | "bench") {
+        let dir = if args.command == "bench" { OUT } else { &args.out };
+        std::fs::create_dir_all(dir).unwrap_or_else(|e| panic!("can't make the folder {dir}: {e}"));
+    }
     match args.command.as_str() {
         "check" => return check_cmd(&args),
         "draw" => return draw_cmd(&args.circuit),
+        "footprints" => return netlist::describe(&args.circuit).iter().for_each(|f| println!("{f}")),
         "bench" => return bench::run(),
         _ => {}
     }
@@ -97,8 +152,8 @@ fn main() {
     }
     let cases = &loaded.cases;
     match args.command.as_str() {
-        "train" => train(cases, args.seed, &again(&args, "train", &args.circuit)),
-        "evolve" => evolve(cases, args.seed, &again(&args, "evolve", &args.circuit)),
+        "train" => train(cases, args.seed, &again(&args, "train", &args.circuit), &args.out),
+        "evolve" => evolve(cases, args.seed, &again(&args, "evolve", &args.circuit), &args.out),
         "nets" => print_nets(cases),
         _ => place_cmd(cases, &args, loaded.sketch, loaded.board_file),
     }
@@ -119,7 +174,7 @@ struct Loaded {
 /// Reads a circuit (a KiCad netlist or a DIYLC sketch) and the board file next to it, if any.
 fn load(path: &str, args: &Args) -> Loaded {
     // Flags win over the board file, so you can try a variation quickly.
-    let (board_file_path, board_file) = constraints::read_board_file(path).unzip();
+    let (board_file_path, board_file) = constraints::read_board_file(path, args.board_file.as_deref()).unzip();
     let board_file = board_file.unwrap_or_default();
     let from_file = board_file.board.as_ref().map(|s| parse_size(s).unwrap_or_else(|| panic!("board file: \"board\" should look like \"18x12\"")));
     let opts = netlist::Options {
@@ -272,18 +327,18 @@ fn check_one(path: &str, args: &Args) -> Outcome {
         let c = &loaded.cases[k];
         let made = made(args, path, loaded.board_file.clone(), "sketch", &loaded.cases, k);
         let layout = Layout::new(c.clone(), best.clone(), "check", made);
-        let written = "out/check.diy";
+        let written = format!("{}/check.diy", args.out);
         let diy = diylc::write(&layout);
-        std::fs::write(written, &diy).unwrap();
+        std::fs::write(&written, &diy).unwrap();
         // The layout file must keep everything the drawings need: write it, read it back, and the
         // file and the drawings from what was read must be the same as from the layout in memory.
         let saved = layout::to_json(&layout);
-        std::fs::write("out/check.layout.json", &saved).unwrap();
+        std::fs::write(format!("{}/check.layout.json", args.out), &saved).unwrap();
         let read = layout::from_json(&saved);
         if let Some(why) = differences(&layout, &read, &saved, &diy) {
             return Outcome::LayoutChanged(why);
         }
-        let after = connections(&load(written, args).cases[0]);
+        let after = connections(&load(&written, args).cases[0]);
         if before == after {
             return Outcome::Same;
         }
@@ -327,7 +382,7 @@ fn differences(layout: &Layout, read: &Layout, saved: &str, diy: &str) -> Option
         ("the KiCad board", kicad_pcb::write(layout), kicad_pcb::write(read)),
     ];
     let differ: Vec<&str> = checks.iter().filter(|(_, from_memory, from_file)| from_memory != from_file).map(|(what, ..)| *what).collect();
-    (!differ.is_empty()).then(|| format!("read back from out/check.layout.json, {} came out different", differ.join(", ")))
+    (!differ.is_empty()).then(|| format!("read back from the layout file, {} came out different", differ.join(", ")))
 }
 
 /// Places every DIYLC file given (one file, or every .diy in a folder), writes it out the way
@@ -417,10 +472,16 @@ fn version() -> String {
     format!("harmonia {}, commit {}", env!("CARGO_PKG_VERSION"), env!("HARMONIA_COMMIT"))
 }
 
+/// How this program was started: `cargo run --release --` from its repo (cargo tells the program
+/// its folder then), or the installed `harmonia`.
+fn program() -> &'static str {
+    if std::env::var_os("CARGO_MANIFEST_DIR").is_some() { "cargo run --release --" } else { "harmonia" }
+}
+
 /// The command that runs `command` on the circuit at `path` again, with the flags in `args` that
-/// change what it makes. The steps only count for placing.
+/// change what it makes, and `--out` so it writes where it did. The steps only count for placing.
 fn again(args: &Args, command: &str, path: &str) -> String {
-    let mut out = format!("cargo run --release -- {command} {path} --seed {}", args.seed);
+    let mut out = format!("{} {command} {path} --seed {}", program(), args.seed);
     if command == "place" {
         out += &format!(" --steps {}", args.steps);
         if args.judge != "rules" {
@@ -430,10 +491,16 @@ fn again(args: &Args, command: &str, path: &str) -> String {
     if let Some(b) = args.board {
         out += &format!(" --board {}x{}", b.width, b.height);
     }
+    if let Some(f) = &args.board_file {
+        out += &format!(" --board-file {f}");
+    }
     for (flag, value) in [("--power", &args.power), ("--ground", &args.ground)] {
         if let Some(v) = value {
             out += &format!(" {flag} {v}");
         }
+    }
+    if args.out != OUT {
+        out += &format!(" --out {}", args.out);
     }
     out
 }
@@ -460,7 +527,7 @@ fn made(args: &Args, path: &str, board_file: Option<String>, start: &str, cases:
 fn place_cmd(cases: &[Circuit], args: &Args, sketch: Option<board::Placement>, board_file: Option<String>) {
     let t0 = Instant::now();
     let mut rng = StdRng::seed_from_u64(args.seed);
-    let net = (args.judge == "net").then(|| Net::load(MODEL));
+    let net = (args.judge == "net").then(|| Net::load(&model_path(&args.out)));
     let judge = |m: &Measures| match &net {
         Some(net) => net.cost(m),
         None => board::cost(m),
@@ -493,11 +560,11 @@ fn place_cmd(cases: &[Circuit], args: &Args, sketch: Option<board::Placement>, b
     for problem in &layout.problems {
         println!("  !! {problem}");
     }
-    let saved = format!("out/{}.layout.json", args.judge);
+    let saved = format!("{}/{}.layout.json", args.out, args.judge);
     std::fs::write(&saved, layout::to_json(&layout)).unwrap();
     // The start, for the page that shows it next to the result. It isn't in the layout file.
     let start = Layout::new(c.clone(), start, start_label, made.clone());
-    let path = format!("out/{}.html", args.judge);
+    let path = format!("{}/{}.html", args.out, args.judge);
     let html = format!(
         "<!doctype html><meta charset='utf-8'><title>Perfboard layout</title>\
          <body style='background:#eee;display:flex;gap:16px;flex-wrap:wrap;padding:16px'>{}{}</body>",
@@ -505,7 +572,7 @@ fn place_cmd(cases: &[Circuit], args: &Args, sketch: Option<board::Placement>, b
         svg::draw(&layout, Side::Component)
     );
     std::fs::write(&path, html).unwrap();
-    let [picture, solder, kicad, diy] = write_drawings(&layout, &format!("out/{}", args.judge));
+    let [picture, solder, kicad, diy] = write_drawings(&layout, &format!("{}/{}", args.out, args.judge));
     println!("\nSeed {}. To make this layout again: {} ({})", made.seed, made.command, made.version);
     println!("Layout: {saved} (`draw {saved}` draws it again)");
     println!("Pictures: {picture}, {solder} (turned over to solder), {path} (before and after)");
@@ -579,7 +646,7 @@ fn pairs(boards: &[Measures]) -> Vec<(Vec<f64>, f64)> {
 /// 2. Ask the rules for each board's score: that's the "right answer".
 /// 3. Show the network each board many times, nudging every weight in the direction that makes it less wrong.
 /// 4. Test it on boards it has never seen.
-fn train(cases: &[Circuit], seed: u64, again: &str) {
+fn train(cases: &[Circuit], seed: u64, again: &str, out: &str) {
     let t0 = Instant::now();
     let mut rng = StdRng::seed_from_u64(seed);
     let (train, test) = make_examples(cases, &mut rng);
@@ -594,7 +661,7 @@ fn train(cases: &[Circuit], seed: u64, again: &str) {
             println!("  round {epoch:3}: typical error {:5.1} points", 100.0 * loss.sqrt());
         }
     }
-    finish(&net, &test, t0, seed, again);
+    finish(&net, &test, t0, seed, again, out);
 }
 
 /// The same job as `train`, done by evolution instead:
@@ -603,7 +670,7 @@ fn train(cases: &[Circuit], seed: u64, again: &str) {
 /// 2. Make 19 children, each a copy of the parent with every weight changed a little at random.
 /// 3. Keep whichever of the 20 is least wrong on the example boards; it becomes the new parent.
 /// 4. Repeat. Changes get smaller towards the end, to fine-tune.
-fn evolve(cases: &[Circuit], seed: u64, again: &str) {
+fn evolve(cases: &[Circuit], seed: u64, again: &str, out: &str) {
     const CHILDREN: usize = 19;
     const GENERATIONS: usize = 1000;
     let t0 = Instant::now();
@@ -634,12 +701,12 @@ fn evolve(cases: &[Circuit], seed: u64, again: &str) {
         }
     }
     println!("\nTried {} children; in {improved} of {GENERATIONS} generations the best child beat its parent.", GENERATIONS * CHILDREN);
-    finish(&parent, &test, t0, seed, again);
+    finish(&parent, &test, t0, seed, again, out);
 }
 
 /// Test the trained network on boards it never saw, and save it for `place --judge net`. `seed`
-/// and `again` say how to make the same network again.
-fn finish(net: &Net, test: &[Measures], t0: Instant, seed: u64, again: &str) {
+/// and `again` say how to make the same network again; it's saved in the folder `out`.
+fn finish(net: &Net, test: &[Measures], t0: Instant, seed: u64, again: &str, out: &str) {
     let mean_err = test.iter().map(|m| (net.predict(m) - board::score(m)).abs()).sum::<f64>() / test.len() as f64;
     println!("\nOn {} unseen boards the network is off by {mean_err:.1} points on average.", test.len());
     println!("A few of them:");
@@ -649,7 +716,9 @@ fn finish(net: &Net, test: &[Measures], t0: Instant, seed: u64, again: &str) {
         println!("  rules say {:5.1}   network says {:5.1}", board::score(m), net.predict(m));
     }
 
-    net.save(MODEL);
-    println!("\nSaved to {MODEL} in {:.2}s. Try: cargo run --release -- place --judge net", t0.elapsed().as_secs_f64());
+    let model = model_path(out);
+    net.save(&model);
+    let same_out = if out == OUT { String::new() } else { format!(" --out {out}") };
+    println!("\nSaved to {model} in {:.2}s. Try: {} place --judge net{same_out}", t0.elapsed().as_secs_f64(), program());
     println!("Seed {seed}. To make this network again: {again} ({})", version());
 }
