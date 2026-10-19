@@ -6,7 +6,7 @@
 //!     {
 //!       "board": "18x12",
 //!       "power": "+5V", "ground": "GND",
-//!       "constraints": [
+//!       "rules": [
 //!         { "kind": "fixed",       "part": "U1", "at": [6, 3], "rot": 0 },
 //!         { "kind": "edge",        "part": "J1", "edge": "left" },
 //!         { "kind": "orientation", "part": "C1", "rot": 1 },
@@ -57,16 +57,17 @@ use serde::Deserialize;
 use std::collections::HashSet;
 
 #[derive(Deserialize, Default)]
-#[serde(deny_unknown_fields)] // so a typo like "constraint" is an error, not silently ignored
+#[serde(deny_unknown_fields)] // so a typo like "rule" (or an old file's "constraints") is an error, not silently ignored
 pub struct BoardFile {
     pub board: Option<String>,
     pub power: Option<String>,
     pub ground: Option<String>,
+    /// Your rules for this board, all of which hold: the same as an all-of's `rules`.
     #[serde(default)]
-    constraints: Vec<Rule>,
+    rules: Vec<Rule>,
 }
 
-/// One entry of "constraints". `kind` in the JSON picks the variant, like { "kind": "near", ... }.
+/// One entry of "rules" (the board file's, or an all-of's or one-of's). `kind` in the JSON picks the variant, like { "kind": "near", ... }.
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
 enum Rule {
@@ -215,9 +216,10 @@ pub struct Case<'a> {
     pub choices: Vec<String>,
 }
 
-/// The board file's rules as cases: one, unless a one-of makes more (see `rule_cases`).
+/// The board file's rules as cases: one, unless a one-of makes more (see `rule_cases`). The file's
+/// `rules` all hold, like an all-of's.
 pub fn cases(file: &BoardFile) -> Vec<Case<'_>> {
-    every_case(&file.constraints)
+    every_case(&file.rules)
 }
 
 /// Every way a list of rules can all hold: each case of the first rule with each case of the rest.
