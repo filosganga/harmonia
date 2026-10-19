@@ -76,14 +76,23 @@ pub struct Made {
     /// Which program made it: its version and commit, like "harmonia 0.1.0, commit 73bf7c9".
     #[serde(default)]
     pub version: String,
+    /// The footprints that didn't come from the built-in library, like "LED_D5.0mm from
+    /// ~/.config/harmonia/footprints.json, replacing a different built-in one": placing again
+    /// needs that file too. Left out when there are none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub footprints: Vec<String>,
 }
 
 impl Made {
     /// One line for the drawings: the seed, and how to make the layout again.
     pub fn again(&self) -> String {
-        match self.command.as_str() {
+        let line = match self.command.as_str() {
             "" => format!("seed {}, {} steps", self.seed, self.steps),
             command => format!("seed {}: to make it again, {command} ({})", self.seed, self.version),
+        };
+        match self.footprints.len() {
+            0 => line,
+            n => format!("{line}; it also needs {n} footprint{} that aren't built in (see the layout file)", if n == 1 { "" } else { "s" }),
         }
     }
 }
@@ -371,6 +380,8 @@ pub fn from_json(text: &str) -> Layout {
             body: p.body.clone().unwrap_or_else(|| Component::full_body(p.size.0, p.size.1)),
             source: p.diylc_drawing.clone(),
             low: p.low,
+            // Which file each footprint came from is in `made.footprints`; the part's shape is here.
+            footprint_from: None,
         })
         .collect();
     let placement: Placement = file.parts.iter().map(|p| Place { x: p.at.0, y: p.at.1, rot: p.rot }).collect();

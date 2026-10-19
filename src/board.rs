@@ -76,6 +76,9 @@ pub struct Component {
     pub source: Option<crate::diylc_import::Source>,
     /// Low enough to sit under a module on headers (a resistor lying flat, a small ceramic capacitor).
     pub low: bool,
+    /// The footprints.json its footprint came from, if not the built-in library (yours, or one next
+    /// to the netlist), so a layout can say it depends on that file.
+    pub footprint_from: Option<String>,
 }
 
 impl Component {

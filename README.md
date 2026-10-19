@@ -25,7 +25,8 @@ cargo run --release -- --help               # every command and option
 
 To use it from any folder, install it: `cargo install --path .` puts a `harmonia` command in
 `~/.cargo/bin`, and `harmonia place my.net` is then the same as `cargo run --release -- place my.net`
-(install again after changing the code). The footprint library is built in, so it works anywhere.
+(install again after changing the code). The footprint library is built in, so it works anywhere;
+your own footprints go in `~/.config/harmonia/footprints.json` (below).
 
 Options: `--steps 50000` (placer effort), `--seed 7` (a different random start), `--board 24x16`
 (perfboard size in holes, default 18x12), `--out pictures` (the folder `place`, `check`, `train` and `evolve` write in, default `out`; `draw` writes next to the layout file, `bench` always to `out/`), `--board-file try.json` (another
@@ -74,7 +75,9 @@ file of another version is refused, with a message):
 - **made**: how it was made: the circuit file, the board file, the judge, where the placer started
   (`random` or `sketch`), the seed, the steps, and which case of the board file's rules
   won (counted from 1, out of how many, and the option it took in each one-of); the **command**
-  that makes it again and the program's **version** and commit. And a **title**, the
+  that makes it again and the program's **version** and commit; and the **footprints** that didn't
+  come from the built-in library (which file, and whether it replaced a different one), since
+  placing again needs that file too. And a **title**, the
   one the pictures show.
 - **board**: its width and height in holes, and the keep-outs (name, from, to, and a soft one's weight).
 - **power** and **ground**: the two net names.
@@ -110,9 +113,14 @@ layout file somewhere first to keep it: the next `place` overwrites `out/rules.l
 3. `cargo run --release -- place path/to/your.net`
 
 A netlist only says what connects to what. It doesn't say where a part's legs are, so each footprint
-also needs an entry in `footprints.json` (built into the program; `footprints` lists them, and a
-`footprints.json` next to your netlist adds parts or replaces ones of the same name, for a part only
-your project uses): its size in holes and which hole each pad sits in (top-left
+also needs an entry in `footprints.json`. There are three, each adding parts and replacing ones of
+the same name: the repo's, built into the program; your own, for every circuit, in
+`~/.config/harmonia/footprints.json` (`$XDG_CONFIG_HOME/harmonia`, `%APPDATA%\harmonia` on Windows);
+and one next to a netlist, for the circuits in that folder. The more local file wins, never
+silently: when an entry a circuit uses replaces a different one, `place` and `nets` print a note,
+and the layout file lists it (an exact copy changes nothing). `footprints` lists what a circuit can
+use, which files it read, and where each entry came from. `bench` reads only the built-in library
+and the circuit's own folder, so it places the same way on every machine. Each entry is: its size in holes and which hole each pad sits in (top-left
 hole is `[0, 0]`, a hole is 2.54mm). If one is missing, the program names it. The library name before
 the `:` is ignored, so `Package_DIP:DIP-8_W7.62mm` is looked up as `DIP-8_W7.62mm`. CONTRIBUTING.md
 "Adding a footprint" says how to measure one; `dev/kicad_footprint.py` drafts it from KiCad's own file.
@@ -276,7 +284,7 @@ text board. Pins are named like the `nets` command prints them.
 | `build.rs` | Runs before compiling: tells the program the git commit it's built from, for the "make it again" line on every output. |
 | `dev/kicad_footprint.py` | A dev tool (Python, not needed to run the program): drafts a `footprints.json` entry from a KiCad footprint file. |
 | `src/sexpr.rs` | Reads KiCad's bracket format, `(comp (ref "R1") ...)`, into a tree. |
-| `src/netlist.rs` | Turns a KiCad netlist plus `footprints.json` (built in, plus one next to the netlist if there is one) into the circuit the placer works on. |
+| `src/netlist.rs` | Turns a KiCad netlist plus `footprints.json` (built in, yours in `~/.config/harmonia`, and one next to the netlist) into the circuit the placer works on. |
 | `src/board.rs` | Places parts, works out where every pin lands, measures the board and gives it a score. |
 | `src/route.rs` | The router: joins every net with copper traces, and hops over with a jumper (or, last, a solder-side wire) where a trace can't get through; a pin walled in so that not even a wire fits is left unrouted. |
 | `src/layout.rs` | The finished board, routed and measured once (`Layout`), which the three writers below draw; and the layout file: writing it, and reading it back for `draw`. |

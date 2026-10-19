@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt::Write;
 
 /// The "diylc" entry of a footprint in footprints.json (the layout file keeps it too).
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct Part {
     /// DIYLC's name for the part: Resistor, RadialElectrolytic, RadialCeramicDiskCapacitor, LED, DIL_IC or PinHeader.
     pub part: String,
