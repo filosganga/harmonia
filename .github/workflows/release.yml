@@ -61,8 +61,9 @@ jobs:
           targets: ${{ matrix.target }}
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
-      # A folder with the program and what it reads at run time (footprints.json, the example
-      # circuits), so `harmonia place` works from inside it.
+      # A folder with the program and the example circuits, so `harmonia place` works from inside
+      # it. The footprint library is built into the program; footprints.json is there to read and
+      # to copy entries from into a footprints.json next to your own netlist.
       - name: Package
         shell: bash
         run: |

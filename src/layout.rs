@@ -68,8 +68,9 @@ pub struct Made {
     pub cases: usize,
     pub choices: Vec<String>,
     /// The command that makes this layout again, like `cargo run --release -- place
-    /// circuits/cat_feeder.diy --seed 1 --steps 20000`: the same with the same code (`version`)
-    /// and the same circuit and board file. Empty in a file saved before it was kept.
+    /// circuits/cat_feeder.diy --seed 1 --steps 20000`: the same placement and copper with the same
+    /// code (`version`), circuit and board file (and `model.json`, for the network as judge). Empty
+    /// in a file saved before it was kept.
     #[serde(default)]
     pub command: String,
     /// Which program made it: its version and commit, like "harmonia 0.1.0, commit 73bf7c9".

@@ -19,7 +19,7 @@ cargo run --release -- place                          # the 555 example
 cargo run --release -- place circuits/cat_feeder.diy  # a bigger, real board
 ```
 
-The pictures and other outputs go to `out/`.
+The pictures and other outputs go to `out/` (or the folder `--out` names).
 
 ## Checking a change
 
@@ -42,7 +42,10 @@ the same files) and the cat-feeder round trip on every pull request.
 
 A KiCad netlist names each part's footprint but not where its legs are, so every footprint a netlist
 uses needs an entry in `footprints.json`. When one is missing, `place` stops with "R5 uses footprint
-X, which isn't in footprints.json yet". (DIYLC sketches don't need entries: their parts come from
+X, which isn't in the built-in footprints.json yet". The repo's `footprints.json` is built into the
+program: `cargo run` rebuilds it by itself, an installed `harmonia` needs `cargo install --path .`
+again. A part only one project uses can go in a `footprints.json` next to that netlist instead,
+which adds entries (or replaces ones with the same name) for circuits in that folder. (DIYLC sketches don't need entries: their parts come from
 DIYLC. For a DIYLC part the reader refuses, see `.claude/skills/perfboard-diylc-part`.)
 
 1. **The name** is the footprint's name after the `:`, exactly as the netlist writes it:
@@ -84,7 +87,8 @@ DIYLC. For a DIYLC part the reader refuses, see `.claude/skills/perfboard-diylc-
 7. **Without a KiCad file**, measure from the datasheet the same way: the leg spacing and the body's
    size in mm, divided by 2.54. KiCad's names carry the main ones: `P10.16mm` is the leg spacing (4
    holes), `W7.62mm` a DIP's row spacing (3 holes), `D5.0mm` a round body's diameter.
-8. **Check it**: `cargo run --release -- nets your.net` lists the part with its size and number of pins;
+8. **Check it**: `cargo run --release -- footprints your.net` shows the entry as the program read it,
+   and `nets your.net` lists the part with its size and number of pins;
    `place` it and look at `out/rules.svg` (each leg in its hole, the outline over the body). With a
    `"diylc"` entry, open `out/rules.diy` in DIYLC. In KiCad, open `out/rules.kicad_pcb` and run
    Tools → Update Footprints from Library: the real footprint's pads should land on the same holes.

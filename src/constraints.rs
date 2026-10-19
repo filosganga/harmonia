@@ -1,7 +1,7 @@
 //! The board file: which perfboard you're building on and your own rules for it.
 //!
 //! It sits next to the netlist with the same name (circuits/555_blinker.net ->
-//! circuits/555_blinker.json) and every part of it is optional:
+//! circuits/555_blinker.json), or is the file `--board-file` names, and every part of it is optional:
 //!
 //!     {
 //!       "board": "18x12",
@@ -448,11 +448,18 @@ impl Constraints {
     }
 }
 
-/// Reads the board file next to `netlist_path`, if there is one. Returns its path too.
-pub fn read_board_file(netlist_path: &str) -> Option<(String, BoardFile)> {
-    let path = std::path::Path::new(netlist_path).with_extension("json");
-    let path = path.to_string_lossy().into_owned();
-    let text = std::fs::read_to_string(&path).ok()?;
+/// Reads the board file `chosen`, or else the one next to `netlist_path` if there is one (the same
+/// name, with .json). Returns its path too.
+pub fn read_board_file(netlist_path: &str, chosen: Option<&str>) -> Option<(String, BoardFile)> {
+    let path = match chosen {
+        Some(path) => path.to_string(),
+        None => std::path::Path::new(netlist_path).with_extension("json").to_string_lossy().into_owned(),
+    };
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if chosen.is_some() => panic!("can't read the board file {path}: {e}"),
+        Err(_) => return None,
+    };
     let file = serde_json::from_str(&text).unwrap_or_else(|e| panic!("bad board file {path}: {e}"));
     Some((path, file))
 }

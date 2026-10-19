@@ -110,6 +110,8 @@ fn load(path: &str) -> Vec<Circuit> {
         board: None,
         power: None,
         ground: None,
+        out: crate::OUT.into(),
+        board_file: None,
     };
     crate::load(path, &args).cases
 }

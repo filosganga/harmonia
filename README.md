@@ -19,26 +19,35 @@ cargo run --release -- nets my_sketch.diy   # just list the parts and connection
 cargo run --release -- check my_sketches/   # place, write and re-read every .diy: same connections? (see below)
 cargo run --release -- draw out/rules.layout.json  # draw a saved layout again, without placing it (see below)
 cargo run --release -- bench                # the benchmark: place a fixed set of circuits, record the costs (see below)
+cargo run --release -- footprints           # the parts it knows: size in holes, where each pad is
+cargo run --release -- --help               # every command and option
 ```
 
+To use it from any folder, install it: `cargo install --path .` puts a `harmonia` command in
+`~/.cargo/bin`, and `harmonia place my.net` is then the same as `cargo run --release -- place my.net`
+(install again after changing the code). The footprint library is built in, so it works anywhere.
+
 Options: `--steps 50000` (placer effort), `--seed 7` (a different random start), `--board 24x16`
-(perfboard size in holes, default 18x12), `--power +12V` / `--ground GND` (which nets are supply and
+(perfboard size in holes, default 18x12), `--out pictures` (the folder `place`, `check`, `train` and `evolve` write in, default `out`; `draw` writes next to the layout file, `bench` always to `out/`), `--board-file try.json` (another
+board file instead of the one next to the circuit, to compare variants), `--power +12V` / `--ground GND` (which nets are supply and
 ground, guessed from common names like `+5V`, `VCC` and `GND` if left out), or a path to another netlist.
 Board size, power and ground can also live in the board file (below); a flag wins over it.
 
 **Without Rust:** each [release](https://github.com/filosganga/harmonia/releases) has the program
-ready-built for Linux (x86-64), macOS (Apple silicon) and Windows (x86-64). Unpack it and run it from
-inside its folder, which also holds `footprints.json` and the example circuits: `./harmonia place`,
+ready-built for Linux (x86-64), macOS (Apple silicon) and Windows (x86-64). The footprint library is
+built in, so it runs from any folder; its folder also holds the example circuits: `./harmonia place`,
 `./harmonia place circuits/cat_feeder.diy`, and so on, the same commands without `cargo run --release --`.
+(The make-it-again line says `harmonia`: from that folder, type `./harmonia`.)
 
 Each `place` run prints the board as text (when the board file's `one-of`s make cases, first a line
 for each case and which was best), then the seed and the command that makes the same layout again,
 with the program's version and commit (`cargo run --release -- place circuits/cat_feeder.diy --seed 1
 --steps 20000`). Every output says it too: the pictures under their title, KiCad in the title block,
 DIYLC in the project's description, the layout file in `made`. The same seed, steps, circuit, board
-file and code always make the same layout, byte for byte. A changed board file (a weight tuned) or
-code makes another one, so keep a copy of the board file with a layout you like. `train` and `evolve`
-print their seed and command the same way. `place` writes, in `out/` (named `rules` or `net` after the judge):
+file and code always make the same placement and copper (with `--judge net`, the same `model.json`
+too); the files differ at most in that line. A changed board file (a weight tuned) or code makes
+another layout, so keep a copy of the board file with a layout you like. `train` and `evolve`
+print their seed and command the same way. `place` writes, in `out/` (or the `--out` folder; named `rules` or `net` after the judge):
 
 - `rules.layout.json`: the finished board as one plain file (below). The two pictures, the KiCad
   board and the DIYLC project are all drawn from it, and so is the result in the html.
@@ -101,7 +110,9 @@ layout file somewhere first to keep it: the next `place` overwrites `out/rules.l
 3. `cargo run --release -- place path/to/your.net`
 
 A netlist only says what connects to what. It doesn't say where a part's legs are, so each footprint
-also needs an entry in `footprints.json`: its size in holes and which hole each pad sits in (top-left
+also needs an entry in `footprints.json` (built into the program; `footprints` lists them, and a
+`footprints.json` next to your netlist adds parts or replaces ones of the same name, for a part only
+your project uses): its size in holes and which hole each pad sits in (top-left
 hole is `[0, 0]`, a hole is 2.54mm). If one is missing, the program names it. The library name before
 the `:` is ignored, so `Package_DIP:DIP-8_W7.62mm` is looked up as `DIP-8_W7.62mm`. CONTRIBUTING.md
 "Adding a footprint" says how to measure one; `dev/kicad_footprint.py` drafts it from KiCad's own file.
@@ -156,7 +167,8 @@ next to such a leg could touch it, so the router keeps other nets out of the hol
 ## The board file: your rules for this board
 
 Next to the netlist, a JSON file with the same name (`circuits/555_blinker.json` for
-`circuits/555_blinker.net`) describes the board you're building on. Everything in it is optional:
+`circuits/555_blinker.net`) describes the board you're building on (`--board-file` picks another
+one, say a copy with a weight changed). Everything in it is optional:
 
 ```json
 {
@@ -264,7 +276,7 @@ text board. Pins are named like the `nets` command prints them.
 | `build.rs` | Runs before compiling: tells the program the git commit it's built from, for the "make it again" line on every output. |
 | `dev/kicad_footprint.py` | A dev tool (Python, not needed to run the program): drafts a `footprints.json` entry from a KiCad footprint file. |
 | `src/sexpr.rs` | Reads KiCad's bracket format, `(comp (ref "R1") ...)`, into a tree. |
-| `src/netlist.rs` | Turns a KiCad netlist plus `footprints.json` into the circuit the placer works on. |
+| `src/netlist.rs` | Turns a KiCad netlist plus `footprints.json` (built in, plus one next to the netlist if there is one) into the circuit the placer works on. |
 | `src/board.rs` | Places parts, works out where every pin lands, measures the board and gives it a score. |
 | `src/route.rs` | The router: joins every net with copper traces, and hops over with a jumper (or, last, a solder-side wire) where a trace can't get through; a pin walled in so that not even a wire fits is left unrouted. |
 | `src/layout.rs` | The finished board, routed and measured once (`Layout`), which the three writers below draw; and the layout file: writing it, and reading it back for `draw`. |
@@ -275,7 +287,7 @@ text board. Pins are named like the `nets` command prints them.
 | `src/place.rs` | The auto-placer: starts from an allowed layout and keeps nudging/rotating/swapping/jumping parts, only ever to allowed layouts, keeping changes the judge likes. |
 | `src/nn.rs` | The neural network, written out by hand (8 hidden neurons, 105 weights). |
 | `src/bench.rs` | The benchmark: places every circuit of `circuits/bench.txt` with three seeds, several runs at once, and records the best costs. |
-| `src/main.rs` | The commands: `place`, `train`, `evolve`, `nets`, `check`, `draw` and `bench`; `place` and `check` place every case of the board file's rules and keep the best. `train` and `evolve` make ~1,200 example boards (going through the board file's cases in turn, up to 12), have the rules score them, and train the network to match. |
+| `src/main.rs` | The commands: `place`, `train`, `evolve`, `nets`, `check`, `draw`, `bench` and `footprints` (no arguments or `--help` prints them all); `place` and `check` place every case of the board file's rules and keep the best. `train` and `evolve` make ~1,200 example boards (going through the board file's cases in turn, up to 12), have the rules score them, and train the network to match. |
 
 ## How a board is judged
 
@@ -329,7 +341,9 @@ Then how good it is. `src/board.rs` measures eleven things (weights in `WEIGHTS`
 - **rules**: how much the board file's rules with a weight are broken, each times its weight
   ("The board file" says how each kind is broken), a thousand per hole of that. That includes, for each `near` rule, the length of copper between its two pins, as
   routed, and for each `close` rule, the distance between its two pins, straight across the board,
-  at weight 1 if left out: a rule at 1 outweighs everything but an unrouted pin.
+  at weight 1 if left out: a rule at 1 outweighs everything but an unrouted pin. (Copper between two
+  pins side by side is 1 hole long.) The report shows it with up to three decimals, since 0.005 of
+  it still costs 5; the other measurements are rounded to whole numbers.
 
 The weighted sum is the *cost*; the score is `100 * exp(-cost / 150)`, so 100 is perfect.
 The placer itself compares costs, not scores: for a big circuit the score is low and flat (the cat
@@ -384,7 +398,7 @@ DIYLC jumpers (DIYLC has no wire on the solder side), the solder-side ones red a
 ## Two ways to train the network
 
 Both commands train the same 9-neuron network on the same example boards, then test it on
-boards it never saw and save it to `out/model.json` (so the last one you ran is the judge).
+boards it never saw and save it as `model.json` in the output folder (`out/`, or `--out`; so the last one you ran is the judge, for a `place --judge net` with the same `--out`).
 
 - **`train` (gradient descent):** for each board, compare the network's guess with the rules'
   score and nudge every weight in the direction that makes it less wrong. One example points
@@ -411,7 +425,7 @@ cargo run --release -- check my_sketches/ --steps 2000          # every .diy in 
 ```
 
 `check` places each file as `place` does, from the sketch (every case, keeping the best, with a line
-for each case when there are several), writes the `.diy` (to `out/check.diy`, overwritten for each
+for each case when there are several), writes the `.diy` (to `out/check.diy`, or in the `--out` folder, overwritten for each
 file), reads it back and compares the connections. It also writes the layout file (`out/check.layout.json`),
 reads it back, and checks that what was read writes the same layout file again and the same `.diy`,
 pictures and KiCad board as the layout in memory, so the layout file keeps everything the drawings
