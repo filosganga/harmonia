@@ -12,6 +12,7 @@
 //!     { "format": "harmonia-layout", "version": 1, "title": "Placed by rules",
 //!       "made": { "circuit": "circuits/555_blinker.net", "judge": "rules", "seed": 1, ... },
 //!       "board": { "width": 18, "height": 12, "keepouts": [ { "name": "M3 screw", "from": [16, 0], "to": [17, 1] } ] },
+//!                  (a soft keep-out also has its "weight")
 //!       "power": "+5V", "ground": "GND",
 //!       "parts": [ { "reference": "U1", "at": [6, 3], "rot": 0, "size": [4, 4], ...,
 //!                    "pins": [ { "name": "1", "at": [0, 3], "hole": [6, 6], "net": "GND" }, ... ] }, ... ],
@@ -27,8 +28,9 @@
 //! joins with one piece of copper (a net, or one branch of a star net), listed in the order they
 //! were routed; its traces are straight pieces, hole to hole.
 //!
-//! Not in the file: net colours (worked out from the nets), the start of the placer, and the board
-//! file's rules about where parts may go, near and close. The score is kept as it was measured.
+//! Not in the file: net colours (worked out from the nets), the start of the placer, the board
+//! file's rules about where parts may go, near and close, and where a soft star's runs joined. The
+//! score is kept as it was measured.
 
 use crate::board::{self, BoardSize, Circuit, Component, Measures, Net, Pin, Place, Placement, Point, Run};
 use crate::constraints::{Constraints, Keepout};
@@ -87,7 +89,7 @@ impl Layout {
     pub fn new(circuit: Circuit, placement: Placement, title: &str, made: Made) -> Layout {
         let g = board::geometry(&circuit, &placement);
         let routing = route::route(&circuit, &g);
-        let measures = board::measure_routed(&circuit, &g, &routing);
+        let measures = board::measure_routed(&circuit, &placement, &g, &routing);
         // A layout from the placer is always allowed; a sketch as you drew it may not be.
         let clashes = board::clashes(&circuit, &g, &vec![true; placement.len()]);
         let mut problems = board::clash_words(&circuit, &clashes);
@@ -106,6 +108,7 @@ impl Layout {
             jumpers: renumber(routing.jumpers),
             bottom: renumber(routing.bottom),
             unrouted: renumber(routing.unrouted),
+            joins: routing.joins.into_iter().map(|(run, at)| (renumbered[run], at)).collect(),
         };
         let mut circuit = circuit;
         circuit.runs = order.iter().map(|&old| circuit.runs[old].clone()).collect();
@@ -153,6 +156,9 @@ struct KeepoutEntry {
     name: String,
     from: Point,
     to: Point,
+    /// A soft keep-out's weight (parts and copper may go on it); left out for a hard one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    weight: Option<f64>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -300,7 +306,7 @@ pub fn to_json(layout: &Layout) -> String {
         board: BoardEntry {
             width: c.board.width,
             height: c.board.height,
-            keepouts: c.constraints.keepout.iter().map(|k| KeepoutEntry { name: k.name.clone(), from: k.from, to: k.to }).collect(),
+            keepouts: c.constraints.keepout.iter().map(|k| KeepoutEntry { name: k.name.clone(), from: k.from, to: k.to, weight: k.weight }).collect(),
         },
         power: c.power.clone(),
         ground: c.ground.clone(),
@@ -354,14 +360,10 @@ pub fn from_json(text: &str) -> Layout {
 
     // The board file's rules aren't in the layout file, only what the drawings show of them: the
     // keep-outs and which option of each one-of this case took.
-    let keepout: Vec<Keepout> = file.board.keepouts.iter().map(|k| Keepout { from: k.from, to: k.to, name: k.name.clone() }).collect();
-    c.constraints = Constraints {
-        choices: file.made.choices.clone(),
-        allowed: vec![None; c.components.len()],
-        keepout_holes: keepout.iter().flat_map(Keepout::holes).collect(),
-        keepout,
-        ..Default::default()
-    };
+    c.constraints = Constraints { choices: file.made.choices.clone(), allowed: vec![None; c.components.len()], ..Default::default() };
+    for k in &file.board.keepouts {
+        c.constraints.add_keepout(Keepout { from: k.from, to: k.to, name: k.name.clone(), weight: k.weight });
+    }
 
     // The runs and their copper as saved, in the order they were routed.
     let net_index = |name: &str| c.nets.iter().position(|n| n.name == name).unwrap_or_else(|| panic!("layout file: a run is on net {name}, which isn't in \"nets\""));
@@ -382,8 +384,8 @@ pub fn from_json(text: &str) -> Layout {
     }
     c.runs = runs;
 
-    // The score as it was measured: some measurements (near, close) need board-file rules the
-    // layout file doesn't keep.
+    // The score as it was measured: `rules` needs board-file rules the layout file doesn't keep
+    // (and where a soft star's runs joined).
     let measures = &file.score.measures;
     let missing: Vec<&str> = board::FEATURES.iter().copied().filter(|k| !measures.contains_key(*k)).collect();
     let extra: Vec<&String> = measures.keys().filter(|k| !board::FEATURES.contains(&k.as_str())).collect();

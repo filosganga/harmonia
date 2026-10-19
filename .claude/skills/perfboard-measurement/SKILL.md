@@ -15,10 +15,12 @@ A measurement is in five places that the compiler only partly ties together.
 2. `src/nn.rs`: `SCALE`, one rough size per measurement so inputs land around 0..1, **same order as
    FEATURES**. The compiler checks the length, not the order.
 3. `src/route.rs`: the router's costs are the matching weights × 10 (`STRAIGHT`/`DIAGONAL` for wire,
-   `TURN` for turns, `DIAGONAL_EXTRA` for diagonal, `JUMPER_PER_HOLE` for jumper length; `crosswise`
-   isn't priced, see `Routing::crosswise_steps`). `TURN`, `DIAGONAL_EXTRA` and `JUMPER_PER_HOLE`
-   read `WEIGHTS[1]`, `WEIGHTS[2]` and `WEIGHTS[5]` by position: inserting a measurement before
-   `jumper_len` means changing those indexes too, or the router silently prices the wrong thing.
+   `TURN` for turns, `DIAGONAL_EXTRA` for diagonal, `JUMPER_PER_HOLE` for jumper length, `RULE` for a
+   soft keep-out's hole or a soft star's join, and `JUMPER` / `SOLDER_WIRE` to weigh a join against a
+   wire; `crosswise` isn't priced, see `Routing::crosswise_steps`). `TURN`, `DIAGONAL_EXTRA`, `JUMPER`,
+   `JUMPER_PER_HOLE`, `SOLDER_WIRE` and `RULE` read `WEIGHTS[1]`, `[2]`, `[4]`, `[5]`, `[6]` and
+   `[10]` by position: inserting a measurement before
+   `rules` means changing some of those indexes too, or the router silently prices the wrong thing.
 4. The text report, the SVG legend and the layout file (`src/layout.rs`, measurements by name) print every
    measurement themselves; nothing to change there. A layout file saved before a measurement was added,
    removed or renamed is refused by `draw` (its names no longer match `FEATURES`): place it again.

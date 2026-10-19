@@ -138,7 +138,7 @@ pub fn draw(layout: &Layout, side: Side) -> String {
     }
     let pin_color = |p: (usize, usize)| net_of.get(&p).map_or(LONE, |&n| colors[n]);
 
-    // Parts that collide, hang off the board, sit on a keep-out or don't fit under a module (both
+    // Parts that collide, hang off the board, sit on a hard keep-out or don't fit under a module (both
     // parts of a collision): only in a layout that isn't allowed, like a sketch as you drew it.
     let mut misplaced: HashSet<usize> = HashSet::new();
     for clash in board::clashes(c, &g, &vec![true; c.components.len()]) {
@@ -370,7 +370,7 @@ pub fn draw(layout: &Layout, side: Side) -> String {
     }
     ly += line_h * 0.5;
     if (0..c.components.len()).any(clashes) {
-        for text in wrap("Boxed in red: a part that collides, hangs off the board, sits on a keep-out, or doesn't fit under a module.", 60) {
+        for text in wrap("Boxed in red: a part that collides, hangs off the board, sits on a hard keep-out, or doesn't fit under a module.", 60) {
             line(&mut legend, &mut ly, &text, "warn");
         }
         ly += line_h * 0.5;

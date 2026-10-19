@@ -63,12 +63,13 @@ touches, and every constant the diff changes, grep the whole repo for the old va
   It went stale twice, each time a measurement was added.
 - `SCALE` in `src/nn.rs` must list one scale per measurement **in the same order as `FEATURES`**.
   The compiler checks the length, not the order.
-- `STRAIGHT`, `DIAGONAL`, `DIAGONAL_EXTRA`, `TURN`, `JUMPER_PER_HOLE`, `MAX_JUMP` in `src/route.rs` against
+- `STRAIGHT`, `DIAGONAL`, `DIAGONAL_EXTRA`, `TURN`, `JUMPER_PER_HOLE`, `JUMPER`, `SOLDER_WIRE`, `RULE`, `MAX_JUMP` in `src/route.rs` against
   README "How it routes" ("2 to 10 holes long") and against `WEIGHTS`: the router's costs are the
   matching weights times ten (wire, turns, diagonal, jumper_len), so the router and the score agree on
-  what's cheaper. `TURN`, `DIAGONAL_EXTRA` and `JUMPER_PER_HOLE` read `WEIGHTS[1]`, `[2]` and `[5]`
-  by position: a measurement inserted before `jumper_len` breaks them silently. The jumpers, bottom, crosswise and unrouted weights have no router
-  constant on purpose (see their comments).
+  what's cheaper. `TURN`, `DIAGONAL_EXTRA`, `JUMPER`, `JUMPER_PER_HOLE`, `SOLDER_WIRE` and `RULE` read
+  `WEIGHTS[1]`, `[2]`, `[4]`, `[5]`, `[6]` and `[10]` by position: a measurement inserted before
+  `rules` breaks some of them silently. `JUMPER` and `SOLDER_WIRE` only weigh a soft star's join;
+  the crosswise and unrouted weights have no router constant on purpose (see their comments).
 - `SCORE_SCALE` against the score formula in README.
 - Timings and errors (README intro, "Two ways to train", "Known limits", CLAUDE.md). You can't run
   anything, so when a change touches the placer, router, `measure` or training, flag every timing and
@@ -82,13 +83,14 @@ touches, and every constant the diff changes, grep the whole repo for the old va
 - **No flags for model settings.** A new CLI flag for hidden neurons, learning rates, generations,
   rule weights or router costs is a finding. Flags are for the user's problem: circuit, board, power
   and ground, seed, steps.
-- **Hard rules are never learned.** Placement rules (fixed, edge, orientation, within, and all-of
-  and one-of of them) are enforced by the placer (`Constraints::allowed`, kept by
+- **Hard rules are never learned.** Placement rules without a `weight` (fixed, edge, orientation,
+  within, and all-of and one-of of them) are enforced by the placer (`Constraints::allowed`, kept by
   `constraints::apply`), and so is what's allowed for every part (`board::clashes`: no collisions,
-  nothing off the board, on a keep-out, or under a module without being low): the placer starts
+  nothing off the board, on a keep-out without a weight, or under a module without being low): the placer starts
   from an allowed layout (`place::allowed_start`) and never accepts a move that isn't. A change that
-  turns any of these back into a cost (a measurement, a weight, a network input), or lets the
-  placer or `train` judge a layout that isn't allowed, is a finding.
+  turns any of these into a cost without the board file asking for it with a `weight` (a
+  measurement, a network input), or lets the placer or `train` judge a layout that isn't allowed, is
+  a finding. A rule with a weight is the user's choice to make it a cost (the `rules` measurement).
 - **Nothing outside the repo is written.** Copies of other projects' files live in `circuits/`.
 
 ### 4. Output that no longer round-trips

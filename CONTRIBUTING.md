@@ -99,10 +99,10 @@ These are from README "Principles"; a pull request that goes against them will b
 - **Rust only for the program.** Everything `cargo run` does is Rust, machine learning included. Dev
   tools around it (a checker, a plot) may be in another language, as long as the program never needs
   them.
-- **No flags for model settings.** Hidden neurons, learning rates and rule weights are constants in the
-  code. Flags are for the user's problem: the circuit, the board, the seed, how hard to try.
+- **No flags for model settings.** Hidden neurons, learning rates and the score's weights (`WEIGHTS`) are
+  constants in the code (a board file's own rule `weight` is the user's problem, not a model setting). Flags are for the user's problem: the circuit, the board, the seed, how hard to try.
 - **Hard rules are never learned.** Where a part may go and what's allowed on the board are enforced by
-  the placer; the network only judges taste among layouts that are already allowed.
+  the placer (unless the board file gives a rule a `weight`, which makes it a cost); the network only judges taste among layouts that are already allowed.
 - **Board-file rules compose.** Add small, simple rules that combine with `all-of` and `one-of` rather
   than one bigger rule for a special case.
 - **Docs change with the code.** If a change makes something in README.md wrong (a timing, an output,

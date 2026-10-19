@@ -12,7 +12,7 @@ pub type Point = (i32, i32);
 
 /// The eleven things the rules measure. They are also the network's inputs. They only judge layouts
 /// that are allowed (see `clashes`): the placer never makes any other kind.
-pub const FEATURES: [&str; 11] = ["wire", "turns", "diagonal", "crosswise", "jumpers", "jumper_len", "bottom", "unrouted", "power", "crowding", "near"];
+pub const FEATURES: [&str; 11] = ["wire", "turns", "diagonal", "crosswise", "jumpers", "jumper_len", "bottom", "unrouted", "power", "crowding", "rules"];
 
 /// How much each measurement costs, in the same order as FEATURES. Lower total cost = better board.
 ///
@@ -25,6 +25,8 @@ pub const FEATURES: [&str; 11] = ["wire", "turns", "diagonal", "crosswise", "jum
 /// diagonal steps 12 / 12 -> 3 / 3, crowding 123 / 123 -> 82 / 76; copper between `near` pins
 /// 42 / 41 -> 63 / 35 and 5V-to-ground 431 / 437 -> 481 / 471. Making near and power five times
 /// dearer too packed the parts again (crowding 132 / 104) and the cat feeder came out much messier.
+/// (All measured with near at 4 a hole; near and close now default to a weight of 1, 1000 a hole,
+/// and one set to 0.004 costs what they did then.)
 /// From random starts (`bench`): corners + 3 x jumpers 651 -> 485, solder-side wires 5 -> 5,
 /// crowding 115 -> 83.
 pub const WEIGHTS: [f64; 11] = [
@@ -32,13 +34,13 @@ pub const WEIGHTS: [f64; 11] = [
     5.0,  // turns: per right angle's worth of bending a trace (45° is 2, 135° is 3; see route::bend): a corner is the work, not the length
     15.0, // diagonal: per diagonal step of copper trace, on top of its length, three corners' worth (jumpers and wires don't count)
     0.5,  // crosswise: per straight step of trace running against the board's main direction (see route.rs)
-    15.0, // jumpers: per jumper on the parts' side, three corners' worth (not priced by the router: it takes a jumper whenever one fits)
+    15.0, // jumpers: per jumper on the parts' side, three corners' worth (the router takes a jumper whenever one fits; it only weighs this against a soft star's join)
     0.5,  // jumper_len: per hole of jumper or solder-side wire. Not the work (a long jumper is no harder), but a long jumper takes room later jumpers can't cross: almost free (0.1) brought solder-side wires back
-    500.0, // bottom: per wire on the solder side, the last resort, a hundred corners (not priced by the router: it takes one only when no jumper fits)
+    500.0, // bottom: per wire on the solder side, the last resort, a hundred corners (the router takes one only when no jumper fits; it only weighs this against a soft star's join)
     5000.0, // unrouted: per connection the router couldn't make at all (a pin walled in; nothing for the router to price): a thousand corners, ten solder-side wires
     1.5,  // power: per hole between each 5V pin and its nearest GND pin
     4.0,  // crowding: per pair of neighbouring holes taken by two parts (twice for pins of two nets): room to solder; at 2 the parts packed with the board half empty
-    4.0,  // near: per hole between two pins the board file wants near (along copper) or close (straight)
+    1000.0, // rules: per hole (or quarter turn, or star join) a board-file rule with a weight is broken, times its weight (0-1; near and close, measured in holes of copper between their pins, count as 1 without one): at 1 a hole costs two solder-side wires, nearly a hard limit; 0.004 is what near and close cost before weights (4)
 ];
 
 /// Turns the cost into a 0-100 score (100 = perfect, about 37 at cost == SCORE_SCALE).
@@ -112,7 +114,8 @@ pub struct Circuit {
     pub runs: Vec<Run>,
 }
 
-/// Pins to join with one piece of copper. Two runs never share copper, even on the same net.
+/// Pins to join with one piece of copper. Two runs never share copper, even on the same net,
+/// unless a soft star joins them (`Routing::joins`).
 #[derive(Clone)]
 pub struct Run {
     pub net: usize,
@@ -148,7 +151,7 @@ impl Circuit {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Place {
     pub x: i32,
     pub y: i32,
@@ -219,11 +222,12 @@ pub struct Measures(pub [f64; FEATURES.len()]);
 pub fn measure(c: &Circuit, placement: &[Place]) -> Measures {
     let g = geometry(c, placement);
     let routing = crate::route::route(c, &g);
-    measure_routed(c, &g, &routing)
+    measure_routed(c, placement, &g, &routing)
 }
 
-/// The same, for parts at `g` already routed as `routing` (so a layout is routed only once).
-pub fn measure_routed(c: &Circuit, g: &Geometry, routing: &crate::route::Routing) -> Measures {
+/// The same, for parts at `placement` (whose geometry is `g`) already routed as `routing` (so a
+/// layout is routed only once).
+pub fn measure_routed(c: &Circuit, placement: &[Place], g: &Geometry, routing: &crate::route::Routing) -> Measures {
     let pins_of = |net: usize| -> Vec<Point> { c.net_pins[net].iter().map(|&(ci, pi)| g.pins[ci][pi]).collect() };
     let net_pins = |name: &Option<String>| name.as_ref().map(|n| pins_of(c.net_index(n))).unwrap_or_default();
     let (vcc, gnd) = (net_pins(&c.power), net_pins(&c.ground));
@@ -232,13 +236,31 @@ pub fn measure_routed(c: &Circuit, g: &Geometry, routing: &crate::route::Routing
     let crowding = crowding(c, g);
 
     // For each "near" rule: holes of copper between its two pins, the way the router joined them.
-    // For each "close" rule: holes between its two pins, straight across the board.
-    let along_copper = c.constraints.near.iter().map(|&(net, [(ca, pa), (cb, pb)])| routing.copper_between(c, net, g.pins[ca][pa], g.pins[cb][pb]));
-    let straight = c.constraints.close.iter().map(|&[(ca, pa), (cb, pb)]| {
-        let ((xa, ya), (xb, yb)) = (g.pins[ca][pa], g.pins[cb][pb]);
-        (((xa - xb).pow(2) + (ya - yb).pow(2)) as f64).sqrt()
+    // For each "close" rule: holes between its two pins, straight across the board. Each times the
+    // rule's weight, so a softened rule counts less.
+    let along_copper = c.constraints.near.iter().map(|r| {
+        let [(ca, pa), (cb, pb)] = r.pins;
+        r.weight * routing.copper_between(c, r.net, g.pins[ca][pa], g.pins[cb][pb])
     });
-    let near: f64 = along_copper.chain(straight).sum::<f64>() + 0.0; // + 0.0: no rules is 0, not -0
+    let straight = c.constraints.close.iter().map(|r| {
+        let [(ca, pa), (cb, pb)] = r.pins;
+        let ((xa, ya), (xb, yb)) = (g.pins[ca][pa], g.pins[cb][pb]);
+        r.weight * (((xa - xb).pow(2) + (ya - yb).pow(2)) as f64).sqrt()
+    });
+    // Soft placement rules, as broken as they are where the parts are; holes of soft keep-outs that
+    // a part or copper covers; and joins between runs of a soft star net (see route.rs).
+    let placed = c.constraints.placement_cost(placement);
+    let soft = &c.constraints.soft_keepout;
+    let on_keepouts: f64 = if soft.is_empty() {
+        0.0
+    } else {
+        let mut covered: HashSet<Point> = g.bodies.iter().flatten().filter(|p| soft.contains_key(p)).copied().collect();
+        covered.extend(routing.copper_holes().into_iter().filter(|p| soft.contains_key(p)));
+        covered.iter().map(|p| soft[p]).sum()
+    };
+    let star_weight = |run: usize| c.constraints.stars.iter().find(|s| s.net == c.runs[run].net).and_then(|s| s.weight).expect("only a soft star's runs join");
+    let joins: f64 = routing.joins.iter().map(|&(run, _)| star_weight(run)).sum();
+    let rules: f64 = along_copper.chain(straight).sum::<f64>() + placed + on_keepouts + joins + 0.0; // + 0.0: no rules is 0, not -0
 
     Measures([
         routing.trace_length(),
@@ -249,7 +271,7 @@ pub fn measure_routed(c: &Circuit, g: &Geometry, routing: &crate::route::Routing
         routing.jumper_length(),
         routing.bottom.len() as f64,
         routing.unrouted.len() as f64,
-        power as f64, crowding as f64, near])
+        power as f64, crowding as f64, rules])
 }
 
 /// How crowded the parts are, for soldering: pairs of neighbouring holes (across or down) taken by
@@ -295,7 +317,7 @@ pub enum Why {
     OnPart(usize),
     /// The hole is off the board.
     OffBoard,
-    /// The hole is on a keep-out (this index in `Constraints::keepout`).
+    /// The hole is on a hard keep-out (this index in `Constraints::keepout`).
     OnKeepout(usize),
     /// The hole is under this module's board, and the part isn't low enough to go there.
     UnderModule(usize),
@@ -326,7 +348,7 @@ pub fn clashes(c: &Circuit, g: &Geometry, placed: &[bool]) -> Vec<Clash> {
                 None => _ = taken.insert(hole, part),
             }
             if c.constraints.keepout_holes.contains(&hole) {
-                let k = keepouts.iter().position(|k| k.holes().any(|p| p == hole)).expect("a keep-out hole is in some keep-out");
+                let k = keepouts.iter().position(|k| k.weight.is_none() && k.holes().any(|p| p == hole)).expect("a keep-out hole is in some hard keep-out");
                 out.push(Clash { part, hole, why: Why::OnKeepout(k) });
             }
         }
@@ -406,7 +428,7 @@ pub fn ascii_board(c: &Circuit, placement: &[Place]) -> String {
     let (w, h) = (c.board.width, c.board.height);
     let g = geometry(c, placement);
     let mut grid = vec![vec!['.'; w as usize]; h as usize];
-    for &(x, y) in &c.constraints.keepout_holes {
+    for (x, y) in c.constraints.keepout.iter().flat_map(|k| k.holes()) {
         grid[y as usize][x as usize] = 'x';
     }
     let on_board = |(x, y): Point| x >= 0 && x < w && y >= 0 && y < h;
