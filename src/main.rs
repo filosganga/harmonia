@@ -15,10 +15,12 @@
 
 mod bench;
 mod board;
+mod build;
+mod check;
 mod constraints;
 mod diylc;
 mod kicad_pcb;
-mod build;
+mod learn;
 mod netlist;
 mod nn;
 mod place;
@@ -30,7 +32,7 @@ use board::{BoardSize, Design, Measures};
 use build::{Build, Made};
 use nn::Net;
 use svg::Side;
-use rand::{Rng, SeedableRng, rngs::StdRng, seq::SliceRandom};
+use rand::{SeedableRng, rngs::StdRng};
 use std::time::Instant;
 
 /// Where the outputs go, unless `--out` says otherwise.
@@ -137,7 +139,7 @@ fn main() {
         std::fs::create_dir_all(dir).unwrap_or_else(|e| panic!("can't make the folder {dir}: {e}"));
     }
     match args.command.as_str() {
-        "check" => return check_cmd(&args),
+        "check" => return check::run(&args),
         "draw" => return draw_cmd(&args.circuit),
         "footprints" => return netlist::describe(&args.circuit).iter().for_each(|f| println!("{f}")),
         "bench" => return bench::run(),
@@ -152,8 +154,8 @@ fn main() {
     }
     let cases = &loaded.cases;
     match args.command.as_str() {
-        "train" => train(cases, args.seed, &again(&args, "train", &args.circuit), &args.out),
-        "evolve" => evolve(cases, args.seed, &again(&args, "evolve", &args.circuit), &args.out),
+        "train" => learn::train(cases, args.seed, &again(&args, "train", &args.circuit), &args.out),
+        "evolve" => learn::evolve(cases, args.seed, &again(&args, "evolve", &args.circuit), &args.out),
         "nets" => print_nets(cases),
         _ => place_cmd(cases, &args, loaded.sketch, loaded.copper, loaded.board_file),
     }
@@ -259,183 +261,6 @@ fn place_cases(
 /// Which option of each one-of a case took, like `one-of "Pads by the ESP32's back pads": "by GP5"`.
 fn case_name(c: &Design) -> String {
     c.constraints.choices.join("; ")
-}
-
-/// The connections of a circuit, in an order that doesn't depend on the file: each net, as its
-/// sorted pin names, sorted.
-fn connections(c: &Design) -> Vec<Vec<String>> {
-    let mut nets: Vec<Vec<String>> = c.nets.iter().map(|n| {
-        let mut pins = n.pins.clone();
-        pins.sort();
-        pins
-    }).collect();
-    nets.sort();
-    nets
-}
-
-/// How one file did in `check`.
-enum Outcome {
-    Same,
-    NoConnections,
-    /// The reader refuses the file (say, a part it doesn't support): nothing to compare.
-    Unreadable(String),
-    /// When the placer stopped, the router couldn't reach this many pins, so the written file
-    /// doesn't join them.
-    Unfinished(usize),
-    /// Nets in the file but not in what was written back, and the other way round.
-    Different(Vec<Vec<String>>, Vec<Vec<String>>),
-    /// The layout file, read back, doesn't give the same layout file or the same drawings: what differs.
-    LayoutChanged(String),
-    /// Something stopped after the file was read: the placer, the router, the writer, or reading
-    /// back what was written.
-    Crashed(String),
-}
-
-/// Where the last stop (panic) happened, kept by `check`'s panic hook for its report.
-static LAST_STOP: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
-
-/// Runs `f`; if it stops, returns its message and where it stopped instead.
-fn caught<T>(f: impl FnOnce() -> T) -> Result<T, String> {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).map_err(|e| {
-        let why = e.downcast_ref::<String>().cloned().or_else(|| e.downcast_ref::<&str>().map(|s| s.to_string()));
-        format!("{} ({})", why.unwrap_or_default(), LAST_STOP.lock().unwrap())
-    })
-}
-
-/// The round trip for one DIYLC file: place it as `place` does, write the `.diy` (to
-/// out/check.diy), read that back, and compare the connections.
-fn check_one(path: &str, args: &Args) -> Outcome {
-    let loaded = match caught(|| load(path, args)) {
-        Ok(loaded) => loaded,
-        Err(why) => return Outcome::Unreadable(why),
-    };
-    let before = connections(&loaded.cases[0]);
-    if before.is_empty() {
-        return Outcome::NoConnections;
-    }
-    let round_trip = || {
-        let sketch = loaded.sketch.as_ref().expect("a .diy file has a sketch");
-        let mut rng = StdRng::seed_from_u64(args.seed);
-        let (k, _, best, _) = place_cases(&loaded.cases, board::cost, args.steps, &mut rng, Some(sketch), true);
-        let c = &loaded.cases[k];
-        let made = made(args, path, loaded.board_file.clone(), "sketch", &loaded.cases, k);
-        let build = Build::new(c.clone(), best.clone(), "check", made);
-        let written = format!("{}/check.diy", args.out);
-        let diy = diylc::write(&build);
-        std::fs::write(&written, &diy).unwrap();
-        // The layout file must keep everything the drawings need: write it, read it back, and the
-        // file and the drawings from what was read must be the same as from the layout in memory.
-        let saved = build::to_json(&build);
-        std::fs::write(format!("{}/check.layout.json", args.out), &saved).unwrap();
-        let read = build::from_json(&saved);
-        if let Some(why) = differences(&build, &read, &saved, &diy) {
-            return Outcome::LayoutChanged(why);
-        }
-        let after = connections(&load(&written, args).cases[0]);
-        if before == after {
-            return Outcome::Same;
-        }
-        // The placer's layouts are allowed, so no two pins share a hole and none is off the board:
-        // nets can't join by themselves. Pins the router couldn't reach aren't joined in the drawing at all. Leave them out on both
-        // sides: if everything else matches, only they are missing; if not, the writer is wrong.
-        let g = board::geometry(c, &best);
-        let holes: std::collections::HashSet<board::Point> = build.layout.routing.unrouted.iter().map(|&(_, _, hole)| hole).collect();
-        let mut unrouted = std::collections::HashSet::new();
-        for (ci, comp) in c.components.iter().enumerate() {
-            for pi in 0..comp.pins.len() {
-                if holes.contains(&g.pins[ci][pi]) {
-                    unrouted.insert(c.pin_name((ci, pi)));
-                }
-            }
-        }
-        let without = |nets: &[Vec<String>]| -> Vec<Vec<String>> {
-            let mut out: Vec<Vec<String>> = nets.iter().map(|n| n.iter().filter(|p| !unrouted.contains(*p)).cloned().collect::<Vec<_>>()).filter(|n| n.len() > 1).collect();
-            out.sort();
-            out
-        };
-        let (before, after) = (without(&before), without(&after));
-        if before == after {
-            return Outcome::Unfinished(unrouted.len());
-        }
-        let missing = before.iter().filter(|n| !after.contains(n)).cloned().collect();
-        let extra = after.iter().filter(|n| !before.contains(n)).cloned().collect();
-        Outcome::Different(missing, extra)
-    };
-    caught(round_trip).unwrap_or_else(Outcome::Crashed)
-}
-
-/// What differs between a layout and the same layout written to a layout file (`saved`) and read
-/// back (`read`): the file it writes again, or any of the drawings. None if nothing does.
-fn differences(build: &Build, read: &Build, saved: &str, diy: &str) -> Option<String> {
-    let checks = [
-        ("the layout file written again", saved.to_string(), build::to_json(read)),
-        ("the .diy", diy.to_string(), diylc::write(read)),
-        ("the picture", svg::draw(build, Side::Component), svg::draw(read, Side::Component)),
-        ("the solder-side picture", svg::draw(build, Side::Solder), svg::draw(read, Side::Solder)),
-        ("the KiCad board", kicad_pcb::write(build), kicad_pcb::write(read)),
-    ];
-    let differ: Vec<&str> = checks.iter().filter(|(_, from_memory, from_file)| from_memory != from_file).map(|(what, ..)| *what).collect();
-    (!differ.is_empty()).then(|| format!("read back from the layout file, {} came out different", differ.join(", ")))
-}
-
-/// Places every DIYLC file given (one file, or every .diy in a folder), writes it out the way
-/// `place` does, reads that back, and checks it has exactly the connections it started with.
-/// Exits with an error if any file comes back wrong or stops the program.
-fn check_cmd(args: &Args) {
-    let path = std::path::Path::new(&args.circuit);
-    let mut files: Vec<String> = if path.is_dir() {
-        let entries = std::fs::read_dir(path).unwrap_or_else(|e| panic!("can't read {}: {e}", path.display()));
-        entries.filter_map(|e| e.ok()).map(|e| e.path().to_string_lossy().into_owned()).filter(|p| p.ends_with(".diy")).collect()
-    } else {
-        vec![args.circuit.clone()]
-    };
-    files.sort();
-    if files.is_empty() || files.iter().any(|f| !f.ends_with(".diy")) {
-        panic!("check reads DIYLC files: give it a .diy file or a folder of them");
-    }
-    // A stop (panic) in one file goes in the report below, with where it happened, and the check
-    // carries on with the next file.
-    std::panic::set_hook(Box::new(|info| {
-        *LAST_STOP.lock().unwrap() = info.location().map_or(String::new(), |l| format!("at {}:{}", l.file(), l.line()));
-    }));
-    let (mut same, mut skipped, mut unfinished, mut wrong, mut crashed) = (0, 0, 0, 0, 0);
-    for f in &files {
-        let name = std::path::Path::new(f).file_name().unwrap().to_string_lossy().into_owned();
-        match check_one(f, args) {
-            Outcome::Same => same += 1,
-            Outcome::NoConnections => skipped += 1,
-            Outcome::Unreadable(why) => {
-                skipped += 1;
-                println!("  can't read  {name}: {why}");
-            }
-            Outcome::Unfinished(pins) => {
-                unfinished += 1;
-                println!("  unfinished  {name}: {pins} pins couldn't be reached by the router; try more --steps");
-            }
-            Outcome::Different(missing, extra) => {
-                wrong += 1;
-                println!("  WRONG       {name}: the written file has different connections");
-                missing.iter().for_each(|n| println!("                only in the file:    {}", n.join(" ")));
-                extra.iter().for_each(|n| println!("                only in the written: {}", n.join(" ")));
-            }
-            Outcome::LayoutChanged(why) => {
-                wrong += 1;
-                println!("  WRONG       {name}: {why}");
-            }
-            Outcome::Crashed(why) => {
-                crashed += 1;
-                println!("  STOPPED     {name}: {why}");
-            }
-        }
-    }
-    let _ = std::panic::take_hook();
-    println!(
-        "\n{} files: {same} same, {wrong} wrong, {crashed} stopped, {unfinished} unfinished, {skipped} skipped (no connections or can't read)",
-        files.len()
-    );
-    if wrong + crashed > 0 {
-        std::process::exit(1);
-    }
 }
 
 /// What the program understood from the file: the parts, which pins connect, and the cases of the
@@ -621,120 +446,3 @@ fn draw_cmd(path: &str) {
     let [picture, solder, kicad, diy] = write_drawings(&build, stem);
     println!("Pictures: {picture}, {solder}   For KiCad: {kicad}   For DIYLC: {diy}");
 }
-
-/// Example boards for training: (to learn from, kept aside to test).
-/// Random boards (allowed ones, like every board the placer sees), plus boards caught part-way through auto-placement so there are good ones too,
-/// taking the cases of the board file's rules in turn. Each is measured as the placer judges a move,
-/// routed once (`board::measure_once`): a network that learned from boards routed the thorough way
-/// rarely saw a pin left unrouted, didn't learn it's bad, and placed the 555 with solder-side wires.
-fn make_examples(cases: &[Design], rng: &mut StdRng) -> (Vec<Measures>, Vec<Measures>) {
-    let mut examples: Vec<Measures> = Vec::new();
-    for i in 0..12 {
-        let c = &cases[i % cases.len()];
-        let mut snap_rng = StdRng::seed_from_u64(rng.random());
-        let start = place::random_start(c, rng).unwrap_or_else(|why| panic!("{why}"));
-        place::anneal(c, board::cost, 4000, rng, start, |p| {
-            if snap_rng.random::<f64>() < 0.02 {
-                examples.push(board::measure_once(c, p));
-            }
-        });
-    }
-    for i in 0..examples.len() / 4 {
-        let c = &cases[i % cases.len()];
-        let board = place::random_start(c, rng).unwrap_or_else(|why| panic!("{why}"));
-        examples.push(board::measure_once(c, &board));
-    }
-    examples.shuffle(rng);
-    let test = examples.split_off(examples.len() * 4 / 5);
-    println!("Made {} example boards ({} to learn from, {} kept aside to test)\n", examples.len() + test.len(), examples.len(), test.len());
-    (examples, test)
-}
-
-/// The network's inputs and the right answer (the rules' score, scaled to 0..1) for each board.
-fn pairs(boards: &[Measures]) -> Vec<(Vec<f64>, f64)> {
-    boards.iter().map(|m| (nn::inputs(m), board::score(m) / 100.0)).collect()
-}
-
-/// Teach the network to score boards the way the rules do, by gradient descent.
-///
-/// 1. Make a pile of example boards.
-/// 2. Ask the rules for each board's score: that's the "right answer".
-/// 3. Show the network each board many times, nudging every weight in the direction that makes it less wrong.
-/// 4. Test it on boards it has never seen.
-fn train(cases: &[Design], seed: u64, again: &str, out: &str) {
-    let t0 = Instant::now();
-    let mut rng = StdRng::seed_from_u64(seed);
-    let (train, test) = make_examples(cases, &mut rng);
-
-    let mut net = Net::new(8);
-    let mut pairs = pairs(&train);
-    for epoch in 1..=200 {
-        pairs.shuffle(&mut rng);
-        let lr = if epoch < 120 { 0.05 } else { 0.01 };
-        let loss = pairs.iter().map(|(x, y)| net.train_step(x, *y, lr)).sum::<f64>() / pairs.len() as f64;
-        if [1, 2, 5, 10, 25, 50, 100, 150, 200].contains(&epoch) {
-            println!("  round {epoch:3}: typical error {:5.1} points", 100.0 * loss.sqrt());
-        }
-    }
-    finish(&net, &test, t0, seed, again, out);
-}
-
-/// The same job as `train`, done by evolution instead:
-///
-/// 1. Start from the same random network (the parent).
-/// 2. Make 19 children, each a copy of the parent with every weight changed a little at random.
-/// 3. Keep whichever of the 20 is least wrong on the example boards; it becomes the new parent.
-/// 4. Repeat. Changes get smaller towards the end, to fine-tune.
-fn evolve(cases: &[Design], seed: u64, again: &str, out: &str) {
-    const CHILDREN: usize = 19;
-    const GENERATIONS: usize = 1000;
-    let t0 = Instant::now();
-    let mut rng = StdRng::seed_from_u64(seed);
-    let (train, test) = make_examples(cases, &mut rng);
-    let pairs = pairs(&train);
-
-    let mut parent = Net::new(8);
-    let mut parent_err = parent.error(&pairs);
-    let mut improved = 0;
-    for generation in 1..=GENERATIONS {
-        // From 0.1 down to 0.003: big jumps early to explore, tiny ones at the end to fine-tune.
-        let size = 0.1 * 0.03f64.powf(generation as f64 / GENERATIONS as f64);
-        let (best, best_err) = (0..CHILDREN)
-            .map(|_| parent.mutated(size, &mut rng))
-            .map(|child| {
-                let err = child.error(&pairs);
-                (child, err)
-            })
-            .min_by(|a, b| a.1.total_cmp(&b.1))
-            .unwrap();
-        if best_err < parent_err {
-            (parent, parent_err) = (best, best_err);
-            improved += 1;
-        }
-        if [1, 2, 5, 10, 25, 50, 100, 250, 500, 750, 1000].contains(&generation) {
-            println!("  generation {generation:4}: typical error {:5.1} points", 100.0 * parent_err.sqrt());
-        }
-    }
-    println!("\nTried {} children; in {improved} of {GENERATIONS} generations the best child beat its parent.", GENERATIONS * CHILDREN);
-    finish(&parent, &test, t0, seed, again, out);
-}
-
-/// Test the trained network on boards it never saw, and save it for `place --judge net`. `seed`
-/// and `again` say how to make the same network again; it's saved in the folder `out`.
-fn finish(net: &Net, test: &[Measures], t0: Instant, seed: u64, again: &str, out: &str) {
-    let mean_err = test.iter().map(|m| (net.predict(m) - board::score(m)).abs()).sum::<f64>() / test.len() as f64;
-    println!("\nOn {} unseen boards the network is off by {mean_err:.1} points on average.", test.len());
-    println!("A few of them:");
-    let mut sorted = test.to_vec();
-    sorted.sort_by(|a, b| board::score(a).total_cmp(&board::score(b)));
-    for m in sorted.iter().step_by((sorted.len() / 6).max(1)) {
-        println!("  rules say {:5.1}   network says {:5.1}", board::score(m), net.predict(m));
-    }
-
-    let model = model_path(out);
-    net.save(&model);
-    let same_out = if out == OUT { String::new() } else { format!(" --out {out}") };
-    println!("\nSaved to {model} in {:.2}s. Try: {} place --judge net{same_out}", t0.elapsed().as_secs_f64(), program());
-    println!("Seed {seed}. To make this network again: {again} ({})", version());
-}
-

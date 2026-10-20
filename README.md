@@ -310,7 +310,9 @@ text board. Pins are named like the `nets` command prints them.
 | `src/place.rs` | The auto-placer: starts from an allowed layout and keeps nudging/rotating/swapping/jumping parts, only ever to allowed layouts, keeping changes the judge likes. |
 | `src/nn.rs` | The neural network, written out by hand (8 hidden neurons, 105 weights). |
 | `src/bench.rs` | The benchmark: places every circuit of `circuits/bench.txt` with three seeds, several runs at once, and records the best costs. |
-| `src/main.rs` | The commands: `place`, `train`, `evolve`, `nets`, `check`, `draw`, `bench` and `footprints` (no arguments or `--help` prints them all); `place` and `check` place every case of the board file's rules and keep the best. `train` and `evolve` make ~1,200 example boards (going through the board file's cases in turn, up to 12), have the rules score them, and train the network to match. |
+| `src/main.rs` | The commands: `place`, `train`, `evolve`, `nets`, `check`, `draw`, `bench` and `footprints` (no arguments or `--help` prints them all); reading a circuit and its board file; `place`, `nets` and `draw`, and what `check` and `learn` share with them (placing every case, how a layout was made). `place` and `check` place every case of the board file's rules and keep the best. |
+| `src/check.rs` | `check`: places each DIYLC file, writes it out, reads it back, and compares the connections; reads its layout file back too, and compares the drawings. |
+| `src/learn.rs` | `train` and `evolve`: make ~1,200 example boards (going through the board file's cases in turn, up to 12), have the rules score them, and train the network to match. |
 
 ## How a board is judged
 
