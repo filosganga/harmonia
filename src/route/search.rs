@@ -370,14 +370,15 @@ impl Scratch {
         Scratch { cost: vec![0; states], prev: vec![0; states], seen: vec![0; states], popped: vec![0; holes], first: vec![0; holes], via: vec![Step::Trace; states], round: 0, queue: BinaryHeap::new() }
     }
 
-    /// Cost to reach hole `i` in the last search, coming in from any direction, if it got there.
-    pub(super) fn reached(&self, i: usize) -> Option<u32> {
-        (self.popped[i] == self.round).then(|| self.cost[self.first[i]])
+    /// What the last search found its way to `target`: its cost, and its steps from where the
+    /// search started, the cheapest way.
+    pub(super) fn found(&self, grid: &Grid, target: Point) -> (u32, Path) {
+        let i = grid.at(target);
+        assert!(self.popped[i] == self.round, "path to a hole the search didn't reach");
+        (self.cost[self.first[i]], self.path(grid, i))
     }
 
-    /// The steps from where the last search started to hole `i`, the cheapest way.
-    pub(super) fn path(&self, grid: &Grid, i: usize) -> Path {
-        assert!(self.popped[i] == self.round, "path to a hole the search didn't reach");
+    fn path(&self, grid: &Grid, i: usize) -> Path {
         let mut s = self.first[i];
         let mut out = Vec::new();
         while self.prev[s] != usize::MAX {
@@ -392,7 +393,7 @@ impl Scratch {
 
 /// Spreads traces out from `from` towards `target`, cheapest hole first, trying holes in the
 /// target's direction first ("A*", which finds it sooner); true once it gets there, false if it
-/// runs out of holes it can reach. `mem` then holds the cheapest way there (`Scratch::path`). A
+/// runs out of holes it can reach. `mem` then holds the cheapest way there (`Scratch::found`). A
 /// trace pays TURN per right angle of bending (`bend`), except at a pin. With `shapes`, it also
 /// goes over wires: from a hole where a wire's leg fits, a jumper or a
 /// solder-side wire of any of those shapes, at what the score charges for it (`JUMPER` or
@@ -489,6 +490,5 @@ pub(super) fn join(grid: &Grid, mem: &mut Scratch, others: &[Point], target: Poi
     if others.is_empty() || !spread(grid, mem, others, target, run, net, None) {
         return None;
     }
-    let i = grid.at(target);
-    Some((mem.reached(i).unwrap(), mem.path(grid, i)))
+    Some(mem.found(grid, target))
 }

@@ -64,7 +64,8 @@ pub struct Routing {
     /// pin's), or it's off the board. Only shown, never copper.
     pub unrouted: Vec<(usize, Point, Point)>,
     /// Where a run of a soft star net joined another run of its net, away from the star point:
-    /// (run, the other run's hole it starts from). Its copper is in `traces`, as the run's own.
+    /// (run, the other run's hole it starts from; in your own wiring, a hole of the copper the runs
+    /// share). Its copper is in `traces`, as the run's own.
     pub joins: Vec<(usize, Point)>,
 }
 
@@ -193,7 +194,7 @@ pub fn unrouted_problems(c: &Design, g: &Geometry, routing: &Routing) -> Vec<Str
         pins.filter(|&(ci, pi, _)| g.pins[ci][pi] == hole)
             .map(|(ci, _, pin)| format!("{}.{}", c.components[ci].reference, pin.name))
             .next()
-            .unwrap_or_else(|| format!("the pin at {hole:?}"))
+            .expect("what's left unrouted is a pin")
     };
     routing
         .unrouted
@@ -306,10 +307,7 @@ fn route_in_order(c: &Design, g: &Geometry, mut grid: Grid, order: &[usize], bud
             // The pin nearest to what's joined so far.
             let (k, _) = remaining.iter().enumerate().min_by_key(|&(_, &p)| tree.iter().map(|&t| octile(t, p)).min().unwrap()).unwrap();
             let target = remaining.swap_remove(k);
-            let own = spread(&grid, &mut mem, &tree, target, r, run.net, Some(&shapes)).then(|| {
-                let i = grid.at(target);
-                (mem.reached(i).unwrap(), mem.path(&grid, i))
-            });
+            let own = spread(&grid, &mut mem, &tree, target, r, run.net, Some(&shapes)).then(|| mem.found(&grid, target));
             // A soft star's run may join another run of its net instead, if that's cheaper.
             let joined = soft_star.and_then(|weight| {
                 let others = out.traces.iter().chain(&out.jumpers).chain(&out.bottom).filter(|&&(o, ..)| o != r && c.runs[o].net == run.net);

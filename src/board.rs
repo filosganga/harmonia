@@ -104,13 +104,15 @@ pub struct BoardSize {
 /// written in the board file, for one case of them (`constraints.choices` says which). The placer,
 /// the router and the score all work on one; with a `Layout` it makes a `Build`.
 ///
-/// `Design::new` makes one from a KiCad netlist or a DIYLC sketch, without rules; `constraints::
+/// `Design::new` makes one from a KiCad netlist, a DIYLC sketch or a layout file, without rules; `constraints::
 /// designs` turns it into one per case of the board file's rules. The fields after `rules` are
 /// worked out from the ones before.
 #[derive(Clone)]
 pub struct Design {
     pub board: BoardSize,
     pub components: Vec<Component>,
+    /// Each joins two pins or more: a net with one pin has nothing to join, so the netlist and
+    /// sketch readers leave it out (and a layout file with one is refused).
     pub nets: Vec<Net>,
     /// The supply and ground nets, if known (without them the power rule is off).
     pub power: Option<String>,
@@ -141,6 +143,9 @@ impl Design {
     pub fn new(board: BoardSize, components: Vec<Component>, nets: Vec<Net>, power: Option<String>, ground: Option<String>) -> Design {
         let mut c = Design { board, components, nets, power, ground, rules: Vec::new(), net_pins: Vec::new(), constraints: Default::default(), runs: Vec::new() };
         c.net_pins = c.nets.iter().map(|net| net.pins.iter().map(|p| c.find_pin(p)).collect()).collect();
+        if let Some(net) = c.nets.iter().find(|n| n.pins.len() < 2) {
+            panic!("net {} joins fewer than two pins", net.name);
+        }
         // Stop now, with a clear message, if the power or ground net doesn't exist.
         c.power.iter().chain(&c.ground).for_each(|name| {
             c.net_index(name);
@@ -439,14 +444,14 @@ pub fn score(m: &Measures) -> f64 {
     100.0 * (-cost(m) / SCORE_SCALE).exp()
 }
 
-/// One line about a layout: its score, cost and measurements, or, for one that isn't allowed (a
-/// sketch can be drawn that way), what's wrong with it instead: it isn't scored.
-pub fn report(c: &Design, placement: &[Place], title: &str) -> String {
+/// One line about a layout: its score, cost and measurements (`m`), or, for one that isn't allowed
+/// (a sketch can be drawn that way), what's wrong with it instead: it isn't scored.
+pub fn report(c: &Design, placement: &[Place], m: &Measures, title: &str) -> String {
     let wrong = clashes(c, &geometry(c, placement), &vec![true; placement.len()]);
     if !wrong.is_empty() {
         return format!("{title}: not allowed, so not scored: {}", clash_words(c, &wrong).join("; "));
     }
-    report_measures(&measure(c, placement), title)
+    report_measures(m, title)
 }
 
 /// The same line, for measurements already made.

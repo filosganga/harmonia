@@ -129,10 +129,10 @@ pub fn draw(build: &Build, side: Side) -> String {
         format!(r#"x="{x:.1}" y="{y:.1}" width="{bw:.1}" height="{bh:.1}""#)
     };
 
-    // Each pin's net, counting only nets that join two pins or more.
+    // Each pin's net.
     let colors = board::net_colors(c);
     let mut net_of: HashMap<(usize, usize), usize> = HashMap::new();
-    for (n, members) in c.net_pins.iter().enumerate().filter(|(_, ms)| ms.len() > 1) {
+    for (n, members) in c.net_pins.iter().enumerate() {
         for &p in members {
             net_of.insert(p, n);
         }
@@ -387,7 +387,7 @@ pub fn draw(build: &Build, side: Side) -> String {
     }
     // Supply and ground first, then the other nets by name.
     let is_supply = |name: &String| c.power.as_ref() == Some(name) || c.ground.as_ref() == Some(name);
-    let mut shown: Vec<usize> = (0..c.nets.len()).filter(|&n| c.net_pins[n].len() > 1).collect();
+    let mut shown: Vec<usize> = (0..c.nets.len()).collect();
     shown.sort_by_key(|&n| (!is_supply(&c.nets[n].name), c.power.as_ref() != Some(&c.nets[n].name), c.nets[n].name.clone()));
     let swatch = 11.0 * 1.25;
     for n in shown {

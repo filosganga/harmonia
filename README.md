@@ -89,7 +89,7 @@ to work it out again, and a saved board can be scored again later. It's JSON, wi
     that doesn't take its whole outline (a module, or a DIYLC part drawn at an angle) also has its
     `body`, the holes it takes; a part from a DIYLC sketch has its `diylc_drawing`, your drawing of
     it, which is how the `.diy` keeps it.
-  - **nets**: each net's name and pins.
+  - **nets**: each net's name and pins (two or more).
 - **layout**: what was made of it.
   - **parts**: where each part sits, `at` and `rot` meaning what they mean in the board file's
     `fixed` rule, and the `hole` each of its pins lands in.

@@ -644,10 +644,10 @@ pub fn resolve(case: &Case, c: &Design) -> Result<Constraints, String> {
 }
 
 /// How each net is wired: one run joining all its pins, or for a star net, one run per branch
-/// from the star point. Nets with a single pin have nothing to join.
+/// from the star point.
 pub fn runs(c: &Design) -> Vec<Run> {
     let mut out = Vec::new();
-    for (net, pins) in c.net_pins.iter().enumerate().filter(|(_, pins)| pins.len() > 1) {
+    for (net, pins) in c.net_pins.iter().enumerate() {
         match c.constraints.stars.iter().find(|s| s.net == net) {
             Some(star) => {
                 let listed: HashSet<(usize, usize)> = star.runs.iter().flatten().copied().collect();

@@ -200,7 +200,8 @@ fn load(path: &str, args: &Args) -> Loaded {
 
 /// Places every case of the board file's rules, from the sketch if there is one, and keeps the
 /// cheapest layout by `cost` (the rules' cost, or what the network's score stands for). Returns which
-/// case it was, where it started (the sketch as you drew it, or the random start), and the layout.
+/// case it was, where it started (the sketch as you drew it, or the random start), the layout, and
+/// its measurements.
 /// The placer starts from the sketch made allowed (`place::allowed_start`); a case with no room for
 /// some part is left out, and if every case is, the program stops. With `report`, prints a line for
 /// each case when there are several, and why a case was left out.
@@ -211,8 +212,8 @@ fn place_cases(
     rng: &mut StdRng,
     sketch: Option<&board::Placement>,
     report: bool,
-) -> (usize, board::Placement, board::Placement) {
-    let mut best: Option<(usize, board::Placement, board::Placement, f64)> = None;
+) -> (usize, board::Placement, board::Placement, Measures) {
+    let mut best: Option<(usize, board::Placement, board::Placement, Measures, f64)> = None;
     let mut no_room = Vec::new();
     for (k, c) in cases.iter().enumerate() {
         let start = match sketch {
@@ -231,11 +232,12 @@ fn place_cases(
             }
         };
         let layout = place::anneal(c, &cost, steps, rng, start.clone(), |_| {});
+        let m = board::measure(c, &layout);
         if report && cases.len() > 1 {
-            println!("{}", board::report(c, &layout, &format!("Case {} of {} ({})", k + 1, cases.len(), case_name(c))));
+            println!("{}", board::report(c, &layout, &m, &format!("Case {} of {} ({})", k + 1, cases.len(), case_name(c))));
         }
-        let this = cost(&board::measure(c, &layout));
-        if best.as_ref().is_none_or(|b| this < b.3) {
+        let this = cost(&m);
+        if best.as_ref().is_none_or(|b| this < b.4) {
             // Show the sketch as you drew it (only its placement rules applied), not as it was moved apart.
             let shown = match sketch {
                 Some(sketch) => {
@@ -245,13 +247,13 @@ fn place_cases(
                 }
                 None => start,
             };
-            best = Some((k, shown, layout, this));
+            best = Some((k, shown, layout, m, this));
         }
     }
-    let Some((k, start, layout, _)) = best else {
+    let Some((k, start, layout, m, _)) = best else {
         panic!("no case has room for every part:\n  {}", no_room.join("\n  "));
     };
-    (k, start, layout)
+    (k, start, layout, m)
 }
 
 /// Which option of each one-of a case took, like `one-of "Pads by the ESP32's back pads": "by GP5"`.
@@ -259,10 +261,10 @@ fn case_name(c: &Design) -> String {
     c.constraints.choices.join("; ")
 }
 
-/// The connections of a circuit, in an order that doesn't depend on the file: each net with two
-/// pins or more, as its sorted pin names, sorted.
+/// The connections of a circuit, in an order that doesn't depend on the file: each net, as its
+/// sorted pin names, sorted.
 fn connections(c: &Design) -> Vec<Vec<String>> {
-    let mut nets: Vec<Vec<String>> = c.nets.iter().filter(|n| n.pins.len() > 1).map(|n| {
+    let mut nets: Vec<Vec<String>> = c.nets.iter().map(|n| {
         let mut pins = n.pins.clone();
         pins.sort();
         pins
@@ -314,7 +316,7 @@ fn check_one(path: &str, args: &Args) -> Outcome {
     let round_trip = || {
         let sketch = loaded.sketch.as_ref().expect("a .diy file has a sketch");
         let mut rng = StdRng::seed_from_u64(args.seed);
-        let (k, _, best) = place_cases(&loaded.cases, board::cost, args.steps, &mut rng, Some(sketch), true);
+        let (k, _, best, _) = place_cases(&loaded.cases, board::cost, args.steps, &mut rng, Some(sketch), true);
         let c = &loaded.cases[k];
         let made = made(args, path, loaded.board_file.clone(), "sketch", &loaded.cases, k);
         let build = Build::new(c.clone(), best.clone(), "check", made);
@@ -530,12 +532,15 @@ fn place_cmd(cases: &[Design], args: &Args, sketch: Option<board::Placement>, co
     };
 
     let (start_label, start_name) = if sketch.is_some() { ("Your sketch", "sketch") } else { ("Random start", "random") };
-    let (k, start, best) = place_cases(cases, judge, args.steps, &mut rng, sketch.as_ref(), true);
+    let (k, start, best, m) = place_cases(cases, judge, args.steps, &mut rng, sketch.as_ref(), true);
     let c = &cases[k];
     if cases.len() > 1 {
         println!("\nBest: case {} of {}\n", k + 1, cases.len());
     }
-    println!("{}", board::report(c, &start, start_label));
+    // The start, for the page that shows it next to the result. It isn't in the layout file.
+    let made = made(args, &args.circuit, board_file, start_name, cases, k);
+    let start = Build::new(c.clone(), start, start_label, made.clone());
+    println!("{}", board::report(c, &start.layout.placement, &start.measures, start_label));
     // Your own wiring, if you drew any, measured like the router's, and the router's on the same
     // placement (as you drew it, allowed or not), to compare.
     if let (Some(sketch), Some(copper)) = (&sketch, copper.as_ref().filter(|w| !w.traces.is_empty() || !w.jumpers.is_empty())) {
@@ -547,30 +552,27 @@ fn place_cmd(cases: &[Design], args: &Args, sketch: Option<board::Placement>, co
         }
         println!("{}", board::report_measures(&board::measure(c, sketch), "  wired by the router"));
     }
-    println!("{}\n", board::ascii_board(c, &start));
+    println!("{}\n", board::ascii_board(c, &start.layout.placement));
 
     let label = match case_name(c) {
         choices if choices.is_empty() => format!("Placed by {}", args.judge),
         choices => format!("Placed by {} ({choices})", args.judge),
     };
-    println!("{}", board::report(c, &best, &label));
+    println!("{}", board::report(c, &best, &m, &label));
     if let Some(net) = &net {
-        let m = board::measure(c, &best);
         println!("  (the network thought it would score {:.0}; the rules say {:.0})", net.predict(&m), board::score(&m));
     }
     println!("{}", board::ascii_board(c, &best));
 
-    // The finished board, routed and measured once: the layout file, and every drawing made from it.
-    let made = made(args, &args.circuit, board_file, start_name, cases, k);
-    let build = Build::new(c.clone(), best, &label, made.clone());
+    // The finished board, routed once more and kept with its copper: the layout file, and every
+    // drawing made from it, show that one routing.
+    let build = Build::new(c.clone(), best, &label, made);
     let made = &build.made;
     for problem in &build.problems {
         println!("  !! {problem}");
     }
     let saved = format!("{}/{}.layout.json", args.out, args.judge);
     std::fs::write(&saved, build::to_json(&build)).unwrap();
-    // The start, for the page that shows it next to the result. It isn't in the layout file.
-    let start = Build::new(c.clone(), start, start_label, made.clone());
     let path = format!("{}/{}.html", args.out, args.judge);
     let html = format!(
         "<!doctype html><meta charset='utf-8'><title>Perfboard layout</title>\
@@ -664,7 +666,7 @@ fn train(cases: &[Design], seed: u64, again: &str, out: &str) {
     let mut rng = StdRng::seed_from_u64(seed);
     let (train, test) = make_examples(cases, &mut rng);
 
-    let mut net = Net::new(8, 0);
+    let mut net = Net::new(8);
     let mut pairs = pairs(&train);
     for epoch in 1..=200 {
         pairs.shuffle(&mut rng);
@@ -691,7 +693,7 @@ fn evolve(cases: &[Design], seed: u64, again: &str, out: &str) {
     let (train, test) = make_examples(cases, &mut rng);
     let pairs = pairs(&train);
 
-    let mut parent = Net::new(8, 0);
+    let mut parent = Net::new(8);
     let mut parent_err = parent.error(&pairs);
     let mut improved = 0;
     for generation in 1..=GENERATIONS {

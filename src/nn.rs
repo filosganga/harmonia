@@ -31,8 +31,10 @@ pub struct Net {
 }
 
 impl Net {
-    pub fn new(n_hidden: usize, seed: u64) -> Net {
-        let mut rng = StdRng::seed_from_u64(seed);
+    /// A network with `n_hidden` hidden neurons and small random weights: the same ones every
+    /// time (`--seed` changes the example boards, not these), so train and evolve start alike.
+    pub fn new(n_hidden: usize) -> Net {
+        let mut rng = StdRng::seed_from_u64(0);
         Net {
             w1: (0..n_hidden).map(|_| (0..FEATURES.len()).map(|_| 0.5 * gauss(&mut rng)).collect()).collect(),
             b1: vec![0.0; n_hidden],

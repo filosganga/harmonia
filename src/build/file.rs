@@ -300,6 +300,9 @@ pub fn from_json(text: &str) -> Build {
         })
         .collect();
     let board = BoardSize { width: d.board.width, height: d.board.height };
+    if let Some(net) = d.nets.iter().find(|n| n.pins.len() < 2) {
+        panic!("layout file: net {} joins fewer than two pins", net.name);
+    }
     let unruled = Design::new(board, components, d.nets, d.power, d.ground);
     let (cases, _) = constraints::designs(&unruled, &d.rules);
     let mut design = cases.into_iter().find(|c| c.constraints.choices == d.choices).unwrap_or_else(|| {
@@ -334,6 +337,12 @@ pub fn from_json(text: &str) -> Build {
         routing.joins.extend(entry.joins.iter().map(|&at| (r, at)));
     }
 
+    // What's left unrouted is one of its run's pins.
+    for &(r, _, pin) in &routing.unrouted {
+        if !design.runs[r].pins.iter().any(|&(ci, pi)| g.pins[ci][pi] == pin) {
+            panic!("layout file: {} has something unrouted at {pin:?}, which isn't one of its pins", design.nets[design.runs[r].net].name);
+        }
+    }
     // What the file says twice must agree: each pin's hole.
     for (ci, part) in l.parts.iter().enumerate() {
         for (pi, pin) in part.pins.iter().enumerate() {
