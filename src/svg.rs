@@ -58,7 +58,7 @@ const STYLE: &str = "
 /// whether it came from footprints.json or a sketch), or "module" for a part parts can go under (a
 /// DIYLC group, or a footprint with "module": true).
 fn shape(comp: &Component) -> &str {
-    let full = comp.body.len() == (comp.w * comp.h) as usize;
+    let full = !comp.room_under();
     match &comp.diylc {
         Some(p) => &p.part,
         // A group with nothing free under it (say, a header and its label) is drawn like a header.
@@ -215,7 +215,7 @@ pub fn draw(build: &Build, side: Side) -> String {
             match pin_at.get(&(x, y)) {
                 Some(&(ci, pi)) => {
                     let net = net_of.get(&(ci, pi)).map_or("connected to nothing".to_string(), |&n| format!("net {}", c.nets[n].name));
-                    let pin = format!("{}.{}", c.components[ci].reference, c.components[ci].pins[pi].name);
+                    let pin = c.pin_name((ci, pi));
                     writeln!(
                         holes,
                         r##"<circle cx="{cx:.1}" cy="{cy:.1}" r="{:.1}" fill="{}" stroke="#ffffff" stroke-width="1.5"><title>{x},{y} · {} · {}</title></circle>"##,

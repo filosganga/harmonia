@@ -2,8 +2,8 @@
 //! lie), and the A* search that finds the cheapest way from what a run has joined so far to its
 //! next pin, in steps of trace and wires (`spread`), with what each step costs.
 
-use super::{Routing, distance};
-use crate::board::{Design, Geometry, Point};
+use super::Routing;
+use crate::board::{Design, Geometry, Point, distance};
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashSet};
 
@@ -253,8 +253,8 @@ pub(super) fn empty_grid(c: &Design, g: &Geometry) -> Grid {
 
     // Holes under a part's body. Not a module's: only its pins take holes, and a jumper fits under
     // its board.
-    for (body, outline) in g.bodies.iter().zip(&g.outlines) {
-        if body.len() == outline.len() {
+    for (comp, body) in c.components.iter().zip(&g.bodies) {
+        if !comp.room_under() {
             for &p in body {
                 if let Some(i) = grid.index(p) {
                     grid.body[i] = true;

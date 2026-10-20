@@ -86,6 +86,13 @@ impl Component {
     pub fn full_body(w: i32, h: i32) -> Vec<Point> {
         (0..w).flat_map(|x| (0..h).map(move |y| (x, y))).collect()
     }
+
+    /// Whether other parts can go under it: its body doesn't take its whole outline. A module on
+    /// headers (a footprints.json module, a DIYLC group); also a DIYLC two-legged part drawn at an
+    /// angle, which only takes its legs.
+    pub fn room_under(&self) -> bool {
+        self.body.len() < (self.w * self.h) as usize
+    }
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
@@ -151,6 +158,11 @@ impl Design {
             c.net_index(name);
         });
         c
+    }
+
+    /// (index of U1, index of its pin "8") -> "U1.8": `find_pin` the other way.
+    pub fn pin_name(&self, (ci, pi): (usize, usize)) -> String {
+        format!("{}.{}", self.components[ci].reference, self.components[ci].pins[pi].name)
     }
 
     /// "U1.8" -> (index of U1, index of its pin "8")
@@ -231,6 +243,17 @@ fn manhattan(a: Point, b: Point) -> i32 {
     (a.0 - b.0).abs() + (a.1 - b.1).abs()
 }
 
+/// Distance between two holes, in holes, straight across the board.
+pub fn distance(a: Point, b: Point) -> f64 {
+    (((a.0 - b.0).pow(2) + (a.1 - b.1).pow(2)) as f64).sqrt()
+}
+
+/// The corners of the smallest rectangle around some holes: (left, top), (right, bottom).
+pub fn bounds(holes: &[Point]) -> (Point, Point) {
+    let (xs, ys) = (holes.iter().map(|p| p.0), holes.iter().map(|p| p.1));
+    ((xs.clone().min().unwrap(), ys.clone().min().unwrap()), (xs.max().unwrap(), ys.max().unwrap()))
+}
+
 /// The raw measurements, in the order of FEATURES.
 #[derive(Clone, Copy, Debug)]
 pub struct Measures(pub [f64; FEATURES.len()]);
@@ -267,8 +290,7 @@ pub fn measure_routed(c: &Design, placement: &[Place], g: &Geometry, routing: &c
     });
     let straight = c.constraints.close.iter().map(|r| {
         let [(ca, pa), (cb, pb)] = r.pins;
-        let ((xa, ya), (xb, yb)) = (g.pins[ca][pa], g.pins[cb][pb]);
-        r.weight * (((xa - xb).pow(2) + (ya - yb).pow(2)) as f64).sqrt()
+        r.weight * distance(g.pins[ca][pa], g.pins[cb][pb])
     });
     // Soft placement rules, as broken as they are where the parts are; holes of soft keep-outs that
     // a part or copper covers; and joins between runs of a soft star net (see route.rs).
@@ -381,8 +403,8 @@ pub fn clashes(c: &Design, g: &Geometry, placed: &[bool]) -> Vec<Clash> {
         out.extend(outline.iter().filter(|&&(x, y)| x < 0 || x >= w || y < 0 || y >= h).map(|&hole| Clash { part, hole, why: Why::OffBoard }));
     }
     for (m, (outline, body)) in g.outlines.iter().zip(&g.bodies).enumerate().filter(|&(i, _)| placed[i]) {
-        if body.len() == outline.len() {
-            continue; // not a module
+        if !c.components[m].room_under() {
+            continue;
         }
         let under: HashSet<Point> = outline.iter().filter(|p| !body.contains(p)).copied().collect();
         for (part, comp) in c.components.iter().enumerate().filter(|&(i, _)| placed[i]) {
@@ -508,7 +530,7 @@ pub fn ascii_board(c: &Design, placement: &[Place]) -> String {
     if !c.constraints.keepout.is_empty() {
         legend.push("x=keep-out".into());
     }
-    if c.components.iter().any(|comp| comp.body.len() < (comp.w * comp.h) as usize) {
+    if c.components.iter().any(Component::room_under) {
         legend.push(":=under a module".into());
     }
     out + "\n   " + &legend.join("  ")

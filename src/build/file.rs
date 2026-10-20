@@ -181,11 +181,6 @@ struct Score {
     measures: BTreeMap<String, f64>,
 }
 
-/// "U1.8": a pin's name, as nets and board files write it.
-fn pin_name(c: &Design, (ci, pi): (usize, usize)) -> String {
-    format!("{}.{}", c.components[ci].reference, c.components[ci].pins[pi].name)
-}
-
 /// The build as the text of a layout file.
 pub fn to_json(build: &Build) -> String {
     let (c, layout) = (&build.design, &build.layout);
@@ -228,8 +223,8 @@ pub fn to_json(build: &Build) -> String {
         .enumerate()
         .map(|(r, run)| RunEntry {
             net: c.nets[run.net].name.clone(),
-            star: run.star.map(|p| pin_name(c, p)),
-            pins: run.pins.iter().map(|&p| pin_name(c, p)).collect(),
+            star: run.star.map(|p| c.pin_name(p)),
+            pins: run.pins.iter().map(|&p| c.pin_name(p)).collect(),
             traces: of_run(&straight, r),
             jumpers: of_run(&routing.jumpers, r),
             solder_wires: of_run(&routing.bottom, r),
@@ -322,7 +317,7 @@ pub fn from_json(text: &str) -> Build {
     let order = crate::route::order(&design, &g);
     design.runs = order.iter().map(|&r| design.runs[r].clone()).collect();
     let said: Vec<(String, Option<String>, Vec<String>)> = l.runs.iter().map(|e| (e.net.clone(), e.star.clone(), e.pins.clone())).collect();
-    let made_by_rules: Vec<(String, Option<String>, Vec<String>)> = design.runs.iter().map(|run: &Run| (design.nets[run.net].name.clone(), run.star.map(|p| pin_name(&design, p)), run.pins.iter().map(|&p| pin_name(&design, p)).collect())).collect();
+    let made_by_rules: Vec<(String, Option<String>, Vec<String>)> = design.runs.iter().map(|run: &Run| (design.nets[run.net].name.clone(), run.star.map(|p| design.pin_name(p)), run.pins.iter().map(|&p| design.pin_name(p)).collect())).collect();
     if said != made_by_rules {
         panic!("layout file: its runs aren't the ones its design's rules make");
     }
@@ -346,7 +341,7 @@ pub fn from_json(text: &str) -> Build {
     // What the file says twice must agree: each pin's hole.
     for (ci, part) in l.parts.iter().enumerate() {
         for (pi, pin) in part.pins.iter().enumerate() {
-            let name = pin_name(&design, (ci, pi));
+            let name = design.pin_name((ci, pi));
             if pin.name != design.components[ci].pins[pi].name || pin.hole != g.pins[ci][pi] {
                 panic!("layout file: {name} says it's in hole {:?}, but its part's at, rot and size put it in {:?}", pin.hole, g.pins[ci][pi]);
             }
@@ -358,13 +353,9 @@ pub fn from_json(text: &str) -> Build {
 /// A straight trace from `a` to `b` (across, down or at 45°) as the steps between neighbouring
 /// holes the router laid it in.
 fn steps(a: Point, b: Point) -> Vec<(Point, Point)> {
-    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
-    if !(dx == 0 || dy == 0 || dx.abs() == dy.abs()) || a == b {
-        panic!("layout file: a trace from {a:?} to {b:?} isn't straight across, down or at 45°");
-    }
-    let (sx, sy) = (dx.signum(), dy.signum());
-    let n = dx.abs().max(dy.abs());
-    (0..n).map(|k| ((a.0 + sx * k, a.1 + sy * k), (a.0 + sx * (k + 1), a.1 + sy * (k + 1)))).collect()
+    (a != b).then(|| crate::route::unit_steps(a, b)).flatten().unwrap_or_else(|| {
+        panic!("layout file: a trace from {a:?} to {b:?} isn't straight across, down or at 45°")
+    })
 }
 
 // ------------------------------------------------------------ pretty JSON

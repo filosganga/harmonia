@@ -342,9 +342,9 @@ fn check_one(path: &str, args: &Args) -> Outcome {
         let holes: std::collections::HashSet<board::Point> = build.layout.routing.unrouted.iter().map(|&(_, _, hole)| hole).collect();
         let mut unrouted = std::collections::HashSet::new();
         for (ci, comp) in c.components.iter().enumerate() {
-            for (pi, pin) in comp.pins.iter().enumerate() {
+            for pi in 0..comp.pins.len() {
                 if holes.contains(&g.pins[ci][pi]) {
-                    unrouted.insert(format!("{}.{}", comp.reference, pin.name));
+                    unrouted.insert(c.pin_name((ci, pi)));
                 }
             }
         }
@@ -444,7 +444,7 @@ fn print_nets(cases: &[Design]) {
     let c = &cases[0]; // the parts and nets are the same in every case
     println!("{} parts:", c.components.len());
     for comp in &c.components {
-        let kind = if comp.body.len() < (comp.w * comp.h) as usize { "  (module: parts can go under it)" } else { "" };
+        let kind = if comp.room_under() { "  (module: parts can go under it)" } else { "" };
         println!("  {:<12} {:>2}x{:<2} holes, {} pins{kind}", comp.reference, comp.w, comp.h, comp.pins.len());
     }
     let or_none = |n: &Option<String>| n.clone().unwrap_or_else(|| "none".into());

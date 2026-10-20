@@ -264,9 +264,7 @@ impl Rule {
             }
             Rule::Edge { part, .. } => Some(part),
             Rule::Within { part, from, to, .. } => {
-                if rectangle(*from, *to).any(|(x, y)| x < 0 || x >= w || y < 0 || y >= h) {
-                    panic!("board file: {rule}: {from:?} to {to:?} goes off the {w}x{h} board");
-                }
+                on_board(&rule, *from, *to, w, h);
                 Some(part)
             }
             Rule::AllOf { rules, .. } | Rule::OneOf { rules, .. } => {
@@ -453,6 +451,13 @@ pub enum Edge {
     Bottom,
 }
 
+/// Stops, naming the rule, if a rectangle goes off the w x h board.
+fn on_board(rule: &str, from: Point, to: Point, w: i32, h: i32) {
+    if rectangle(from, to).any(|(x, y)| x < 0 || x >= w || y < 0 || y >= h) {
+        panic!("board file: {rule}: {from:?} to {to:?} goes off the {w}x{h} board");
+    }
+}
+
 /// Every hole of a rectangle, `from` one corner `to` the other (both included).
 fn rectangle(from: Point, to: Point) -> impl Iterator<Item = Point> {
     let (x0, x1) = (from.0.min(to.0), from.0.max(to.0));
@@ -561,9 +566,7 @@ pub fn resolve(case: &Case, c: &Design) -> Result<Constraints, String> {
         match rule {
             Rule::Keepout { name, from, to, .. } => {
                 let k = Keepout { from: *from, to: *to, name: name.clone().unwrap_or_default(), weight };
-                if k.holes().any(|(x, y)| x < 0 || x >= w || y < 0 || y >= h) {
-                    panic!("board file: {called}: {from:?} to {to:?} goes off the {w}x{h} board");
-                }
+                on_board(&called, *from, *to, w, h);
                 out.add_keepout(k);
             }
             Rule::Near { pins: [a, b], .. } => {

@@ -10,7 +10,7 @@
 //! board) becomes one part. Only its pins' holes are taken, so low parts can go under it.
 
 use super::{HOLE, Kind, MARGIN, Source, class};
-use crate::board::{BoardSize, Design, Component, Net, Pin, Place, Placement, Point};
+use crate::board::{BoardSize, Design, Component, Net, Pin, Place, Placement, Point, bounds};
 use crate::netlist::{self, NET_NAME_HINTS, Options};
 use roxmltree::Node;
 use std::collections::{BTreeSet, HashMap};
@@ -255,8 +255,7 @@ fn components(path: &str, root: &Node, parts: &[Drawn], decorations: &HashMap<St
         body.sort();
         body.dedup();
         outline.extend(&body);
-        let (x0, x1) = (outline.iter().map(|p| p.0).min().unwrap(), outline.iter().map(|p| p.0).max().unwrap());
-        let (y0, y1) = (outline.iter().map(|p| p.1).min().unwrap(), outline.iter().map(|p| p.1).max().unwrap());
+        let ((x0, y0), (x1, y1)) = bounds(&outline);
         let local = |(x, y): Point| (x - x0, y - y0);
         let single = members.len() == 1 && !in_group;
         let first = &parts[members[0]];
@@ -334,8 +333,7 @@ fn name_nets(nets: Vec<Vec<String>>) -> Vec<Net> {
 /// The holes a part's body takes in the sketch.
 fn body_of(class: &str, item: Node, pins: &[(String, Inches)]) -> Vec<Point> {
     let holes: Vec<Point> = pins.iter().map(|(_, at)| hole(*at)).collect();
-    let (mut x0, mut x1) = (holes.iter().map(|p| p.0).min().unwrap(), holes.iter().map(|p| p.0).max().unwrap());
-    let (mut y0, mut y1) = (holes.iter().map(|p| p.1).min().unwrap(), holes.iter().map(|p| p.1).max().unwrap());
+    let ((mut x0, mut y0), (mut x1, mut y1)) = bounds(&holes);
     if holes.len() == 2 && x0 != x1 && y0 != y1 {
         return holes; // a two-legged part drawn at an angle: just its legs
     }

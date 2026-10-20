@@ -170,11 +170,8 @@ pub fn write(build: &Build) -> String {
             None => {
                 // No DIYLC part for this footprint: a box over its outline, with its name on it; for a
                 // module, see-through, since low parts sit under its board.
-                let outline = &g.outlines[ci];
-                let (x0, x1) = (outline.iter().map(|p| p.0).min().unwrap(), outline.iter().map(|p| p.0).max().unwrap());
-                let (y0, y1) = (outline.iter().map(|p| p.1).min().unwrap(), outline.iter().map(|p| p.1).max().unwrap());
-                let alpha = if g.bodies[ci].len() < outline.len() { 30 } else { 100 };
-                labelled_box(&mut s, [id(), id()], &comp.reference, ((x0, y0), (x1, y1)), "ffffff", alpha);
+                let alpha = if comp.room_under() { 30 } else { 100 };
+                labelled_box(&mut s, [id(), id()], &comp.reference, board::bounds(&g.outlines[ci]), "ffffff", alpha);
             }
         }
     }

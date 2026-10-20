@@ -2,7 +2,7 @@
 //! measures the router's.
 
 use super::Routing;
-use super::search::{Side, holes_between};
+use super::search::Side;
 use crate::board::{Design, Geometry, Point};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -19,13 +19,7 @@ pub fn from_sketch(c: &Design, g: &Geometry, copper: &crate::diylc::Copper) -> (
     let mut steps: Vec<(usize, Point, Point)> = Vec::new();
     let mut seen: HashSet<(usize, Point, Point)> = HashSet::new();
     for &(net, a, b) in &copper.traces {
-        let (dx, dy) = (b.0 - a.0, b.1 - a.1);
-        let pieces: Vec<(Point, Point)> = if dx == 0 || dy == 0 || dx.abs() == dy.abs() {
-            holes_between(a, b).chain([b]).scan(a, |from, to| Some((std::mem::replace(from, to), to))).collect()
-        } else {
-            vec![(a, b)]
-        };
-        for (p, q) in pieces {
+        for (p, q) in super::unit_steps(a, b).unwrap_or_else(|| vec![(a, b)]) {
             if p != q && seen.insert((net, p.min(q), p.max(q))) {
                 steps.push((net, p, q));
             }

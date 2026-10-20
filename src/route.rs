@@ -45,7 +45,7 @@ mod sketch;
 
 pub use sketch::from_sketch;
 
-use crate::board::{Design, Geometry, Measures, Place, Point, WEIGHTS};
+use crate::board::{Design, Geometry, Measures, Place, Point, WEIGHTS, distance};
 use rand::{SeedableRng, rngs::StdRng, seq::SliceRandom};
 use search::{Grid, RULE, Scratch, Step, bend, empty_grid, holes_between, join, jumper_shapes, lay, octile, spread};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -190,9 +190,9 @@ impl Routing {
 /// The `!!` lines for connections the router couldn't make, naming each pin left out.
 pub fn unrouted_problems(c: &Design, g: &Geometry, routing: &Routing) -> Vec<String> {
     let name_of = |hole: Point| {
-        let pins = c.components.iter().enumerate().flat_map(|(ci, comp)| comp.pins.iter().enumerate().map(move |(pi, pin)| (ci, pi, pin)));
-        pins.filter(|&(ci, pi, _)| g.pins[ci][pi] == hole)
-            .map(|(ci, _, pin)| format!("{}.{}", c.components[ci].reference, pin.name))
+        let pins = c.components.iter().enumerate().flat_map(|(ci, comp)| (0..comp.pins.len()).map(move |pi| (ci, pi)));
+        pins.filter(|&(ci, pi)| g.pins[ci][pi] == hole)
+            .map(|pin| c.pin_name(pin))
             .next()
             .expect("what's left unrouted is a pin")
     };
@@ -216,9 +216,11 @@ pub fn unrouted_problems(c: &Design, g: &Geometry, routing: &Routing) -> Vec<Str
 /// (`route_once`).
 const CANDIDATES: usize = 200;
 
-/// Distance between two holes, in holes.
-fn distance(a: Point, b: Point) -> f64 {
-    (((a.0 - b.0).pow(2) + (a.1 - b.1).pow(2)) as f64).sqrt()
+/// A straight trace from `a` to `b` (across, down or at 45°) as steps between neighbouring holes,
+/// the way the router lays it; None for one at another angle.
+pub fn unit_steps(a: Point, b: Point) -> Option<Vec<(Point, Point)>> {
+    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+    (dx == 0 || dy == 0 || dx.abs() == dy.abs()).then(|| holes_between(a, b).chain([b]).scan(a, |from, to| Some((std::mem::replace(from, to), to))).collect())
 }
 
 /// Routes every run of the circuit, for parts at `placement` (whose geometry is `g`): makes
