@@ -38,7 +38,10 @@
 //! Which way each run goes depends on the order the runs are routed in, and on which of several
 //! equally cheap ways the search finds first; on a crowded board (pins in a row along an edge) one
 //! run can take the only holes a later one needed. So for a finished layout the router makes many
-//! complete routings, in different orders, and the score picks the best (`route`).
+//! complete routings, in different orders, and the score picks the best (`route`). Each is still
+//! built run after run, each the cheapest way the ones before it left, so no run ever leaves room
+//! for a later one: the best is then improved a few runs at a time (`improve`), every change judged
+//! by the score.
 
 mod search;
 mod sketch;
@@ -46,8 +49,8 @@ mod sketch;
 pub use sketch::from_sketch;
 
 use crate::board::{Design, Geometry, Measures, Place, Point, WEIGHTS, distance};
-use rand::{SeedableRng, rngs::StdRng, seq::SliceRandom};
-use search::{Grid, RULE, Scratch, Step, bend, empty_grid, holes_between, join, jumper_shapes, lay, octile, spread};
+use rand::{Rng, SeedableRng, rngs::StdRng, seq::SliceRandom};
+use search::{Grid, RULE, Scratch, Side, Step, bend, empty_grid, holes_between, join, jumper_shapes, lay, octile, spread};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// Where the copper goes. Each entry is (run, from hole, to hole).
@@ -209,11 +212,12 @@ pub fn unrouted_problems(c: &Design, g: &Geometry, routing: &Routing) -> Vec<Str
 /// How many complete routings `route` proposes for a finished layout. On the cat feeder with
 /// every part fixed where it's soldered (circuits/cat_feeder_fixed), shortest first leaves a pin
 /// walled in. As shipped (orders from seed 0), the best of 200 routes every pin with no
-/// solder-side wire: cost 677 with the star rules, 625 without; over three other seeds of orders,
-/// 653 to 661 and 589 to 623. A rip-up router tried before this found 701 and 702. With fewer the
-/// best was often still a pin short: 50 found 1632 on one seed. Most candidates stop early (see
-/// `route_in_order`); 200 take 0.1 to 0.15s on that board. The placer judges its moves with one
-/// (`route_once`).
+/// solder-side wire: cost 677 with the star rules, 625 without (before `improve`); over three other
+/// seeds of orders, 653 to 661 and 589 to 623. A router tried before this, which ripped up runs
+/// while building them with tolls on the holes they fought over, found 701 and 702.
+/// With fewer the best was often still a pin short: 50 found 1632 on one seed. Most candidates stop
+/// early (see `route_in_order`); 200 take 0.1 to 0.15s on that board. The placer judges its moves
+/// with one (`route_once`).
 const CANDIDATES: usize = 200;
 
 /// A straight trace from `a` to `b` (across, down or at 45°) as steps between neighbouring holes,
@@ -225,10 +229,10 @@ pub fn unit_steps(a: Point, b: Point) -> Option<Vec<(Point, Point)>> {
 
 /// Routes every run of the circuit, for parts at `placement` (whose geometry is `g`): makes
 /// CANDIDATES complete routings, the first shortest run first and the others in random orders, and
-/// keeps the one the score likes best (`board::cost`, every measurement and rule counted). The
-/// router has no rules of its own about what to try again or what to keep room for: it proposes,
-/// the score judges. The random orders come from a fixed seed, so the same placement always gets
-/// the same copper.
+/// keeps the one the score likes best (`board::cost`, every measurement and rule counted), then
+/// improves it a few runs at a time (`improve`). The router has no rules of its own about what to
+/// try again or what to keep room for: it proposes, the score judges. The random choices come from
+/// fixed seeds, so the same placement always gets the same copper.
 pub fn route(c: &Design, placement: &[Place], g: &Geometry) -> Routing {
     let canonical = order(c, g);
     let empty = empty_grid(c, g);
@@ -245,7 +249,7 @@ pub fn route(c: &Design, placement: &[Place], g: &Geometry) -> Routing {
             grid.dir_order.shuffle(&mut rng);
         }
         let budget = best.as_ref().map_or(f64::INFINITY, |b| b.1);
-        let (routing, gave_up) = route_in_order(c, g, grid, &order, budget);
+        let (routing, gave_up) = route_in_order(c, g, grid, Routing::default(), &order, budget);
         if gave_up {
             continue;
         }
@@ -255,9 +259,10 @@ pub fn route(c: &Design, placement: &[Place], g: &Geometry) -> Routing {
             best = Some((cost, cost - fixed(&m), routing));
         }
     }
+    let routing = improve(c, placement, g, best.expect("the first candidate has no budget to pass").2);
     // Each run's copper together, runs in `order`'s order (the layout file lists them that way),
     // whichever order the winner laid them in.
-    let mut routing = best.expect("the first candidate has no budget to pass").2;
+    let mut routing = routing;
     let mut rank = vec![0; canonical.len()];
     for (k, &r) in canonical.iter().enumerate() {
         rank[r] = k;
@@ -272,20 +277,77 @@ pub fn route(c: &Design, placement: &[Place], g: &Geometry) -> Routing {
 /// Routes every run once, shortest first: what the placer judges each move by (see
 /// `place::anneal`). It's `route`'s first candidate, so `route` is never worse.
 pub fn route_once(c: &Design, g: &Geometry) -> Routing {
-    route_in_order(c, g, empty_grid(c, g), &order(c, g), f64::INFINITY).0
+    route_in_order(c, g, empty_grid(c, g), Routing::default(), &order(c, g), f64::INFINITY).0
 }
 
-/// Routes the runs one at a time, in `order`, on `grid` (the parts and keep-outs, no copper yet).
+/// How many changes `improve` tries. On the cat feeder with every part fixed where it's soldered
+/// (circuits/cat_feeder_fixed), the best of the 200 candidates costs 677 (625 without the star
+/// rules); improved, 627 after 1000 tries, 622 after 2000 (582 without the star rules), 615 after
+/// 4000, each 2000 about 1.3s on that board. On the same parts as the hand-wired sketch, with a
+/// jumper costing 95 instead of 15: the best candidate costs 1503 with 9 jumpers, the hand wiring
+/// 1349 with 4, and improved, 1123 with 6. The candidates alone never got below the hand wiring
+/// whatever the jumper price: built run after run, each the cheapest way the ones before left, no
+/// run leaves room for a later one. Changing a few runs at a time does.
+const IMPROVE: usize = 2000;
+
+/// Makes a finished routing better, a few runs at a time: rips up a random run and every run with
+/// copper or a pin in the box around its own (grown by 0 to 3 holes, at random), routes them again in a
+/// random order, and keeps the change if the whole board costs less (`board::cost`). The score
+/// judges every change, as it judges the candidates; the random choices come from a fixed seed.
+fn improve(c: &Design, placement: &[Place], g: &Geometry, start: Routing) -> Routing {
+    let cost = |r: &Routing| crate::board::cost(&crate::board::measure_routed(c, placement, g, r));
+    let mut rng = StdRng::seed_from_u64(1);
+    let (mut best, mut best_cost) = (start.clone(), cost(&start));
+    // The holes a run's pins and copper take.
+    let holes = |routing: &Routing, r: usize| -> Vec<Point> {
+        let copper = routing.traces.iter().chain(&routing.jumpers).chain(&routing.bottom).filter(|t| t.0 == r).flat_map(|&(_, a, b)| [a, b]);
+        c.runs[r].pins.iter().map(|&(ci, pi)| g.pins[ci][pi]).chain(copper).collect()
+    };
+    for _ in 0..IMPROVE {
+        let r = rng.random_range(0..c.runs.len());
+        let ((x0, y0), (x1, y1)) = crate::board::bounds(&holes(&best, r));
+        let grow = rng.random_range(0..=3);
+        let near = |p: &Point| (x0 - grow..=x1 + grow).contains(&p.0) && (y0 - grow..=y1 + grow).contains(&p.1);
+        let mut again: Vec<usize> = (0..c.runs.len()).filter(|&o| o == r || holes(&best, o).iter().any(near)).collect();
+        // A soft star's runs may have joined each other's copper: they go again together, so none
+        // is left joined to copper that moved.
+        let soft = |net: usize| c.constraints.stars.iter().any(|s| s.net == net && s.weight.is_some());
+        let nets: Vec<usize> = again.iter().map(|&o| c.runs[o].net).filter(|&net| soft(net)).collect();
+        let together: Vec<usize> = (0..c.runs.len()).filter(|o| !again.contains(o) && nets.contains(&c.runs[*o].net)).collect();
+        again.extend(together);
+        again.shuffle(&mut rng);
+        // The rest stays as it is: laid on the board first, for the runs routed again to go round.
+        let mut grid = empty_grid(c, g);
+        grid.dir_order.shuffle(&mut rng);
+        let mut kept = Routing::default();
+        for (list, step) in [(&best.traces, Step::Trace), (&best.jumpers, Step::Wire(Side::Top)), (&best.bottom, Step::Wire(Side::Bottom))] {
+            for &(run, a, b) in list.iter().filter(|t| !again.contains(&t.0)) {
+                lay(&mut grid, &mut kept, run, a, b, step);
+            }
+        }
+        kept.unrouted = best.unrouted.iter().filter(|t| !again.contains(&t.0)).copied().collect();
+        kept.joins = best.joins.iter().filter(|t| !again.contains(&t.0)).copied().collect();
+        let (changed, _) = route_in_order(c, g, grid, kept, &again, f64::INFINITY);
+        let now = cost(&changed);
+        if now < best_cost {
+            (best, best_cost) = (changed, now);
+        }
+    }
+    best
+}
+
+/// Routes the runs one at a time, in `order`, on `grid` (the parts and keep-outs, and any copper
+/// already laid, which `out` holds).
 /// It keeps a running total of what the score will charge for the copper, counting only what can
 /// only grow as more is laid (wire, diagonal, crosswise, jumpers, jumper_len, bottom, unrouted;
 /// turns can shrink, when a later step makes a bend a junction), and gives up (true) once that
-/// passes `budget`.
-fn route_in_order(c: &Design, g: &Geometry, mut grid: Grid, order: &[usize], budget: f64) -> (Routing, bool) {
+/// passes `budget`. The total counts the jumpers, wires and unrouted pins already in `out`, but not
+/// its traces: a budget only means something when `out` starts empty (`improve` gives none).
+fn route_in_order(c: &Design, g: &Geometry, mut grid: Grid, mut out: Routing, order: &[usize], budget: f64) -> (Routing, bool) {
     let w = WEIGHTS;
     let (mut wire, mut diagonal, mut across, mut down, mut wire_len) = (0.0, 0.0, 0usize, 0usize, 0.0);
     let n = (grid.w * grid.h) as usize;
     let holes_of = |r: usize| -> Vec<Point> { c.runs[r].pins.iter().map(|&(ci, pi)| g.pins[ci][pi]).collect() };
-    let mut out = Routing::default();
     let mut mem = Scratch::new(n);
     let shapes = jumper_shapes();
     for &r in order {
@@ -369,3 +431,4 @@ pub fn order(c: &Design, g: &Geometry) -> Vec<usize> {
     order.sort_by_cached_key(|&r| span(r));
     order
 }
+

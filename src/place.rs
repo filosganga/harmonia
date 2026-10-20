@@ -47,7 +47,8 @@ pub fn anneal(
     // Each move is routed once, shortest first: the router's 200 candidates (`route::route`) are
     // far too slow for every move, and judging moves by the best of a few tries left the 4017 LED
     // chaser with three solder-side wires on three seeds of six, against none. The layout it ends
-    // on is routed with all the candidates (`board::measure`), which is never worse.
+    // on is routed the thorough way (`route::route`: the candidates, the best improved), which is
+    // never worse.
     let cost_of = |p: &Placement| cost(&measure_once(c, p));
     let mut cur_s = cost_of(&cur);
     let (mut best, mut best_s) = (cur.clone(), cur_s);
