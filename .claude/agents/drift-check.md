@@ -68,8 +68,12 @@ touches, and every constant the diff changes, grep the whole repo for the old va
   matching weights times ten (wire, turns, diagonal, jumper_len), so the router and the score agree on
   what's cheaper. `TURN`, `DIAGONAL_EXTRA`, `JUMPER`, `JUMPER_PER_HOLE`, `SOLDER_WIRE` and `RULE` read
   `WEIGHTS[1]`, `[2]`, `[4]`, `[5]`, `[6]` and `[10]` by position: a measurement inserted before
-  `rules` breaks some of them silently. `JUMPER` and `SOLDER_WIRE` only weigh a soft star's join;
-  the crosswise and unrouted weights have no router constant on purpose (see their comments).
+  `rules` breaks some of them silently, and so does one inserted before `power` for the running
+  total in `route_in_order` (`WEIGHTS[0]`, `[2]` to `[7]`: not turns, `[1]`, on purpose, since turns can shrink) and the placement's own cost in `route`
+  (`WEIGHTS[8]`, `[9]`). `JUMPER` and `SOLDER_WIRE` price every wire in the search; the crosswise
+  and unrouted weights have no router constant on purpose (see their comments). `CANDIDATES`
+  against README "How it routes", "Known limits" and the unrouted bullet of "How a board is judged",
+  and the `src/place.rs` comment in `anneal` (how many routings, how long they take).
 - `SCORE_SCALE` against the score formula in README.
 - Timings and errors (README intro, "Two ways to train", "Known limits", CLAUDE.md). You can't run
   anything, so when a change touches the placer, router, `measure` or training, flag every timing and

@@ -40,3 +40,11 @@ jobs:
           for seed in 1 2 3; do
             cargo run --release -- check circuits/cat_feeder.diy --seed "$seed"
           done
+
+      # The cat feeder with every part fixed where it's soldered (circuits/cat_feeder_fixed): it was
+      # routed by hand with 4 jumpers and no solder-side wire, so the router must join every pin
+      # without one too. Nothing moves, so one step and one seed say it all.
+      - name: Route the hand-placed cat feeder
+        run: |
+          cargo run --release -- place circuits/cat_feeder_fixed/orig.net --steps 1 | tee out/fixed.txt
+          grep "^Placed by rules" out/fixed.txt | grep -q "bottom=0, unrouted=0"

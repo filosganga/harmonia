@@ -1,0 +1,12 @@
+{
+  "board": "24x18",
+  "power": "5v",
+  "ground": "GND",
+  "rules": [
+    { "kind": "star", "name": "ground starred on C1 -", "at": "C1.-",
+      "runs": [["DRV8833.DRV8833-L.GND", "Ext.GND"], ["ESP32C6.ESP32C6-L.GND", "DS3231.DS3231.GND"]], "weight": 0.015 },
+    { "kind": "star", "name": "5 V starred on C1 +", "at": "C1.+",
+      "runs": [["DRV8833.DRV8833-L.Vcc", "Ext.5V"], ["ESP32C6.ESP32C6-L.5v"]], "weight": 0.015 },
+    { "kind": "near", "name": "R1 at the GPIO2 end", "pins": ["R1.2", "ESP32C6.ESP32C6-L.GP2"], "weight": 0.01 }
+  ]
+}

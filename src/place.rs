@@ -8,7 +8,7 @@
 //! move that would break that is thrown away before it's routed, so the judge only ever compares
 //! layouts that can be built.
 
-use crate::board::{self, Circuit, Measures, Place, Placement, measure, random_placement, size};
+use crate::board::{self, Circuit, Measures, Place, Placement, measure_once, random_placement, size};
 use crate::constraints;
 use rand::Rng;
 
@@ -44,7 +44,11 @@ pub fn anneal(
     let mut cur = start;
     // Compare boards by cost, not by the 0-100 score: the score flattens out for big circuits (at
     // cost 700, the cat feeder's wiring, a much worse move barely changes it), which would make the placer accept anything.
-    let cost_of = |p: &Placement| cost(&measure(c, p));
+    // Each move is routed once, shortest first: the router's 200 candidates (`route::route`) are
+    // far too slow for every move, and judging moves by the best of a few tries left the 4017 LED
+    // chaser with three solder-side wires on three seeds of six, against none. The layout it ends
+    // on is routed with all the candidates (`board::measure`), which is never worse.
+    let cost_of = |p: &Placement| cost(&measure_once(c, p));
     let mut cur_s = cost_of(&cur);
     let (mut best, mut best_s) = (cur.clone(), cur_s);
     if movable.is_empty() {

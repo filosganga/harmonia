@@ -34,9 +34,9 @@ pub const WEIGHTS: [f64; 11] = [
     5.0,  // turns: per right angle's worth of bending a trace (45° is 2, 135° is 3; see route::bend): a corner is the work, not the length
     15.0, // diagonal: per diagonal step of copper trace, on top of its length, three corners' worth (jumpers and wires don't count)
     0.5,  // crosswise: per straight step of trace running against the board's main direction (see route.rs)
-    15.0, // jumpers: per jumper on the parts' side, three corners' worth (the router takes a jumper whenever one fits; it only weighs this against a soft star's join)
+    15.0, // jumpers: per jumper on the parts' side, three corners' worth (the router prices every jumper at this, route.rs `JUMPER`)
     0.5,  // jumper_len: per hole of jumper or solder-side wire. Not the work (a long jumper is no harder), but a long jumper takes room later jumpers can't cross: almost free (0.1) brought solder-side wires back
-    500.0, // bottom: per wire on the solder side, the last resort, a hundred corners (the router takes one only when no jumper fits; it only weighs this against a soft star's join)
+    500.0, // bottom: per wire on the solder side, the last resort, a hundred corners (the router prices every one at this, route.rs `SOLDER_WIRE`)
     5000.0, // unrouted: per connection the router couldn't make at all (a pin walled in; nothing for the router to price): a thousand corners, ten solder-side wires
     1.5,  // power: per hole between each 5V pin and its nearest GND pin
     4.0,  // crowding: per pair of neighbouring holes taken by two parts (twice for pins of two nets): room to solder; at 2 the parts packed with the board half empty
@@ -224,7 +224,14 @@ pub struct Measures(pub [f64; FEATURES.len()]);
 
 pub fn measure(c: &Circuit, placement: &[Place]) -> Measures {
     let g = geometry(c, placement);
-    let routing = crate::route::route(c, &g);
+    let routing = crate::route::route(c, placement, &g);
+    measure_routed(c, placement, &g, &routing)
+}
+
+/// The same, routed once, shortest first (`route::route_once`): what the placer judges each move by.
+pub fn measure_once(c: &Circuit, placement: &[Place]) -> Measures {
+    let g = geometry(c, placement);
+    let routing = crate::route::route_once(c, &g);
     measure_routed(c, placement, &g, &routing)
 }
 
@@ -431,9 +438,13 @@ pub fn report(c: &Circuit, placement: &[Place], title: &str) -> String {
     if !wrong.is_empty() {
         return format!("{title}: not allowed, so not scored: {}", clash_words(c, &wrong).join("; "));
     }
-    let m = measure(c, placement);
+    report_measures(&measure(c, placement), title)
+}
+
+/// The same line, for measurements already made.
+pub fn report_measures(m: &Measures, title: &str) -> String {
     let parts: Vec<String> = FEATURES.iter().zip(m.0).map(|(k, v)| format!("{k}={}", shown(k, v))).collect();
-    format!("{title}: score {:.0}/100  (cost {:.1}: {})", score(&m), cost(&m), parts.join(", "))
+    format!("{title}: score {:.0}/100  (cost {:.1}: {})", score(m), cost(m), parts.join(", "))
 }
 
 // ---------------------------------------------------------------- rendering

@@ -5,7 +5,7 @@ Harmonia turns parts, fits them on a perfboard and wires them up.
 
 Rust, with four small crates (`rand`, `serde`, `serde_json`, and `roxmltree` to read DIYLC files).
 Every placer step routes the whole board, so commands take seconds: on the 555, `place` takes about
-2.6s, `train` 7s and `evolve` 8s; placing the bigger cat-feeder board about 17s (its board file makes two cases). A board file
+4s, `train` 11s and `evolve` 12s; placing the bigger cat-feeder board about 37s (its board file makes two cases). A board file
 whose `one-of`s make cases (below) is placed once per case, so it takes that many times longer. Anything up to
 the time to make and drink an espresso is fine.
 
@@ -90,7 +90,7 @@ file of another version is refused, with a message):
   drawing of it, which is how the `.diy` keeps it.
 - **nets**: each net's name and pins.
 - **runs**: what the router joins with one piece of copper (a net, or a branch of a star net, with
-  its `star` point), in the order it laid them, with that copper: `traces` as straight pieces,
+  its `star` point), in the order it routes them first (shortest first), with that copper: `traces` as straight pieces,
   `[from hole, to hole]`, then `jumpers` and `solder_wires` the same way, and `unrouted` (only when
   there are any): connections the router couldn't make.
 - **score**: the score, the cost and the eleven measurements by name (below), and the `!!` **problems**.
@@ -142,7 +142,13 @@ connect them with copper traces, jumpers or wires. The program reads which pins 
 DIYLC does (a pin touching a trace is on it; traces on the same copper layer that touch are joined; a
 wire joins whatever is at its two ends). Where you put things is only the starting point: it scores
 your sketch ("Your sketch: score ...") and then fits everything onto the real board, which comes from
-the board file or `--board`, so the sketch can be drawn on a bigger board than the real one.
+the board file or `--board`, so the sketch can be drawn on a bigger board than the real one. If you
+wired the sketch, two more lines measure your own wiring as drawn ("wired as you drew it") and the
+router's on the same placement ("wired by the router"), so you can see which the score prefers. Both
+measure the sketch exactly as you drew it: before the board file's placement rules move or turn
+anything, and whether it's allowed or not (two parts sharing a hole are scored anyway; a pin off the
+real board counts as unrouted). Your wiring's star-rule breaks are counted like the router's joins (with
+a weight) or on a line of their own (without one).
 
 - **Your sketch doesn't have to be allowed.** Parts drawn on top of each other, off the real board,
   on a keep-out (without a weight) or under a module are moved, each to the nearest place where it fits, before the
@@ -276,6 +282,7 @@ text board. Pins are named like the `nets` command prints them.
 | `circuits/555_blinker.net` | The example circuit as a KiCad netlist: the parts, their footprints, and which pins connect (nets). |
 | `circuits/555_blinker.json` | Its board file: board size, power and ground, and the rules for this board. |
 | `circuits/cat_feeder.diy` | A copy of the cat-feeder's `pcb.diy` (2026-10-17; the RTC's board rectangle since drawn one hole wider on each long side, to its real 8 holes), with `cat_feeder.json`: 5 V and ground starred from where the supply comes in (Q1's cathode, the cable's ground), the driver with its own runs and C1 near it, R1 near GPIO2, `Pads` close to GP5 or GP22 (the ESP32's back pads), the ESP32's USB side on one of the board's edges, and the two cable headers (`Inlet`, `Ext`) on an edge or one hole in. |
+| `circuits/cat_feeder_fixed/` | The cat feeder as a KiCad netlist (`orig.net`, its module pins named, e.g. `U1.GP2`), its modules in its own `footprints.json`, with every part `fixed` where it's soldered on the real board (`orig.json`; `orig-nostar.json` without the star rules). Routed by hand with 4 jumpers and no solder-side wire, so CI checks the router joins every pin without one too. Also `feeder.net`, the same board with two voltage dividers and a capacitor more, and board files for it, given with `--board-file` (`free.json` places everything; `keep*.json` and `add*.json` keep the modules, or more, where they are), and `hand.json` / `hand-nostar.json`: `orig.json`'s star and near rules with the sketch's pin names (`place circuits/cat_feeder.diy --board-file circuits/cat_feeder_fixed/hand.json` measures the hand wiring). |
 | `TODO.md` | The maintainer's own list of ideas for later. |
 | `src/constraints.rs` | Reads the board file and keeps its rules: where parts may go (fixed, edge, orientation, within, all-of, one-of), keep-outs, near, close, star. |
 | `circuits/bench.txt` | The benchmark set: the circuits `bench` places. Never used to train a network. |
@@ -286,11 +293,11 @@ text board. Pins are named like the `nets` command prints them.
 | `src/sexpr.rs` | Reads KiCad's bracket format, `(comp (ref "R1") ...)`, into a tree. |
 | `src/netlist.rs` | Turns a KiCad netlist plus `footprints.json` (built in, yours in `~/.config/harmonia`, and one next to the netlist) into the circuit the placer works on. |
 | `src/board.rs` | Places parts, works out where every pin lands, measures the board and gives it a score. |
-| `src/route.rs` | The router: joins every net with copper traces, and hops over with a jumper (or, last, a solder-side wire) where a trace can't get through; a pin walled in so that not even a wire fits is left unrouted. |
+| `src/route.rs` | The router: joins every net with copper traces, and hops over with a jumper (or, last, a solder-side wire) where a trace can't get through or going round costs more; for a finished layout it makes 200 complete routings in different orders and keeps the one the score likes best; a pin walled in so that not even a wire fits is left unrouted. It also turns a sketch's own copper into a routing, to measure your wiring. |
 | `src/layout.rs` | The finished board, routed and measured once (`Layout`), which the three writers below draw; and the layout file: writing it, and reading it back for `draw`. |
 | `src/svg.rs` | Draws the layout as an SVG picture, from the parts' side or the solder side. |
 | `src/kicad_pcb.rs` | Writes the layout as a KiCad board. |
-| `src/diylc_import.rs` | Reads a DIYLC sketch: its parts, its modules (groups), and which pins connect. |
+| `src/diylc_import.rs` | Reads a DIYLC sketch: its parts, its modules (groups), which pins connect, and the copper you drew, to measure your own wiring. |
 | `src/diylc.rs` | Writes the layout as a DIYLC project (your own parts, moved, if it came from one). |
 | `src/place.rs` | The auto-placer: starts from an allowed layout and keeps nudging/rotating/swapping/jumping parts, only ever to allowed layouts, keeping changes the judge likes. |
 | `src/nn.rs` | The neural network, written out by hand (8 hidden neurons, 105 weights). |
@@ -326,7 +333,7 @@ Then how good it is. `src/board.rs` measures eleven things (weights in `WEIGHTS`
   parallel traces in one direction are the easiest to lay. So the placer prefers layouts where most
   copper runs one way. Some always runs the other way, since not every pin of a net can be on one line.
 - **jumpers**: how many jumpers (on the parts' side) the router needed where a trace couldn't get
-  through. Each costs three corners: cut, bend both legs, solder both ends.
+  through or going round cost more. Each costs three corners: cut, bend both legs, solder both ends.
 - **jumper_len**: total length of jumpers and solder-side wires. A hole of it costs half a hole of
   trace. A jumper 10 holes long is no more work than one 3 holes long, but it lies over holes that
   later jumpers can't cross; with length almost free, jumpers got three times longer and the last
@@ -338,7 +345,7 @@ Then how good it is. `src/board.rs` measures eleven things (weights in `WEIGHTS`
   Each costs five thousand holes of trace (as much as ten solder-side wires), far more than any wiring, so the placer keeps away from such
   layouts; one that's left is drawn as a thin dotted line, with a `!!` line naming the pin. It stays
   a cost, not part of "allowed": it's only known once the board is routed, it's the greedy router's
-  limit rather than the board's (another order might route it, and a wire added by hand fixes it),
+  limit rather than the board's (it tries 200 orders, but not every way, and a wire added by hand fixes it),
   and at the placer's low temperatures that already works like a "never".
 - **power**: for every supply pin, the distance to the nearest ground pin (keeps supply and ground close).
 - **crowding**: pairs of neighbouring holes (across or down) taken by two different parts, where the
@@ -384,21 +391,43 @@ or a wire lies over costs the weight times a thousand, so the router goes round 
   numbers are in the comment on `WEIGHTS`). The `crosswise` measurement isn't
   priced by the router, since the main direction is only known once the board is routed; a trace
   from one pin to another takes the same steps across and down whichever way it turns.
-- A **jumper** is a wire on the parts' side, used where traces can't get through: traces run up to a
-  free hole, the jumper hops over, and traces carry on from where it lands. It goes across, down or at
+- A **jumper** is a wire on the parts' side, used where traces can't get through, or where going
+  round costs more than the jumper (three corners and half a hole per hole, as the score charges): traces
+  run up to a free hole, the jumper hops over, and traces carry on from where it lands. It goes across, down or at
   45°, 2 to 10 holes long. It can't pass over a part, a pin or a hard keep-out (it can go under a module's
   board, like low parts), or over or across another run's jumper. A jumper is like a part: its legs
   need holes of their own, never a pin's. It may lie over a hole where a solder-side wire ends:
   hopping over things is what it's for.
-- A **wire on the solder side** is the last resort: it's only used when no jumper fits, however long
-  the traces to a jumper would be. Same shape and legs, but nothing sits on that side except copper,
+- A **wire on the solder side** is the last resort: it costs a hundred corners, as in the score, so
+  it's only used when no jumper fits, or the way to one would cost more than a hundred corners. Same shape and legs, but nothing sits on that side except copper,
   so it can pass under parts and over traces and pins (it's insulated). It still keeps off hard keep-outs
   and other runs' solder-side wires.
 
-Runs are routed one at a time, shortest first. Each run grows like a tree: from what's joined so far,
+Runs are routed one at a time (shortest first, in the first routing; see below). Each run grows like a tree: from what's joined so far,
 the cheapest way to the nearest pin not joined yet, trying holes in the direction of that pin first
-("A*" search). A pin that can't be reached, because it's walled in so that not even a wire fits,
-is left out of its run: `unrouted`, above. No wire ever ends on a pin.
+("A*" search). Traces, jumpers and solder-side wires are all steps of that one search, each at what
+the score charges, so a way may have any number of wires, and a long trace round the board loses to
+a jumper that costs less. A pin that can't be reached, because it's walled in so that not even a
+wire fits, is left out of its run: `unrouted`, above. No wire ever ends on a pin.
+
+Which way a run goes depends on the order the runs are routed in, and on which of several equally
+cheap ways the search finds first, and that can wall in a pin routed later: on the cat feeder with
+every part fixed (`circuits/cat_feeder_fixed`), shortest first, the motor traces coming down to the
+cable header took the only free holes beside its corner pin. So for a finished layout the router
+doesn't route once: it makes 200 complete routings, the first shortest run first and the others in
+random orders (and with the search's ties broken in random orders), and the score picks the best,
+every measurement and rule counted. The router has no rules of its own about what to try again or
+what to keep room for: it proposes, the score judges. A routing whose copper so far already costs
+more than the best one's stops there, so most stop early (all 200 take about 0.1 to 0.15s on the
+cat feeder with its parts fixed). The random orders come from a fixed seed, so the same placement always gets the same copper.
+
+The placer can't afford 200 routings for every move, so it judges each move by the first one,
+shortest first, alone (`route_once`); judging moves by the best of several also made the 4017 LED
+chaser end with solder-side wires on three seeds of six, against none. `train` and `evolve` measure
+their example boards the same way, so the network learns what the placer will show it (trained on
+boards routed the thorough way, it rarely saw a pin left unrouted and placed the 555 with
+solder-side wires). Every layout reported or saved (the placer's result, your sketch, `check`, the
+layout file) is routed the thorough way, which is never worse than the first routing.
 
 In the pictures, jumpers are solid blue and solder-side wires dashed red. In the `.diy`, both are
 DIYLC jumpers (DIYLC has no wire on the solder side), the solder-side ones red and named "(solder side)".
@@ -415,8 +444,8 @@ boards it never saw and save it as `model.json` in the output folder (`out/`, or
   random, keep whichever of the 20 is least wrong, repeat 1,000 times. It never works out a
   direction; it only needs to know which copy did better.
 
-Typical result on the 555: `train` is off by about 0.7 points on unseen boards (0.6 to 0.9) in 7s, `evolve` by
-about 1.1 points (0.9 to 1.3, depending on the seed) in 8s, after trying 19,000 networks. When you have a right answer for every example,
+Typical result on the 555: `train` is off by about 0.7 points on unseen boards (0.7 to 0.8) in 11s, `evolve` by
+about 1.2 points (1.0 to 1.6, depending on the seed) in 12s, after trying 19,000 networks. When you have a right answer for every example,
 gradient descent wins. Evolution is the tool when all you can say is "this one did better than that one",
 such as a network that proposes whole layouts.
 
@@ -431,6 +460,10 @@ it was given (and that the layout file keeps everything the drawings need):
 cargo run --release -- check circuits/cat_feeder.diy --seed 2   # one file
 cargo run --release -- check my_sketches/ --steps 2000          # every .diy in a folder
 ```
+
+After a change to routing, also route the cat feeder with every part where it's soldered:
+`cargo run --release -- place circuits/cat_feeder_fixed/orig.net --steps 1` must say `bottom=0,
+unrouted=0` (it was routed by hand that way; CI checks it).
 
 `check` places each file as `place` does, from the sketch (every case, keeping the best, with a line
 for each case when there are several), writes the `.diy` (to `out/check.diy`, or in the `--out` folder, overwritten for each
@@ -468,7 +501,7 @@ It places each circuit listed in `circuits/bench.txt` (the 555, the cat feeder a
 circuits in `circuits/bench/`) from a random start, with three seeds and `place`'s default steps,
 the way `place` does, and prints each seed's best cost, the best and mean of the three, and the time
 per run. It takes no options, so every run measures the same thing. The runs go several at a time,
-one per processor core (about 26s on an 18-core Mac); each has its own random numbers from its seed,
+one per processor core (about 50s on an 18-core Mac); each has its own random numbers from its seed,
 so the costs are the same as running them one by one. Costs only compare within a circuit, and only
 under the same weights: a change to a measurement or a weight changes what a cost means, so run the
 benchmark before and after it and compare the layouts, not the old numbers.
@@ -482,9 +515,10 @@ benchmark before and after it and compare the layouts, not the old numbers.
 - **Layouts depend on the seed.** On the cat feeder, different seeds land on quite different layouts
   and costs. Try more `--steps` and two or three `--seed`s, and compare the costs. Each output names
   its seed, so a layout you like can be made again (with the same code and board file).
-- **The router is greedy.** It routes one run at a time, shortest first, and never undoes one. A
-  different order can sometimes avoid a jumper it needed. A connection gets at most one wire; if that's
-  not enough, the pin is left unrouted (very expensive, so the placer finds another layout).
+- **The router is greedy.** It routes one run at a time and never undoes one. For a finished
+  layout it tries 200 orders and keeps the best, but the placer judges its moves by one order,
+  shortest first, so it may pass over a placement that another order would route well. A pin walled
+  in in every order tried is left unrouted (very expensive, so the placer finds another layout).
 - **A part can't pass through another.** The placer only ever holds allowed layouts, so a nudge
   that would put a part on top of its neighbour is thrown away. To get past, it jumps: three moves
   in ten put a part anywhere it fits on the board. On a crowded board, a place that's only reachable
@@ -522,7 +556,7 @@ benchmark before and after it and compare the layouts, not the old numbers.
 
 Right now the network learns to copy the rules. On boards it has never seen it is off by
 under a point, and as the placer's judge it does a little worse than the rules on the 555 (seeds 1-3,
-in the rules' cost: 148.5, 132 and 129.9, against the rules' own 128, 127.5 and 133). It learns from allowed boards
+in the rules' cost: 127.5, 151 and 152.5, against the rules' own 133, 153 and 121). It learns from allowed boards
 only, and the placer can't make any other kind, so it never has to learn that a collision is bad.
 Its 0-100 score is still flat for big circuits (under 1 for the cat feeder), so as a judge there it
 would likely do worse; training it on the cost instead would help. Even at its best it isn't useful

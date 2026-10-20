@@ -100,7 +100,7 @@ impl Made {
 /// A finished board, in memory: everything the drawings need.
 pub struct Layout {
     /// The circuit for this case of the board file's rules. Its runs are in the order the router
-    /// laid them, so each of `routing`'s lists has one run's pieces after the other, runs in order.
+    /// routes them first (`route::order`; `route` hands back its copper in that order), so each of `routing`'s lists has one run's pieces after the other, runs in order.
     pub circuit: Circuit,
     pub placement: Placement,
     pub routing: Routing,
@@ -116,13 +116,13 @@ impl Layout {
     /// Routes and measures `placement` once, and keeps it all together.
     pub fn new(circuit: Circuit, placement: Placement, title: &str, made: Made) -> Layout {
         let g = board::geometry(&circuit, &placement);
-        let routing = route::route(&circuit, &g);
+        let routing = route::route(&circuit, &placement, &g);
         let measures = board::measure_routed(&circuit, &placement, &g, &routing);
         // A layout from the placer is always allowed; a sketch as you drew it may not be.
         let clashes = board::clashes(&circuit, &g, &vec![true; placement.len()]);
         let mut problems = board::clash_words(&circuit, &clashes);
         problems.extend(route::unrouted_problems(&circuit, &g, &routing));
-        // Put the runs in the order the router laid them, numbering the copper to match. It's
+        // Put the runs in the order the router routes them first (`route::order`), numbering the copper to match. It's
         // the same copper; only the run numbers change. The file then lists the runs in that
         // order, and reading it back gives the copper in the same order.
         let order = route::order(&circuit, &g);

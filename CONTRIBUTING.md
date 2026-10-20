@@ -36,7 +36,8 @@ Follow README "Checking a change". In short:
   off the network is on unseen boards.
 
 CI runs the build, clippy, the 555 example (and `draw` on the layout file it saves, which must give
-the same files) and the cat-feeder round trip on every pull request.
+the same files), the cat-feeder round trip, and the cat feeder with its parts fixed (every pin
+routed, no solder-side wire) on every pull request.
 
 ## Adding a footprint
 

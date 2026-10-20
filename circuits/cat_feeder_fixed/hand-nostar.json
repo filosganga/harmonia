@@ -1,0 +1,8 @@
+{
+  "board": "24x18",
+  "power": "5v",
+  "ground": "GND",
+  "rules": [
+    { "kind": "near", "name": "R1 at the GPIO2 end", "pins": ["R1.2", "ESP32C6.ESP32C6-L.GP2"], "weight": 0.01 }
+  ]
+}

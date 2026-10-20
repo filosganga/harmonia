@@ -156,7 +156,7 @@ fn main() {
         "train" => train(cases, args.seed, &again(&args, "train", &args.circuit), &args.out),
         "evolve" => evolve(cases, args.seed, &again(&args, "evolve", &args.circuit), &args.out),
         "nets" => print_nets(cases),
-        _ => place_cmd(cases, &args, loaded.sketch, loaded.board_file),
+        _ => place_cmd(cases, &args, loaded.sketch, loaded.copper, loaded.board_file),
     }
 }
 
@@ -168,6 +168,8 @@ struct Loaded {
     left_out: Vec<String>,
     /// For a DIYLC sketch, where you put things: a starting point.
     sketch: Option<board::Placement>,
+    /// For a DIYLC sketch, the copper you drew, to score your own wiring.
+    copper: Option<diylc_import::Copper>,
     /// The board file's path, if there is one.
     board_file: Option<String>,
 }
@@ -184,11 +186,11 @@ fn load(path: &str, args: &Args) -> Loaded {
         ground: args.ground.clone().or(board_file.ground.clone()),
         user_footprints: args.command != "bench",
     };
-    let (circuit, sketch) = if path.ends_with(".diy") {
-        let (c, s) = diylc_import::load(path, opts);
-        (c, Some(s))
+    let (circuit, sketch, copper) = if path.ends_with(".diy") {
+        let (c, s, copper) = diylc_import::load(path, opts);
+        (c, Some(s), Some(copper))
     } else {
-        (netlist::load(path, opts), None)
+        (netlist::load(path, opts), None, None)
     };
     let (mut cases, mut left_out) = (Vec::new(), Vec::new());
     for case in constraints::cases(&board_file) {
@@ -206,7 +208,7 @@ fn load(path: &str, args: &Args) -> Loaded {
     if cases.is_empty() {
         panic!("board file: no case of its rules can be met:\n  {}", left_out.join("\n  "));
     }
-    Loaded { cases, left_out, sketch, board_file: board_file_path }
+    Loaded { cases, left_out, sketch, copper, board_file: board_file_path }
 }
 
 /// Places every case of the board file's rules, from the sketch if there is one, and keeps the
@@ -532,7 +534,7 @@ fn made(args: &Args, path: &str, board_file: Option<String>, start: &str, cases:
     }
 }
 
-fn place_cmd(cases: &[Circuit], args: &Args, sketch: Option<board::Placement>, board_file: Option<String>) {
+fn place_cmd(cases: &[Circuit], args: &Args, sketch: Option<board::Placement>, copper: Option<diylc_import::Copper>, board_file: Option<String>) {
     let t0 = Instant::now();
     let mut rng = StdRng::seed_from_u64(args.seed);
     let net = (args.judge == "net").then(|| Net::load(&model_path(&args.out)));
@@ -548,6 +550,17 @@ fn place_cmd(cases: &[Circuit], args: &Args, sketch: Option<board::Placement>, b
         println!("\nBest: case {} of {}\n", k + 1, cases.len());
     }
     println!("{}", board::report(c, &start, start_label));
+    // Your own wiring, if you drew any, measured like the router's, and the router's on the same
+    // placement (as you drew it, allowed or not), to compare.
+    if let (Some(sketch), Some(copper)) = (&sketch, copper.as_ref().filter(|w| !w.traces.is_empty() || !w.jumpers.is_empty())) {
+        let g = board::geometry(c, sketch);
+        let (yours, breaks) = route::from_sketch(c, &g, copper);
+        println!("{}", board::report_measures(&board::measure_routed(c, sketch, &g, &yours), "  wired as you drew it"));
+        if breaks > 0 {
+            println!("    (and it breaks the board file's star rules {breaks} times, which the router never does)");
+        }
+        println!("{}", board::report_measures(&board::measure(c, sketch), "  wired by the router"));
+    }
     println!("{}\n", board::ascii_board(c, &start));
 
     let label = match case_name(c) {
@@ -622,7 +635,9 @@ fn draw_cmd(path: &str) {
 
 /// Example boards for training: (to learn from, kept aside to test).
 /// Random boards (allowed ones, like every board the placer sees), plus boards caught part-way through auto-placement so there are good ones too,
-/// taking the cases of the board file's rules in turn.
+/// taking the cases of the board file's rules in turn. Each is measured as the placer judges a move,
+/// routed once (`board::measure_once`): a network that learned from boards routed the thorough way
+/// rarely saw a pin left unrouted, didn't learn it's bad, and placed the 555 with solder-side wires.
 fn make_examples(cases: &[Circuit], rng: &mut StdRng) -> (Vec<Measures>, Vec<Measures>) {
     let mut examples: Vec<Measures> = Vec::new();
     for i in 0..12 {
@@ -631,14 +646,14 @@ fn make_examples(cases: &[Circuit], rng: &mut StdRng) -> (Vec<Measures>, Vec<Mea
         let start = place::random_start(c, rng).unwrap_or_else(|why| panic!("{why}"));
         place::anneal(c, board::cost, 4000, rng, start, |p| {
             if snap_rng.random::<f64>() < 0.02 {
-                examples.push(board::measure(c, p));
+                examples.push(board::measure_once(c, p));
             }
         });
     }
     for i in 0..examples.len() / 4 {
         let c = &cases[i % cases.len()];
         let board = place::random_start(c, rng).unwrap_or_else(|why| panic!("{why}"));
-        examples.push(board::measure(c, &board));
+        examples.push(board::measure_once(c, &board));
     }
     examples.shuffle(rng);
     let test = examples.split_off(examples.len() * 4 / 5);
@@ -733,3 +748,4 @@ fn finish(net: &Net, test: &[Measures], t0: Instant, seed: u64, again: &str, out
     println!("\nSaved to {model} in {:.2}s. Try: {} place --judge net{same_out}", t0.elapsed().as_secs_f64(), program());
     println!("Seed {seed}. To make this network again: {again} ({})", version());
 }
+

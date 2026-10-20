@@ -100,17 +100,32 @@ struct Drawn<'a> {
     node: Node<'a, 'a>,
 }
 
+/// The copper you drew, in holes of the board, each piece with the index of its net in the
+/// circuit: what `route::from_sketch` turns into a routing, to score your own wiring the way the
+/// router's is scored. A piece that joins no pins is left out.
+#[derive(Default, Clone)]
+pub struct Copper {
+    /// Copper traces, (net, one end, the other), as drawn: a trace may be many holes long.
+    pub traces: Vec<(usize, Point, Point)>,
+    /// Jumpers and wires on the parts' side.
+    pub jumpers: Vec<(usize, Point, Point)>,
+    /// Wires on the solder side: a jumper whose name says "(solder side)", as this program writes them.
+    pub bottom: Vec<(usize, Point, Point)>,
+}
+
 /// Everything that conducts, for working out the nets.
+#[derive(Clone, Copy)]
 enum Conductor {
     Pin(usize, usize),
     /// Two ends, half the width, copper layer.
     Trace(Inches, Inches, f64, u8),
-    Wire(Inches, Inches),
+    /// Two ends, and whether it's on the solder side.
+    Wire(Inches, Inches, bool),
     /// Centre, radius, copper layer.
     Pad(Inches, f64, u8),
 }
 
-pub fn load(path: &str, opts: Options) -> (Circuit, Placement) {
+pub fn load(path: &str, opts: Options) -> (Circuit, Placement, Copper) {
     let text = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("can't read {path}: {e}"));
     let doc = roxmltree::Document::parse(&text).unwrap_or_else(|e| panic!("bad DIYLC file {path}: {e}"));
     let root = doc.root_element();
@@ -143,7 +158,10 @@ pub fn load(path: &str, opts: Options) -> (Circuit, Placement) {
                 parts.push(Drawn { id: text_of(item, "id").unwrap_or_default(), name, class, value: value_of(item), pins, body, node: item });
             }
             Kind::Trace => conductors.push(Conductor::Trace(points[0], points[1], size_of(item, "thickness").unwrap_or(0.04) / 2.0, layer_of(item))),
-            Kind::Wire => conductors.push(Conductor::Wire(points[0], if class == "connectivity.Jumper" { points[1] } else { *points.last().unwrap() })),
+            Kind::Wire => {
+                let end = if class == "connectivity.Jumper" { points[1] } else { *points.last().unwrap() };
+                conductors.push(Conductor::Wire(points[0], end, name.ends_with("(solder side)")));
+            }
             Kind::Pad => conductors.push(Conductor::Pad(points[0], size_of(item, "size").unwrap_or(0.09) / 2.0, layer_of(item))),
             Kind::Decoration => {
                 decorations.insert(text_of(item, "id").unwrap_or_default(), item);
@@ -164,7 +182,7 @@ pub fn load(path: &str, opts: Options) -> (Circuit, Placement) {
         }
     }
 
-    let nets = nets(&parts, &conductors);
+    let (nets, net_of) = nets(&parts, &conductors);
     let (components, places, owner) = components(path, &root, &parts, &decorations);
     // A pin's name in the circuit: "R1.2" for a part on its own, "ESP32C6.ESP32C6-L.5v" in a module.
     let label = |pi: usize, i: usize| {
@@ -181,13 +199,34 @@ pub fn load(path: &str, opts: Options) -> (Circuit, Placement) {
     });
     let sketch: Placement = places.iter().map(|&(x, y)| Place { x: x - origin.0, y: y - origin.1, rot: 0 }).collect();
 
+    // Your copper, in the same holes as the sketch.
+    let on_board = |p: Inches| {
+        let (x, y) = hole(p);
+        (x - origin.0, y - origin.1)
+    };
+    let mut copper = Copper::default();
+    for (conductor, net) in conductors.iter().zip(&net_of) {
+        match (*conductor, *net) {
+            (Conductor::Trace(a, b, ..), Some(net)) => copper.traces.push((net, on_board(a), on_board(b))),
+            (Conductor::Wire(a, b, bottom), Some(net)) => {
+                let list = if bottom { &mut copper.bottom } else { &mut copper.jumpers };
+                list.push((net, on_board(a), on_board(b)));
+            }
+            _ => {}
+        }
+    }
+
     let (power, ground) = netlist::power_and_ground(&nets, &opts);
     let board: BoardSize = opts.board;
-    (Circuit::new(board, components, nets, power, ground), sketch)
+    (Circuit::new(board, components, nets, power, ground), sketch, copper)
 }
 
-/// Joins everything that touches, then lists each group of two or more pins.
-fn nets(parts: &[Drawn], conductors: &[Conductor]) -> Vec<Vec<(usize, usize)>> {
+/// Each net as its pins: (drawn part, pin).
+type Nets = Vec<Vec<(usize, usize)>>;
+
+/// Joins everything that touches, then lists each group of two or more pins; and for each
+/// conductor, which of those groups it's in (None if it joins fewer than two pins).
+fn nets(parts: &[Drawn], conductors: &[Conductor]) -> (Nets, Vec<Option<usize>>) {
     let n = conductors.len();
     let mut parent: Vec<usize> = (0..n).collect();
     fn find(parent: &mut [usize], i: usize) -> usize {
@@ -204,7 +243,7 @@ fn nets(parts: &[Drawn], conductors: &[Conductor]) -> Vec<Vec<(usize, usize)>> {
             Conductor::Pin(pi, i) => (vec![(parts[pi].pins[i].1, parts[pi].pins[i].1)], 0.0, None),
             Conductor::Trace(a, b, r, layer) => (vec![(a, b)], r, Some(layer)),
             // A wire only touches things at its ends; what it passes over isn't connected.
-            Conductor::Wire(a, b) => (vec![(a, a), (b, b)], 0.0, None),
+            Conductor::Wire(a, b, _) => (vec![(a, a), (b, b)], 0.0, None),
             Conductor::Pad(p, r, layer) => (vec![(p, p)], r, Some(layer)),
         }
     };
@@ -233,9 +272,14 @@ fn nets(parts: &[Drawn], conductors: &[Conductor]) -> Vec<Vec<(usize, usize)>> {
             groups.entry(find(&mut parent, i)).or_default().insert((pi, pin));
         }
     }
-    let mut out: Vec<Vec<(usize, usize)>> = groups.into_values().filter(|g| g.len() > 1).map(|g| g.into_iter().collect()).collect();
+    let mut out: Vec<(Vec<(usize, usize)>, usize)> = groups.into_iter().filter(|(_, g)| g.len() > 1).map(|(root, g)| (g.into_iter().collect(), root)).collect();
     out.sort();
-    out
+    let net_of = (0..n).map(|i| {
+        let root = find(&mut parent, i);
+        out.iter().position(|&(_, r)| r == root)
+    });
+    let net_of = net_of.collect();
+    (out.into_iter().map(|(g, _)| g).collect(), net_of)
 }
 
 /// Turns the drawn parts into circuit parts: one per DIYLC group with pins in it, one per other part.
