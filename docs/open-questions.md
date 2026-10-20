@@ -152,20 +152,22 @@ Each of these is routed and scored like a real move, a few percent of all moves 
 
 ## 5. Both sides of the board, handled the same way
 
-Your note in TODO.md ("Both sides of the board, handled the same way"). Today a part with room
-under it (a module on headers, but also a DIYLC two-legged part drawn at an angle, which only takes
-its legs: `Component::room_under`) lets any low part go under it.
+Your note in TODO.md ("Both sides of the board, handled the same way"). Step 1 is done: on the parts' side, each part takes a span of layers, 0 the surface, 1 where parts and
+jumpers lie, 2 above them (`board::Layers`; README "How a board is judged"), from its footprint or
+sketch, or a board file's `layers` rule. A two-legged part lying at an angle now stands on the line
+between its legs, a standing one on its round body.
 
-A starting point for the design, not decided: a few flat layers instead of heights. The solder side
-(traces, solder-side wires); the parts' side on the board (parts, jumpers); and raised (a module's
-board on its headers). Each thing says which layer it takes, and two things clash only when they
-share a hole on the same layer. A part on the bottom is a part on the solder-side layer; an angled
-resistor takes its whole box on the parts' side; whether a module is raised could be a setting.
-It changes layouts, so it needs its own branch and the benchmark.
+Still to decide and build, each on its own branch with the benchmark:
+- Step 2, prices per kind and side: a wire on the solder side is a jumper on the back, with its own
+  price instead of the "last resort" one it has now; the measurements `jumpers`, `jumper_len` and `bottom` change, so the
+  network is retrained.
+- Step 3, both sides: parts on the bottom (mirrored pins, a side move for the placer), traces on the
+  top for boards with pads on both sides, the same layers on the solder side, and the KiCad layers.
+  DIYLC may not be able to draw a part on the back.
 
 ## Also worth knowing
 
 - Placing is slower since the router rework: `place circuits/cat_feeder.diy` takes about 37s
   (18s before) and `bench` about 50s (33s), because wires became part of the router's search.
 - The installed `harmonia` (`cargo install --path .`) must be reinstalled to read layout files of
-  version 2.
+  version 3.

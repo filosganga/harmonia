@@ -69,13 +69,17 @@ pub struct Component {
     pub w: i32,
     pub h: i32,
     pub pins: Vec<Pin>,
-    /// The holes inside the outline that are actually taken. For most parts that's all of
-    /// them; a module on headers only takes its header holes, and low parts can go under the rest.
+    /// The holes it stands on, inside its outline: from the board up to its top layer. For most
+    /// parts that's the whole outline; a module only stands on its pins (its headers), and a
+    /// two-legged part drawn at an angle on the line between its legs.
     pub body: Vec<Point>,
     /// For parts read from a DIYLC file: the original drawing, so it can be written back moved.
     pub source: Option<crate::diylc::Source>,
-    /// Low enough to sit under a module on headers (a resistor lying flat, a small ceramic capacitor).
-    pub low: bool,
+    /// Which layers it takes, unless the board file says otherwise (`Design::layers`).
+    pub layers: Layers,
+    /// A module: a board of its own (a microcontroller, a motor driver breakout), which covers its
+    /// whole outline at its layers while standing only on its body. Also how it's drawn.
+    pub module: bool,
     /// The footprints.json its footprint came from, if not the built-in library (yours, or one next
     /// to the netlist), so a layout can say it depends on that file.
     pub footprint_from: Option<String>,
@@ -86,12 +90,69 @@ impl Component {
     pub fn full_body(w: i32, h: i32) -> Vec<Point> {
         (0..w).flat_map(|x| (0..h).map(move |y| (x, y))).collect()
     }
+}
 
-    /// Whether other parts can go under it: its body doesn't take its whole outline. A module on
-    /// headers (a footprints.json module, a DIYLC group); also a DIYLC two-legged part drawn at an
-    /// angle, which only takes its legs.
-    pub fn room_under(&self) -> bool {
-        self.body.len() < (self.w * self.h) as usize
+/// Which layers above the board a part takes, `lo` to `hi`, both included: 0 is the board's
+/// surface (copper, a module soldered flat on its pads), 1 where parts lie and jumper wires run,
+/// 2 above them (a module's board on headers). A part takes them over its body from the surface
+/// up, `0..=hi` (its legs, or itself), and a module's board `lo..=hi` over the rest of its
+/// outline; two things clash where they share a hole and a layer. So a resistor lying flat (1-1)
+/// fits under a module on headers (2-2), and a tall capacitor (1-2) doesn't. Written [lo, hi].
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(from = "[u8; 2]", into = "[u8; 2]")]
+pub struct Layers {
+    pub lo: u8,
+    pub hi: u8,
+}
+
+impl From<[u8; 2]> for Layers {
+    fn from([lo, hi]: [u8; 2]) -> Layers {
+        Layers { lo, hi }
+    }
+}
+
+impl From<Layers> for [u8; 2] {
+    fn from(l: Layers) -> [u8; 2] {
+        [l.lo, l.hi]
+    }
+}
+
+impl Layers {
+    /// The top layer.
+    pub const TOP: u8 = 2;
+
+    /// What a part takes unless it says: a module on headers 2-2, a low part (lying flat) 1-1,
+    /// any other part 1-2.
+    pub fn of(module: bool, low: bool) -> Layers {
+        match (module, low) {
+            (true, _) => Layers { lo: 2, hi: 2 },
+            (false, true) => Layers { lo: 1, hi: 1 },
+            (false, false) => Layers { lo: 1, hi: 2 },
+        }
+    }
+
+    /// These layers, or a stop naming `what` if they make no sense.
+    pub fn checked(self, what: &str) -> Layers {
+        if self.lo > self.hi || self.hi > Layers::TOP {
+            panic!(
+                "{what}: \"layers\" should be [from, to], with 0 <= from <= to <= {} (0 the board's surface, 1 where parts lie, 2 above them), not [{}, {}]",
+                Layers::TOP, self.lo, self.hi
+            );
+        }
+        self
+    }
+
+    /// What it takes where it stands: from the surface up.
+    pub fn standing(self) -> Layers {
+        Layers { lo: 0, hi: self.hi }
+    }
+
+    pub fn overlaps(self, other: Layers) -> bool {
+        self.lo <= other.hi && other.lo <= self.hi
+    }
+
+    pub fn takes(self, layer: u8) -> bool {
+        (self.lo..=self.hi).contains(&layer)
     }
 }
 
@@ -158,6 +219,18 @@ impl Design {
             c.net_index(name);
         });
         c
+    }
+
+    /// The layers part `i` takes: the board file's `layers` rule for it, or its own.
+    pub fn layers(&self, i: usize) -> Layers {
+        self.constraints.layers.get(i).copied().flatten().unwrap_or(self.components[i].layers)
+    }
+
+    /// Whether another part may sit inside part `i`'s outline: a module's board raised above the
+    /// parts, or a part drawn at an angle, which only takes the line between its legs.
+    pub fn room_under(&self, i: usize) -> bool {
+        let comp = &self.components[i];
+        if comp.module { self.layers(i).lo >= Layers::TOP } else { comp.body.len() < (comp.w * comp.h) as usize }
     }
 
     /// (index of U1, index of its pin "8") -> "U1.8": `find_pin` the other way.
@@ -365,7 +438,7 @@ pub enum Why {
     OffBoard,
     /// The hole is on a hard keep-out (this index in `Constraints::keepout`).
     OnKeepout(usize),
-    /// The hole is under this module's board, and the part isn't low enough to go there.
+    /// The hole is under this module's board, and the part reaches into a layer the board takes.
     UnderModule(usize),
 }
 
@@ -377,8 +450,8 @@ pub struct Clash {
 }
 
 /// Everything that makes a layout impossible to build: two parts taking one hole, a part hanging off
-/// the board, a part on a keep-out, or a part under a module without being low enough (see
-/// `Component::low`; two modules can't overlap either). An empty list means the layout is allowed.
+/// the board, a part on a keep-out, or a part under a module's board sharing one of its layers (see
+/// `Layers`; two modules can't overlap either). An empty list means the layout is allowed.
 /// Collisions and keep-outs count the holes a part takes; hanging off the board counts its whole
 /// outline (a module's board can't hang off the perfboard either). Only the parts `placed` says are
 /// counted, so a layout can be checked while it's being put together.
@@ -402,15 +475,15 @@ pub fn clashes(c: &Design, g: &Geometry, placed: &[bool]) -> Vec<Clash> {
     for (part, outline) in g.outlines.iter().enumerate().filter(|&(i, _)| placed[i]) {
         out.extend(outline.iter().filter(|&&(x, y)| x < 0 || x >= w || y < 0 || y >= h).map(|&hole| Clash { part, hole, why: Why::OffBoard }));
     }
-    for (m, (outline, body)) in g.outlines.iter().zip(&g.bodies).enumerate().filter(|&(i, _)| placed[i]) {
-        if !c.components[m].room_under() {
-            continue;
-        }
+    // A module's board, over its outline beyond what it stands on: a part under it clashes where
+    // they share a layer (standing on a hole, a part takes it from the surface up).
+    for (m, (outline, body)) in g.outlines.iter().zip(&g.bodies).enumerate().filter(|&(i, _)| placed[i] && c.components[i].module) {
+        let board = c.layers(m);
         let under: HashSet<Point> = outline.iter().filter(|p| !body.contains(p)).copied().collect();
-        for (part, comp) in c.components.iter().enumerate().filter(|&(i, _)| placed[i]) {
-            if part != m && !comp.low {
-                out.extend(g.outlines[part].iter().filter(|h| under.contains(h)).map(|&hole| Clash { part, hole, why: Why::UnderModule(m) }));
-            }
+        for (part, comp) in c.components.iter().enumerate().filter(|&(i, _)| placed[i] && i != m) {
+            let covers = if comp.module { &g.outlines[part] } else { &g.bodies[part] };
+            let takes = |hole: &Point| if !comp.module || g.bodies[part].contains(hole) { c.layers(part).standing() } else { c.layers(part) };
+            out.extend(covers.iter().filter(|h| under.contains(h) && takes(h).overlaps(board)).map(|&hole| Clash { part, hole, why: Why::UnderModule(m) }));
         }
     }
     out
@@ -494,7 +567,7 @@ pub fn ascii_board(c: &Design, placement: &[Place]) -> String {
     }
     let on_board = |(x, y): Point| x >= 0 && x < w && y >= 0 && y < h;
     // Under a module (inside its outline but not taken): ':' where nothing else is.
-    for (outline, body) in g.outlines.iter().zip(&g.bodies) {
+    for (_, (outline, body)) in g.outlines.iter().zip(&g.bodies).enumerate().filter(|&(k, _)| c.components[k].module) {
         for &p in outline.iter().filter(|&&p| on_board(p) && !body.contains(&p)) {
             let cell = &mut grid[p.1 as usize][p.0 as usize];
             if *cell == '.' {
@@ -530,7 +603,7 @@ pub fn ascii_board(c: &Design, placement: &[Place]) -> String {
     if !c.constraints.keepout.is_empty() {
         legend.push("x=keep-out".into());
     }
-    if c.components.iter().any(Component::room_under) {
+    if c.components.iter().any(|comp| comp.module && comp.body.len() < (comp.w * comp.h) as usize) {
         legend.push(":=under a module".into());
     }
     out + "\n   " + &legend.join("  ")

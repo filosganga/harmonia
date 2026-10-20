@@ -84,8 +84,8 @@ pub fn write(build: &Build) -> String {
             .unwrap();
         }
         s += "    (attr through_hole)\n";
-        // A module only takes its pin holes, so it gets no courtyard: parts may sit under it.
-        let module = comp.room_under();
+        // A part others may sit inside (a module on headers) gets no courtyard.
+        let module = c.room_under(ci);
         for (layer, width) in [("F.SilkS", 0.12), ("F.CrtYd", 0.05)].into_iter().filter(|&(l, _)| !(module && l == "F.CrtYd")) {
             writeln!(
                 s,

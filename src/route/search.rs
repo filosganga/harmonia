@@ -122,7 +122,8 @@ pub(super) struct Grid {
     star: Vec<Option<usize>>,
     /// Holes with a pin in them.
     pin: Vec<bool>,
-    /// Holes under a part's body on the parts' side (not a module's: a jumper fits under its board).
+    /// Holes where a part takes layer 1 on the parts' side, where a jumper would lie (not under a
+    /// module on headers: a jumper fits under its board).
     body: Vec<bool>,
     /// Hard keep-out holes: no part, trace or wire.
     keepout: Vec<bool>,
@@ -251,14 +252,15 @@ pub(super) fn empty_grid(c: &Design, g: &Geometry) -> Grid {
         dir_order: [0, 1, 2, 3, 4, 5, 6, 7],
     };
 
-    // Holes under a part's body. Not a module's: only its pins take holes, and a jumper fits under
-    // its board.
-    for (comp, body) in c.components.iter().zip(&g.bodies) {
-        if !comp.room_under() {
-            for &p in body {
-                if let Some(i) = grid.index(p) {
-                    grid.body[i] = true;
-                }
+    // Holes where a part takes layer 1, where jumper wires lie: where it stands, and a module's
+    // board if it comes down that low. A jumper goes under a module on headers.
+    for (k, comp) in c.components.iter().enumerate() {
+        let layers = c.layers(k);
+        let stands = layers.standing().takes(1).then_some(&g.bodies[k]);
+        let board = (comp.module && layers.takes(1)).then_some(&g.outlines[k]);
+        for &p in stands.into_iter().chain(board).flatten() {
+            if let Some(i) = grid.index(p) {
+                grid.body[i] = true;
             }
         }
     }

@@ -20,7 +20,8 @@ Everything the program knows about a DIYLC class is one `Class` in `CLASSES`; th
    `["A", "K"]`), `Kind::Part(None)` to number them 1, 2, ... or take header labels
    (`read::header_names`). Find the control-point order in a real file: the `<points>` /
    `<controlPoints>` of an item of that class. Wires, traces and pads have their own kinds.
-3. `low`: true only if it lies flat or is small enough to sit under a module on headers.
+3. `low`: true only if it lies flat or is small enough to sit under a module on headers. It
+   becomes the part's layers (`board::Layers::of`): low parts take layer 1 only, others 1 and 2.
 4. `radial`: true if it stands up with a round body (then `read::body_of` grows its box to its
    diameter). The body decides collisions and what a jumper may pass over; too small is worse than
    too big.

@@ -4,7 +4,7 @@
 //! early on, sometimes accepting worse ones so it doesn't get stuck.
 //!
 //! It only ever holds layouts that are allowed (`board::clashes`: no two parts on one hole, nothing
-//! off the board, on a keep-out, or under a module without being low). It starts from one, and a
+//! off the board, on a keep-out, or under a module's board sharing one of its layers). It starts from one, and a
 //! move that would break that is thrown away before it's routed, so the judge only ever compares
 //! layouts that can be built.
 

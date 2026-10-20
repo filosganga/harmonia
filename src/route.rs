@@ -9,7 +9,7 @@
 //!
 //! A jumper is a wire on the parts' side. It lies straight between two free holes, across, down or
 //! at 45°, up to 10 holes long, but never over a part, a pin or a hard keep-out, and never over or across
-//! another run's jumper. It may pass under a module's board, like low parts. A trace carries on from
+//! another run's jumper. It may pass under a module on headers, like low parts. A trace carries on from
 //! where it lands.
 //!
 //! The last resort is the same kind of wire on the solder side. Nothing sits there but copper, so

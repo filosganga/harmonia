@@ -55,17 +55,15 @@ const STYLE: &str = "
 ";
 
 /// What to draw a part as: the short name of its DIYLC class (`diylc::CLASSES`, the same name
-/// whether it came from footprints.json or a sketch), or "module" for a part parts can go under (a
-/// DIYLC group, or a footprint with "module": true).
+/// whether it came from footprints.json or a sketch), or "module" for a module (a DIYLC group, or a
+/// footprint with "module": true), however it's mounted.
 fn shape(comp: &Component) -> &str {
-    let full = !comp.room_under();
     match &comp.diylc {
         Some(p) => &p.part,
-        // A group with nothing free under it (say, a header and its label) is drawn like a header.
-        None if comp.footprint == "DIYLC:module" && full => "PinHeader",
-        // A footprints.json module. (A DIYLC part drawn at an angle only takes its legs too, but it's
-        // still drawn as itself, below.)
-        None if !full && !comp.footprint.starts_with("DIYLC:") => "module",
+        // A group that isn't a module (say, a header and its label) is drawn like a header.
+        None if comp.footprint == "DIYLC:module" && !comp.module => "PinHeader",
+        // A footprints.json module.
+        None if comp.module && !comp.footprint.starts_with("DIYLC:") => "module",
         None => comp.footprint.strip_prefix("DIYLC:").unwrap_or(""),
     }
 }

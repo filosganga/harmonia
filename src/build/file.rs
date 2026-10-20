@@ -1,13 +1,13 @@
 //! The layout file: one plain JSON file that holds a `Build`, what you asked for and what was
 //! made of it. `to_json` writes it, `from_json` reads it back.
 //!
-//!     { "format": "harmonia-layout", "version": 2, "title": "Placed by rules",
+//!     { "format": "harmonia-layout", "version": 3, "title": "Placed by rules",
 //!       "made": { "circuit": "circuits/555_blinker.net", "judge": "rules", "seed": 1, ... },
 //!       "design": {
 //!         "board": { "width": 18, "height": 12 }, "power": "+5V", "ground": "GND",
 //!         "rules": [ { "kind": "edge", "part": "J1", "edge": "left" }, ... ], "choices": [],
 //!         "parts": [ { "reference": "U1", "value": "NE555", "footprint": "...", "size": [4, 4],
-//!                      "low": false, "pins": [ { "name": "1", "at": [0, 3] }, ... ] }, ... ],
+//!                      "layers": [1, 2], "pins": [ { "name": "1", "at": [0, 3] }, ... ] }, ... ],
 //!         "nets": [ { "name": "GND", "pins": ["U1.1", "C1.2", "J1.2"] }, ... ] },
 //!       "layout": {
 //!         "parts": [ { "reference": "U1", "at": [6, 3], "rot": 0,
@@ -28,7 +28,7 @@
 //! out again from the design and the layout, with today's measurements.
 
 use super::{Build, Layout, Made};
-use crate::board::{BoardSize, Component, Design, Net, Pin, Place, Placement, Point, Run};
+use crate::board::{BoardSize, Component, Design, Layers, Net, Pin, Place, Placement, Point, Run};
 use crate::constraints::{self, Rule};
 use crate::diylc::{self, Source};
 use crate::route::Routing;
@@ -38,7 +38,7 @@ use std::collections::BTreeMap;
 /// What the file says it is, and which version of the file format. A change to the format that
 /// an older reader would get wrong gets a new version.
 const FORMAT: &str = "harmonia-layout";
-const VERSION: u32 = 2;
+const VERSION: u32 = 3;
 
 /// Lines in the file are kept to about this many characters (see `pretty`).
 const LINE: usize = 100;
@@ -95,13 +95,18 @@ struct PartEntry {
     footprint: String,
     /// Width and height in holes, before turning.
     size: (i32, i32),
-    low: bool,
+    /// Which layers above the board it takes, as its footprint or sketch says (a board file's
+    /// `layers` rule, in `rules`, may say otherwise).
+    layers: Layers,
+    /// A module: a board of its own, over its whole outline, standing only on its `body`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    module: bool,
     /// footprints.json's "diylc" entry: which DIYLC part to draw it as.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     diylc: Option<diylc::Part>,
     pins: Vec<PinEntry>,
-    /// The holes the part takes, inside its outline before turning: only written when it isn't
-    /// the whole outline (a module on headers, which low parts can go under).
+    /// The holes the part stands on, inside its outline before turning: only written when it isn't
+    /// the whole outline (a module's headers, or a part drawn at an angle).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     body: Option<Vec<Point>>,
     /// For a part read from a DIYLC sketch: your drawing of it, written back moved and turned.
@@ -193,7 +198,8 @@ pub fn to_json(build: &Build) -> String {
             value: comp.value.clone(),
             footprint: comp.footprint.clone(),
             size: (comp.w, comp.h),
-            low: comp.low,
+            layers: comp.layers,
+            module: comp.module,
             diylc: comp.diylc.clone(),
             pins: comp.pins.iter().map(|pin| PinEntry { name: pin.name.clone(), at: pin.at, off_grid: pin.off_grid }).collect(),
             body: (comp.body != Component::full_body(comp.w, comp.h)).then(|| comp.body.clone()),
@@ -289,7 +295,8 @@ pub fn from_json(text: &str) -> Build {
             pins: p.pins.iter().map(|pin| Pin { name: pin.name.clone(), at: pin.at, off_grid: pin.off_grid }).collect(),
             body: p.body.clone().unwrap_or_else(|| Component::full_body(p.size.0, p.size.1)),
             source: p.diylc_drawing.clone(),
-            low: p.low,
+            layers: p.layers.checked(&format!("layout file: {}", p.reference)),
+            module: p.module,
             // Which file each footprint came from is in `made.footprints`; the part's shape is here.
             footprint_from: None,
         })
