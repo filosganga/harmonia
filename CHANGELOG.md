@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0](https://github.com/filosganga/harmonia/compare/v0.1.1...v0.2.0) - 2026-10-20
+
+### Added
+
+- your own footprints in ~/.config/harmonia, and never silently
+- install harmonia and run it from any folder
+- every output says its seed and how to make it again
+- [**breaking**] every board-file rule takes a 0-1 weight
+- [**breaking**] the board file's list of rules is called rules
+- price corners and jumpers, not lengths
+- collisions, keep-outs and parts off the board are a check, not a cost
+- straight traces, no wires on pins, and dearer solder-side wires
+
+### Fixed
+
+- a module's board ends at a rectangle edge drawn on a line of holes
+
 ## [0.1.1](https://github.com/filosganga/harmonia/compare/v0.1.0...v0.1.1) - 2026-10-18
 
 ### Added
