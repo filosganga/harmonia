@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0](https://github.com/filosganga/harmonia/compare/v0.2.0...v0.3.0) - 2026-10-20
+
+### Added
+
+- the router improves its best routing a few runs at a time
+- [**breaking**] parts take layers above the board, and a board file can say how one is mounted
+- [**breaking**] a build keeps its design and its rules, and is scored from them
+- route by proposing many routings and letting the score choose
+
+### Fixed
+
+- draw a module's headers along whichever lines its pins form
+
+### Other
+
+- trim the both-sides note to what's still open
+- the open questions from the router rework, for the maintainer
+- note the idea of handling both sides of the board the same way
+- move check and the network's training out of main.rs
+- write each small helper once
+- drop branches that can't happen and a repeated routing
+- split the router into the routing, its search, and sketch wiring
+- one description of DIYLC for the reader, the writer and the pictures
+
 ## [0.2.0](https://github.com/filosganga/harmonia/compare/v0.1.1...v0.2.0) - 2026-10-20
 
 ### Added
