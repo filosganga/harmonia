@@ -18,7 +18,7 @@ mod board;
 mod constraints;
 mod diylc;
 mod kicad_pcb;
-mod layout;
+mod build;
 mod netlist;
 mod nn;
 mod place;
@@ -26,8 +26,8 @@ mod route;
 mod sexpr;
 mod svg;
 
-use board::{BoardSize, Circuit, Measures};
-use layout::{Layout, Made};
+use board::{BoardSize, Design, Measures};
+use build::{Build, Made};
 use nn::Net;
 use svg::Side;
 use rand::{Rng, SeedableRng, rngs::StdRng, seq::SliceRandom};
@@ -162,7 +162,7 @@ fn main() {
 /// A circuit and the board file next to it, as `load` reads them.
 struct Loaded {
     /// The circuit once for each case of the board file's rules (one, unless a one-of makes more).
-    cases: Vec<Circuit>,
+    cases: Vec<Design>,
     /// Cases left out because some part has no place meeting their rules, and why.
     left_out: Vec<String>,
     /// For a DIYLC sketch, where you put things: a starting point.
@@ -191,19 +191,7 @@ fn load(path: &str, args: &Args) -> Loaded {
     } else {
         (netlist::load(path, opts), None, None)
     };
-    let (mut cases, mut left_out) = (Vec::new(), Vec::new());
-    for case in constraints::cases(&board_file) {
-        match constraints::resolve(&case, &circuit) {
-            Ok(rules) => {
-                let mut c = circuit.clone();
-                c.constraints = rules;
-                c.runs = constraints::runs(&c); // again, now that the star rules are known
-                cases.push(c);
-            }
-            Err(why) if case.choices.is_empty() => left_out.push(why),
-            Err(why) => left_out.push(format!("{}: {why}", case.choices.join("; "))),
-        }
-    }
+    let (cases, left_out) = constraints::designs(&circuit, &board_file.rules);
     if cases.is_empty() {
         panic!("board file: no case of its rules can be met:\n  {}", left_out.join("\n  "));
     }
@@ -217,7 +205,7 @@ fn load(path: &str, args: &Args) -> Loaded {
 /// some part is left out, and if every case is, the program stops. With `report`, prints a line for
 /// each case when there are several, and why a case was left out.
 fn place_cases(
-    cases: &[Circuit],
+    cases: &[Design],
     cost: impl Fn(&Measures) -> f64,
     steps: usize,
     rng: &mut StdRng,
@@ -267,13 +255,13 @@ fn place_cases(
 }
 
 /// Which option of each one-of a case took, like `one-of "Pads by the ESP32's back pads": "by GP5"`.
-fn case_name(c: &Circuit) -> String {
+fn case_name(c: &Design) -> String {
     c.constraints.choices.join("; ")
 }
 
 /// The connections of a circuit, in an order that doesn't depend on the file: each net with two
 /// pins or more, as its sorted pin names, sorted.
-fn connections(c: &Circuit) -> Vec<Vec<String>> {
+fn connections(c: &Design) -> Vec<Vec<String>> {
     let mut nets: Vec<Vec<String>> = c.nets.iter().filter(|n| n.pins.len() > 1).map(|n| {
         let mut pins = n.pins.clone();
         pins.sort();
@@ -329,16 +317,16 @@ fn check_one(path: &str, args: &Args) -> Outcome {
         let (k, _, best) = place_cases(&loaded.cases, board::cost, args.steps, &mut rng, Some(sketch), true);
         let c = &loaded.cases[k];
         let made = made(args, path, loaded.board_file.clone(), "sketch", &loaded.cases, k);
-        let layout = Layout::new(c.clone(), best.clone(), "check", made);
+        let build = Build::new(c.clone(), best.clone(), "check", made);
         let written = format!("{}/check.diy", args.out);
-        let diy = diylc::write(&layout);
+        let diy = diylc::write(&build);
         std::fs::write(&written, &diy).unwrap();
         // The layout file must keep everything the drawings need: write it, read it back, and the
         // file and the drawings from what was read must be the same as from the layout in memory.
-        let saved = layout::to_json(&layout);
+        let saved = build::to_json(&build);
         std::fs::write(format!("{}/check.layout.json", args.out), &saved).unwrap();
-        let read = layout::from_json(&saved);
-        if let Some(why) = differences(&layout, &read, &saved, &diy) {
+        let read = build::from_json(&saved);
+        if let Some(why) = differences(&build, &read, &saved, &diy) {
             return Outcome::LayoutChanged(why);
         }
         let after = connections(&load(&written, args).cases[0]);
@@ -349,7 +337,7 @@ fn check_one(path: &str, args: &Args) -> Outcome {
         // nets can't join by themselves. Pins the router couldn't reach aren't joined in the drawing at all. Leave them out on both
         // sides: if everything else matches, only they are missing; if not, the writer is wrong.
         let g = board::geometry(c, &best);
-        let holes: std::collections::HashSet<board::Point> = layout.routing.unrouted.iter().map(|&(_, _, hole)| hole).collect();
+        let holes: std::collections::HashSet<board::Point> = build.layout.routing.unrouted.iter().map(|&(_, _, hole)| hole).collect();
         let mut unrouted = std::collections::HashSet::new();
         for (ci, comp) in c.components.iter().enumerate() {
             for (pi, pin) in comp.pins.iter().enumerate() {
@@ -376,13 +364,13 @@ fn check_one(path: &str, args: &Args) -> Outcome {
 
 /// What differs between a layout and the same layout written to a layout file (`saved`) and read
 /// back (`read`): the file it writes again, or any of the drawings. None if nothing does.
-fn differences(layout: &Layout, read: &Layout, saved: &str, diy: &str) -> Option<String> {
+fn differences(build: &Build, read: &Build, saved: &str, diy: &str) -> Option<String> {
     let checks = [
-        ("the layout file written again", saved.to_string(), layout::to_json(read)),
+        ("the layout file written again", saved.to_string(), build::to_json(read)),
         ("the .diy", diy.to_string(), diylc::write(read)),
-        ("the picture", svg::draw(layout, Side::Component), svg::draw(read, Side::Component)),
-        ("the solder-side picture", svg::draw(layout, Side::Solder), svg::draw(read, Side::Solder)),
-        ("the KiCad board", kicad_pcb::write(layout), kicad_pcb::write(read)),
+        ("the picture", svg::draw(build, Side::Component), svg::draw(read, Side::Component)),
+        ("the solder-side picture", svg::draw(build, Side::Solder), svg::draw(read, Side::Solder)),
+        ("the KiCad board", kicad_pcb::write(build), kicad_pcb::write(read)),
     ];
     let differ: Vec<&str> = checks.iter().filter(|(_, from_memory, from_file)| from_memory != from_file).map(|(what, ..)| *what).collect();
     (!differ.is_empty()).then(|| format!("read back from the layout file, {} came out different", differ.join(", ")))
@@ -450,7 +438,7 @@ fn check_cmd(args: &Args) {
 
 /// What the program understood from the file: the parts, which pins connect, and the cases of the
 /// board file's rules.
-fn print_nets(cases: &[Circuit]) {
+fn print_nets(cases: &[Design]) {
     let c = &cases[0]; // the parts and nets are the same in every case
     println!("{} parts:", c.components.len());
     for comp in &c.components {
@@ -510,7 +498,7 @@ fn again(args: &Args, command: &str, path: &str) -> String {
 
 /// How a layout was made, for its layout file: from `args`, the circuit at `path`, its board file,
 /// where the placer started, and which case `k` of `cases` won.
-fn made(args: &Args, path: &str, board_file: Option<String>, start: &str, cases: &[Circuit], k: usize) -> Made {
+fn made(args: &Args, path: &str, board_file: Option<String>, start: &str, cases: &[Design], k: usize) -> Made {
     Made {
         circuit: path.to_string(),
         board_file,
@@ -520,7 +508,6 @@ fn made(args: &Args, path: &str, board_file: Option<String>, start: &str, cases:
         steps: args.steps,
         case: k + 1,
         cases: cases.len(),
-        choices: cases[k].constraints.choices.clone(),
         // `check` places a sketch just as `place` does, so `place` makes its layouts again too.
         command: again(args, "place", path),
         version: version(),
@@ -533,7 +520,7 @@ fn made(args: &Args, path: &str, board_file: Option<String>, start: &str, cases:
     }
 }
 
-fn place_cmd(cases: &[Circuit], args: &Args, sketch: Option<board::Placement>, copper: Option<diylc::Copper>, board_file: Option<String>) {
+fn place_cmd(cases: &[Design], args: &Args, sketch: Option<board::Placement>, copper: Option<diylc::Copper>, board_file: Option<String>) {
     let t0 = Instant::now();
     let mut rng = StdRng::seed_from_u64(args.seed);
     let net = (args.judge == "net").then(|| Net::load(&model_path(&args.out)));
@@ -575,24 +562,24 @@ fn place_cmd(cases: &[Circuit], args: &Args, sketch: Option<board::Placement>, c
 
     // The finished board, routed and measured once: the layout file, and every drawing made from it.
     let made = made(args, &args.circuit, board_file, start_name, cases, k);
-    let layout = Layout::new(c.clone(), best, &label, made.clone());
-    let made = &layout.made;
-    for problem in &layout.problems {
+    let build = Build::new(c.clone(), best, &label, made.clone());
+    let made = &build.made;
+    for problem in &build.problems {
         println!("  !! {problem}");
     }
     let saved = format!("{}/{}.layout.json", args.out, args.judge);
-    std::fs::write(&saved, layout::to_json(&layout)).unwrap();
+    std::fs::write(&saved, build::to_json(&build)).unwrap();
     // The start, for the page that shows it next to the result. It isn't in the layout file.
-    let start = Layout::new(c.clone(), start, start_label, made.clone());
+    let start = Build::new(c.clone(), start, start_label, made.clone());
     let path = format!("{}/{}.html", args.out, args.judge);
     let html = format!(
         "<!doctype html><meta charset='utf-8'><title>Perfboard layout</title>\
          <body style='background:#eee;display:flex;gap:16px;flex-wrap:wrap;padding:16px'>{}{}</body>",
         svg::draw(&start, Side::Component),
-        svg::draw(&layout, Side::Component)
+        svg::draw(&build, Side::Component)
     );
     std::fs::write(&path, html).unwrap();
-    let [picture, solder, kicad, diy] = write_drawings(&layout, &format!("{}/{}", args.out, args.judge));
+    let [picture, solder, kicad, diy] = write_drawings(&build, &format!("{}/{}", args.out, args.judge));
     println!("\nSeed {}. To make this layout again: {} ({})", made.seed, made.command, made.version);
     for footprint in &made.footprints {
         println!("  It also needs {footprint}.");
@@ -604,31 +591,32 @@ fn place_cmd(cases: &[Circuit], args: &Args, sketch: Option<board::Placement>, c
 
 /// Draws a layout as `<stem>.svg`, `<stem>-solder.svg`, `<stem>.kicad_pcb` and `<stem>.diy`, and
 /// returns those names.
-fn write_drawings(layout: &Layout, stem: &str) -> [String; 4] {
+fn write_drawings(build: &Build, stem: &str) -> [String; 4] {
     let picture = format!("{stem}.svg");
-    std::fs::write(&picture, svg::draw(layout, Side::Component)).unwrap();
+    std::fs::write(&picture, svg::draw(build, Side::Component)).unwrap();
     let solder = format!("{stem}-solder.svg");
-    std::fs::write(&solder, svg::draw(layout, Side::Solder)).unwrap();
+    std::fs::write(&solder, svg::draw(build, Side::Solder)).unwrap();
     let kicad = format!("{stem}.kicad_pcb");
-    std::fs::write(&kicad, kicad_pcb::write(layout)).unwrap();
+    std::fs::write(&kicad, kicad_pcb::write(build)).unwrap();
     let diy = format!("{stem}.diy");
-    std::fs::write(&diy, diylc::write(layout)).unwrap();
+    std::fs::write(&diy, diylc::write(build)).unwrap();
     [picture, solder, kicad, diy]
 }
 
 /// Reads a layout file (`place` writes one, like out/rules.layout.json) and draws it again next to
-/// it, as it was saved: nothing is placed or routed.
+/// it, with its copper as saved (nothing is placed or routed), scored again with today's
+/// measurements.
 fn draw_cmd(path: &str) {
     let stem = path.strip_suffix(".layout.json").unwrap_or_else(|| panic!("draw reads a layout file, like out/rules.layout.json (place writes one), not {path}"));
     let text = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("can't read {path}: {e}"));
-    let layout = layout::from_json(&text);
-    let (m, made) = (&layout.measures, &layout.made);
-    println!("{path}: {}, from {} ({})", layout.title, made.circuit, made.again());
+    let build = build::from_json(&text);
+    let (m, made) = (&build.measures, &build.made);
+    println!("{path}: {}, from {} ({})", build.title, made.circuit, made.again());
     println!("  score {:.0}/100, cost {:.1}", board::score(m), board::cost(m));
-    for problem in &layout.problems {
+    for problem in &build.problems {
         println!("  !! {problem}");
     }
-    let [picture, solder, kicad, diy] = write_drawings(&layout, stem);
+    let [picture, solder, kicad, diy] = write_drawings(&build, stem);
     println!("Pictures: {picture}, {solder}   For KiCad: {kicad}   For DIYLC: {diy}");
 }
 
@@ -637,7 +625,7 @@ fn draw_cmd(path: &str) {
 /// taking the cases of the board file's rules in turn. Each is measured as the placer judges a move,
 /// routed once (`board::measure_once`): a network that learned from boards routed the thorough way
 /// rarely saw a pin left unrouted, didn't learn it's bad, and placed the 555 with solder-side wires.
-fn make_examples(cases: &[Circuit], rng: &mut StdRng) -> (Vec<Measures>, Vec<Measures>) {
+fn make_examples(cases: &[Design], rng: &mut StdRng) -> (Vec<Measures>, Vec<Measures>) {
     let mut examples: Vec<Measures> = Vec::new();
     for i in 0..12 {
         let c = &cases[i % cases.len()];
@@ -671,7 +659,7 @@ fn pairs(boards: &[Measures]) -> Vec<(Vec<f64>, f64)> {
 /// 2. Ask the rules for each board's score: that's the "right answer".
 /// 3. Show the network each board many times, nudging every weight in the direction that makes it less wrong.
 /// 4. Test it on boards it has never seen.
-fn train(cases: &[Circuit], seed: u64, again: &str, out: &str) {
+fn train(cases: &[Design], seed: u64, again: &str, out: &str) {
     let t0 = Instant::now();
     let mut rng = StdRng::seed_from_u64(seed);
     let (train, test) = make_examples(cases, &mut rng);
@@ -695,7 +683,7 @@ fn train(cases: &[Circuit], seed: u64, again: &str, out: &str) {
 /// 2. Make 19 children, each a copy of the parent with every weight changed a little at random.
 /// 3. Keep whichever of the 20 is least wrong on the example boards; it becomes the new parent.
 /// 4. Repeat. Changes get smaller towards the end, to fine-tune.
-fn evolve(cases: &[Circuit], seed: u64, again: &str, out: &str) {
+fn evolve(cases: &[Design], seed: u64, again: &str, out: &str) {
     const CHILDREN: usize = 19;
     const GENERATIONS: usize = 1000;
     let t0 = Instant::now();

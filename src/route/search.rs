@@ -3,7 +3,7 @@
 //! next pin, in steps of trace and wires (`spread`), with what each step costs.
 
 use super::{Routing, distance};
-use crate::board::{Circuit, Geometry, Point};
+use crate::board::{Design, Geometry, Point};
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashSet};
 
@@ -233,7 +233,7 @@ impl Grid {
 }
 
 /// The board as the router sees it before any copper: parts, pins, keep-outs.
-pub(super) fn empty_grid(c: &Circuit, g: &Geometry) -> Grid {
+pub(super) fn empty_grid(c: &Design, g: &Geometry) -> Grid {
     let (w, h) = (c.board.width, c.board.height);
     let n = (w * h) as usize;
     let mut grid = Grid {

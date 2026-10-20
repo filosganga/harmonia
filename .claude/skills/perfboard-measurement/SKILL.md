@@ -23,9 +23,10 @@ A measurement is in five places that the compiler only partly ties together.
    `JUMPER_PER_HOLE`, `SOLDER_WIRE` and `RULE` read `WEIGHTS[1]`, `[2]`, `[4]`, `[5]`, `[6]` and
    `[10]` by position: inserting a measurement before
    `rules` means changing some of those indexes too, or the router silently prices the wrong thing.
-4. The text report, the SVG legend and the layout file (`src/layout.rs`, measurements by name) print every
-   measurement themselves; nothing to change there. A layout file saved before a measurement was added,
-   removed or renamed is refused by `draw` (its names no longer match `FEATURES`): place it again.
+4. The text report, the SVG legend and the layout file (`src/build/file.rs`, measurements by name) print every
+   measurement themselves; nothing to change there. A layout file saved before still draws: `draw`
+   scores it again from its design and layout with today's measurements (the file's `score` is only
+   for people to read).
 
 ## Network
 

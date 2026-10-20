@@ -1,4 +1,4 @@
-//! Writes a layout (src/layout.rs) as a DIYLC project (.diy) that opens in DIY Layout Creator.
+//! Writes a build (src/build.rs) as a DIYLC project (.diy) that opens in DIY Layout Creator.
 //!
 //! A .diy file is XML: a perfboard, then each part with the positions of its legs, in
 //! inches (one hole = 0.1"). A part from your own sketch is written back as you drew it, moved
@@ -8,7 +8,7 @@
 
 use super::{Drawing, HOLE, MARGIN, ORIENTATIONS, Source, class_named, xml};
 use crate::board::{self, Place, Point};
-use crate::layout::Layout;
+use crate::build::Build;
 use std::fmt::Write;
 
 /// Where the board written here has its top-left corner, in inches.
@@ -86,8 +86,8 @@ fn point(s: &mut String, (x, y): (f64, f64)) {
     writeln!(s, r#"<point x="{x:.2}" y="{y:.2}"/>"#).unwrap();
 }
 
-pub fn write(layout: &Layout) -> String {
-    let (c, placement, title) = (&layout.circuit, &layout.placement, layout.title.as_str());
+pub fn write(build: &Build) -> String {
+    let (c, placement, title) = (&build.design, &build.layout.placement, build.title.as_str());
     let g = board::geometry(c, placement);
     let mut ids = 0..;
     let mut id = || format!("00000000-0000-4000-8000-{:012x}", ids.next().unwrap());
@@ -98,7 +98,7 @@ pub fn write(layout: &Layout) -> String {
     s += "<fileVersion><major>6</major><minor>6</minor><build>0</build></fileVersion>\n";
     writeln!(s, "<title>{}</title>\n<author>perfboard</author>", xml(title)).unwrap();
     // DIYLC shows this in the project's settings: how the layout was made, to make it again.
-    writeln!(s, "<description>{}</description>", xml(&layout.made.again())).unwrap();
+    writeln!(s, "<description>{}</description>", xml(&build.made.again())).unwrap();
     // The page, in cm, with a little room around the board.
     writeln!(s, r#"<width value="{:.2}" unit="cm"/><height value="{:.2}" unit="cm"/>"#, (w + 3) as f64 * 0.254, (h + 3) as f64 * 0.254).unwrap();
     s += "<gridSpacing value=\"0.1\" unit=\"in\"/>\n<dotSpacing>1</dotSpacing>\n<components>\n";
@@ -186,7 +186,7 @@ pub fn write(layout: &Layout) -> String {
     }
 
     // The routed copper: traces on the solder side and jumpers on top, coloured like their net.
-    let routing = &layout.routing;
+    let routing = &build.layout.routing;
     let colors = board::net_colors(c);
     let copper = routing.straight_traces().into_iter().map(|t| (t, "connectivity.CopperTrace", r#"<thickness value="1.0" unit="mm"/><layer>_1</layer><endingStyle>Round</endingStyle>"#));
     let jumpers = routing.jumpers.iter().map(|&t| (t, "connectivity.Jumper", "<style>SOLID</style>"));

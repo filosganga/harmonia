@@ -8,7 +8,7 @@
 //! move that would break that is thrown away before it's routed, so the judge only ever compares
 //! layouts that can be built.
 
-use crate::board::{self, Circuit, Measures, Place, Placement, measure_once, random_placement, size};
+use crate::board::{self, Design, Measures, Place, Placement, measure_once, random_placement, size};
 use crate::constraints;
 use rand::Rng;
 
@@ -31,7 +31,7 @@ const TRIES: usize = 20;
 /// for. `start` must be allowed (see `allowed_start`). `on_step` sees every accepted-or-not current
 /// board (used by training to collect examples). Returns the best placement found.
 pub fn anneal(
-    c: &Circuit,
+    c: &Design,
     cost: impl Fn(&Measures) -> f64,
     steps: usize,
     rng: &mut impl Rng,
@@ -75,7 +75,7 @@ pub fn anneal(
 }
 
 /// `cur` with one random change to one of the `movable` parts. It may not be allowed.
-fn a_move(c: &Circuit, cur: &Placement, movable: &[usize], rng: &mut impl Rng) -> Placement {
+fn a_move(c: &Design, cur: &Placement, movable: &[usize], rng: &mut impl Rng) -> Placement {
     let (w, h) = (c.board.width, c.board.height);
     let mut new = cur.clone();
     let k = movable[rng.random_range(0..movable.len())];
@@ -109,7 +109,7 @@ fn a_move(c: &Circuit, cur: &Placement, movable: &[usize], rng: &mut impl Rng) -
 }
 
 /// A random layout that's allowed: parts put down at random, then moved apart (`allowed_start`).
-pub fn random_start(c: &Circuit, rng: &mut impl Rng) -> Result<Placement, String> {
+pub fn random_start(c: &Design, rng: &mut impl Rng) -> Result<Placement, String> {
     allowed_start(c, &random_placement(c, rng))
 }
 
@@ -119,7 +119,7 @@ pub fn random_start(c: &Circuit, rng: &mut impl Rng) -> Result<Placement, String
 /// places first (a fixed part before one the board file only keeps on an edge, before a free one),
 /// then the biggest, so a big part keeps its place and a small one moves out of its way. Err says
 /// which part found no room.
-pub fn allowed_start(c: &Circuit, from: &Placement) -> Result<Placement, String> {
+pub fn allowed_start(c: &Design, from: &Placement) -> Result<Placement, String> {
     let (w, h) = (c.board.width, c.board.height);
     let n = c.components.len();
     let mut order: Vec<usize> = (0..n).collect();

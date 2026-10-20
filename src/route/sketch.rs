@@ -3,7 +3,7 @@
 
 use super::Routing;
 use super::search::{Side, holes_between};
-use crate::board::{Circuit, Geometry, Point};
+use crate::board::{Design, Geometry, Point};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// Your own wiring, drawn in a DIYLC sketch, as a routing, so it's measured the way the router's
@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 /// Copper that reaches the pins of two runs that way joins them, as a soft star's join does; it's
 /// counted as a join for a soft star, and for a hard one returned as a count of breaks, which the
 /// router never makes. A pin your copper doesn't reach is `unrouted`.
-pub fn from_sketch(c: &Circuit, g: &Geometry, copper: &crate::diylc::Copper) -> (Routing, usize) {
+pub fn from_sketch(c: &Design, g: &Geometry, copper: &crate::diylc::Copper) -> (Routing, usize) {
     let pin_hole = |(ci, pi): (usize, usize)| g.pins[ci][pi];
     // Every step of trace, once, by net.
     let mut steps: Vec<(usize, Point, Point)> = Vec::new();

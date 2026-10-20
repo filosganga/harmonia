@@ -38,7 +38,7 @@ by the router automatically; nothing to add.
   `write::moved()`, which also turns `<orientation>`. Check the new class has no other field that
   depends on direction.
 - `src/svg.rs` `shape()`: add a drawing for its `short` name if a grey box (the default) misleads.
-- `diylc::Part` and `diylc::Source` are saved in the layout file (`src/layout.rs`, a part's
+- `diylc::Part` and `diylc::Source` are saved in the layout file (`src/build/file.rs`, a part's
   `"diylc"` and `"diylc_drawing"`): a new field on either changes the file, so raise `VERSION` there
   if an older reader would get it wrong.
 

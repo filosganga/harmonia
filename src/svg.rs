@@ -1,4 +1,4 @@
-//! Draws a layout (src/layout.rs) as an SVG picture of the perfboard: holes coloured by net, the
+//! Draws a build (src/build.rs) as an SVG picture of the perfboard: holes coloured by net, the
 //! routed copper traces and jumpers, the parts as they look from above, header pin names, and beside
 //! the board a legend with the score and every net. Open it in a browser; hovering a hole names
 //! it, its pin and net.
@@ -7,7 +7,7 @@
 //! with the copper in front and the parts behind the board, faint.
 
 use crate::board::{self, Component, Point};
-use crate::layout::Layout;
+use crate::build::Build;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 
@@ -103,12 +103,12 @@ fn wrap(text: &str, width: usize) -> Vec<String> {
     lines
 }
 
-pub fn draw(layout: &Layout, side: Side) -> String {
-    let (c, title) = (&layout.circuit, layout.title.as_str());
+pub fn draw(build: &Build, side: Side) -> String {
+    let (c, title) = (&build.design, build.title.as_str());
     let (w, h) = (c.board.width, c.board.height);
     let mirror = side == Side::Solder;
-    let g = board::geometry(c, &layout.placement);
-    let m = layout.measures;
+    let g = board::geometry(c, &build.layout.placement);
+    let m = build.measures;
 
     // Holes -> pixels. Fractions are for points between holes, like the middle of a resistor.
     let px = |x: f64| MARGIN + (if mirror { w as f64 - x } else { x + 1.0 }) * PX;
@@ -172,7 +172,7 @@ pub fn draw(layout: &Layout, side: Side) -> String {
     }
 
     // --- the copper traces, on the solder side
-    let routing = &layout.routing;
+    let routing = &build.layout.routing;
     let opacity = if mirror { 0.9 } else { 0.55 };
     let mut copper: HashMap<Point, usize> = HashMap::new(); // holes the copper touches -> net
     for (run, a, b) in routing.straight_traces() {
@@ -364,7 +364,7 @@ pub fn draw(layout: &Layout, side: Side) -> String {
         line(&mut legend, &mut ly, &text, "legend-title");
     }
     // How it was made, so a picture you like can be made again.
-    for text in wrap(&layout.made.again(), 60) {
+    for text in wrap(&build.made.again(), 60) {
         line(&mut legend, &mut ly, &text, "note");
     }
     if misplaced.is_empty() {

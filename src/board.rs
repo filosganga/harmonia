@@ -100,18 +100,26 @@ pub struct BoardSize {
     pub height: i32,
 }
 
-/// Everything the placer needs. Built by `netlist::load` from a KiCad netlist.
+/// What you asked for: the board, the parts and how they connect, and your rules for the board as
+/// written in the board file, for one case of them (`constraints.choices` says which). The placer,
+/// the router and the score all work on one; with a `Layout` it makes a `Build`.
+///
+/// `Design::new` makes one from a KiCad netlist or a DIYLC sketch, without rules; `constraints::
+/// designs` turns it into one per case of the board file's rules. The fields after `rules` are
+/// worked out from the ones before.
 #[derive(Clone)]
-pub struct Circuit {
+pub struct Design {
     pub board: BoardSize,
     pub components: Vec<Component>,
     pub nets: Vec<Net>,
     /// The supply and ground nets, if known (without them the power rule is off).
     pub power: Option<String>,
     pub ground: Option<String>,
+    /// The board file's rules as written: all of them, every case's.
+    pub rules: Vec<crate::constraints::Rule>,
     /// For each net, its pins as (component index, pin index).
     pub net_pins: Vec<Vec<(usize, usize)>>,
-    /// Your own rules for this board (where parts go, keep-outs, near, star), from the board file.
+    /// This case's rules, matched up with the parts (where parts go, keep-outs, near, star).
     pub constraints: crate::constraints::Constraints,
     /// What the router joins: one run per net, or one per branch of a star net.
     pub runs: Vec<Run>,
@@ -128,11 +136,11 @@ pub struct Run {
     pub star: Option<(usize, usize)>,
 }
 
-impl Circuit {
-    pub fn new(board: BoardSize, components: Vec<Component>, nets: Vec<Net>, power: Option<String>, ground: Option<String>) -> Circuit {
-        let mut c = Circuit { board, components, nets, power, ground, net_pins: Vec::new(), constraints: Default::default(), runs: Vec::new() };
+impl Design {
+    /// A design without rules yet: `constraints::designs` adds them, one design per case.
+    pub fn new(board: BoardSize, components: Vec<Component>, nets: Vec<Net>, power: Option<String>, ground: Option<String>) -> Design {
+        let mut c = Design { board, components, nets, power, ground, rules: Vec::new(), net_pins: Vec::new(), constraints: Default::default(), runs: Vec::new() };
         c.net_pins = c.nets.iter().map(|net| net.pins.iter().map(|p| c.find_pin(p)).collect()).collect();
-        c.runs = crate::constraints::runs(&c);
         // Stop now, with a clear message, if the power or ground net doesn't exist.
         c.power.iter().chain(&c.ground).for_each(|name| {
             c.net_index(name);
@@ -165,7 +173,7 @@ pub type Placement = Vec<Place>;
 
 /// Every part dropped at a random place (parts with placement rules on the nearest place they
 /// allow). Parts may land on each other: `place::random_start` moves them apart.
-pub fn random_placement(c: &Circuit, rng: &mut impl Rng) -> Placement {
+pub fn random_placement(c: &Design, rng: &mut impl Rng) -> Placement {
     let (w, h) = (c.board.width, c.board.height);
     let mut placement: Placement = c
         .components
@@ -200,7 +208,7 @@ pub struct Geometry {
     pub pins: Vec<Vec<Point>>,
 }
 
-pub fn geometry(c: &Circuit, placement: &[Place]) -> Geometry {
+pub fn geometry(c: &Design, placement: &[Place]) -> Geometry {
     let mut g = Geometry { bodies: Vec::new(), outlines: Vec::new(), pins: Vec::new() };
     for (comp, p) in c.components.iter().zip(placement) {
         let at = |hole: Point| {
@@ -222,14 +230,14 @@ fn manhattan(a: Point, b: Point) -> i32 {
 #[derive(Clone, Copy, Debug)]
 pub struct Measures(pub [f64; FEATURES.len()]);
 
-pub fn measure(c: &Circuit, placement: &[Place]) -> Measures {
+pub fn measure(c: &Design, placement: &[Place]) -> Measures {
     let g = geometry(c, placement);
     let routing = crate::route::route(c, placement, &g);
     measure_routed(c, placement, &g, &routing)
 }
 
 /// The same, routed once, shortest first (`route::route_once`): what the placer judges each move by.
-pub fn measure_once(c: &Circuit, placement: &[Place]) -> Measures {
+pub fn measure_once(c: &Design, placement: &[Place]) -> Measures {
     let g = geometry(c, placement);
     let routing = crate::route::route_once(c, &g);
     measure_routed(c, placement, &g, &routing)
@@ -237,7 +245,7 @@ pub fn measure_once(c: &Circuit, placement: &[Place]) -> Measures {
 
 /// The same, for parts at `placement` (whose geometry is `g`) already routed as `routing` (so a
 /// layout is routed only once).
-pub fn measure_routed(c: &Circuit, placement: &[Place], g: &Geometry, routing: &crate::route::Routing) -> Measures {
+pub fn measure_routed(c: &Design, placement: &[Place], g: &Geometry, routing: &crate::route::Routing) -> Measures {
     let pins_of = |net: usize| -> Vec<Point> { c.net_pins[net].iter().map(|&(ci, pi)| g.pins[ci][pi]).collect() };
     let net_pins = |name: &Option<String>| name.as_ref().map(|n| pins_of(c.net_index(n))).unwrap_or_default();
     let (vcc, gnd) = (net_pins(&c.power), net_pins(&c.ground));
@@ -289,7 +297,7 @@ pub fn measure_routed(c: &Circuit, placement: &[Place], g: &Geometry, routing: &
 /// two different parts, where the iron has no room. A pair of pins a solder blob would wrongly join
 /// (on different nets, or one on a net and one unused) counts twice. Parts may be as far apart as they like beyond that;
 /// wire length keeps them from drifting.
-fn crowding(c: &Circuit, g: &Geometry) -> i32 {
+fn crowding(c: &Design, g: &Geometry) -> i32 {
     // Which part takes each hole (the first one, if two collide: only a layout that isn't allowed has
     // collisions, and the placer never makes one).
     let mut part_at: HashMap<Point, usize> = HashMap::new();
@@ -347,7 +355,7 @@ pub struct Clash {
 /// Collisions and keep-outs count the holes a part takes; hanging off the board counts its whole
 /// outline (a module's board can't hang off the perfboard either). Only the parts `placed` says are
 /// counted, so a layout can be checked while it's being put together.
-pub fn clashes(c: &Circuit, g: &Geometry, placed: &[bool]) -> Vec<Clash> {
+pub fn clashes(c: &Design, g: &Geometry, placed: &[bool]) -> Vec<Clash> {
     let (w, h) = (c.board.width, c.board.height);
     let keepouts = &c.constraints.keepout;
     let mut out = Vec::new();
@@ -382,12 +390,12 @@ pub fn clashes(c: &Circuit, g: &Geometry, placed: &[bool]) -> Vec<Clash> {
 }
 
 /// Is the layout allowed: can it be built? (No clashes, see `clashes`.)
-pub fn allowed(c: &Circuit, placement: &[Place]) -> bool {
+pub fn allowed(c: &Design, placement: &[Place]) -> bool {
     clashes(c, &geometry(c, placement), &vec![true; placement.len()]).is_empty()
 }
 
 /// The clashes in plain words, one line per part and what's wrong with it, like "R1 and C2 share 2 holes".
-pub fn clash_words(c: &Circuit, clashes: &[Clash]) -> Vec<String> {
+pub fn clash_words(c: &Design, clashes: &[Clash]) -> Vec<String> {
     let mut seen: Vec<(usize, Why, usize)> = Vec::new();
     for clash in clashes {
         match seen.iter_mut().find(|(part, why, _)| (*part, *why) == (clash.part, clash.why)) {
@@ -433,7 +441,7 @@ pub fn score(m: &Measures) -> f64 {
 
 /// One line about a layout: its score, cost and measurements, or, for one that isn't allowed (a
 /// sketch can be drawn that way), what's wrong with it instead: it isn't scored.
-pub fn report(c: &Circuit, placement: &[Place], title: &str) -> String {
+pub fn report(c: &Design, placement: &[Place], title: &str) -> String {
     let wrong = clashes(c, &geometry(c, placement), &vec![true; placement.len()]);
     if !wrong.is_empty() {
         return format!("{title}: not allowed, so not scored: {}", clash_words(c, &wrong).join("; "));
@@ -450,7 +458,7 @@ pub fn report_measures(m: &Measures, title: &str) -> String {
 // ---------------------------------------------------------------- rendering
 
 /// Text picture: each part gets a letter, UPPERCASE on its pins, lowercase on its body, x = keep-out, # = collision.
-pub fn ascii_board(c: &Circuit, placement: &[Place]) -> String {
+pub fn ascii_board(c: &Design, placement: &[Place]) -> String {
     let (w, h) = (c.board.width, c.board.height);
     let g = geometry(c, placement);
     let mut grid = vec![vec!['.'; w as usize]; h as usize];
@@ -508,7 +516,7 @@ const NET_COLORS: [&str; 14] = [
 
 /// A colour for each net: power red, ground near-black, the rest from NET_COLORS.
 /// The SVG picture and the DIYLC jumpers both use these, so a net looks the same in both.
-pub fn net_colors(c: &Circuit) -> Vec<&'static str> {
+pub fn net_colors(c: &Design) -> Vec<&'static str> {
     let mut others = NET_COLORS.iter().cycle();
     c.nets
         .iter()

@@ -68,42 +68,46 @@ print their seed and command the same way. `place` writes, in `out/` (or the `--
 
 ### The layout file
 
-`rules.layout.json` describes the finished board, so the drawings (and any tool of your own) don't
-have to work it out again. It's JSON, with `"format": "harmonia-layout"` and a `"version"` number (a
-file of another version is refused, with a message):
+`rules.layout.json` holds the finished board, a *build*: what you asked for (the **design**) and
+what the program made of it (the **layout**), so the drawings (and any tool of your own) don't have
+to work it out again, and a saved board can be scored again later. It's JSON, with `"format":
+"harmonia-layout"` and a `"version"` number (a file of another version is refused, with a message):
 
 - **made**: how it was made: the circuit file, the board file, the judge, where the placer started
-  (`random` or `sketch`), the seed, the steps, and which case of the board file's rules
-  won (counted from 1, out of how many, and the option it took in each one-of); the **command**
-  that makes it again and the program's **version** and commit; and the **footprints** that didn't
-  come from the built-in library (which file, and whether it replaced a different one), since
-  placing again needs that file too. And a **title**, the
-  one the pictures show.
-- **board**: its width and height in holes, and the keep-outs (name, from, to, and a soft one's weight).
-- **power** and **ground**: the two net names.
-- **parts**: each part's reference, value and footprint; `at` and `rot`, meaning what they mean in
-  the board file's `fixed` rule; its `size` in holes before turning, whether it's `low`, the
-  `"diylc"` entry from `footprints.json` if it has one, and its pins: name, `at` (its hole inside the
-  part, before turning), `hole` (where that is on the board), net, and `off_grid` for a pin between
-  holes. A part that doesn't take its whole outline (a module, or a DIYLC part drawn at an angle)
-  also has its `body`, the holes it takes; a part from a DIYLC sketch has its `diylc_drawing`, your
-  drawing of it, which is how the `.diy` keeps it.
-- **nets**: each net's name and pins.
-- **runs**: what the router joins with one piece of copper (a net, or a branch of a star net, with
-  its `star` point), in the order it routes them first (shortest first), with that copper: `traces` as straight pieces,
-  `[from hole, to hole]`, then `jumpers` and `solder_wires` the same way, and `unrouted` (only when
-  there are any): connections the router couldn't make.
-- **score**: the score, the cost and the eleven measurements by name (below), and the `!!` **problems**.
+  (`random` or `sketch`), the seed, the steps, and which case of the board file's rules won
+  (counted from 1, out of how many); the **command** that makes it again and the program's
+  **version** and commit; and the **footprints** that didn't come from the built-in library (which
+  file, and whether it replaced a different one), since placing again needs that file too.
+- **title**: the one the pictures show.
+- **design**: what you asked for.
+  - **board** (its width and height in holes), **power** and **ground** (the two net names).
+  - **rules**: the board file's rules as written (what you left out is left out), and
+    **choices**: the option this case took in each one-of.
+  - **parts**: each part's reference, value and footprint; its `size` in holes before turning,
+    whether it's `low`, the `"diylc"` entry from `footprints.json` if it has one, and its pins: name,
+    `at` (its hole inside the part, before turning), and `off_grid` for a pin between holes. A part
+    that doesn't take its whole outline (a module, or a DIYLC part drawn at an angle) also has its
+    `body`, the holes it takes; a part from a DIYLC sketch has its `diylc_drawing`, your drawing of
+    it, which is how the `.diy` keeps it.
+  - **nets**: each net's name and pins.
+- **layout**: what was made of it.
+  - **parts**: where each part sits, `at` and `rot` meaning what they mean in the board file's
+    `fixed` rule, and the `hole` each of its pins lands in.
+  - **runs**: what the router joins with one piece of copper (a net, or a branch of a star net,
+    with its `star` point), in the order it routes them first (shortest first), with that copper:
+    `traces` as straight pieces, `[from hole, to hole]`, then `jumpers` and `solder_wires` the same
+    way, `unrouted` (only when there are any): connections the router couldn't make, and `joins`
+    (only for a soft star's branch that took any): where it joined another branch's copper.
+- **score**: the score, the cost and the eleven measurements by name (below), and **problems**:
+  the `!!` lines. Both are written for people to read; reading the file back works them out again.
 
-Not in it: the net colours (worked out from the nets), the start (only `rules.html` shows it), and
-the board file's rules about where parts may go, `near` and `close`, and where a soft star's runs joined.
+Not in it: the net colours (worked out from the nets), and the start (only `rules.html` shows it).
 
 `draw` reads a layout file and draws it again next to it: `draw out/rules.layout.json` writes
 `out/rules.svg`, `out/rules-solder.svg`, `out/rules.kicad_pcb` and `out/rules.diy`, the same files
-`place` wrote, without placing or routing anything. It uses the copper and the measurements as they
-were saved, so a layout saved before a change to the router draws as it did. (The score and cost
-beside the board are worked out from those measurements with today's weights; a file measured on
-other things than today's measurements is refused.) Copy a
+`place` wrote, without placing or routing anything: the copper is drawn as it was saved, so a layout
+saved before a change to the router draws as it did. The score and the problems are worked out
+again from the file's design and layout, with today's measurements and weights. Copy a
 layout file somewhere first to keep it: the next `place` overwrites `out/rules.layout.json`.
 
 ## Using your own circuit
@@ -284,7 +288,7 @@ text board. Pins are named like the `nets` command prints them.
 | `circuits/cat_feeder.diy` | A copy of the cat-feeder's `pcb.diy` (2026-10-17; the RTC's board rectangle since drawn one hole wider on each long side, to its real 8 holes), with `cat_feeder.json`: 5 V and ground starred from where the supply comes in (Q1's cathode, the cable's ground), the driver with its own runs and C1 near it, R1 near GPIO2, `Pads` close to GP5 or GP22 (the ESP32's back pads), the ESP32's USB side on one of the board's edges, and the two cable headers (`Inlet`, `Ext`) on an edge or one hole in. |
 | `circuits/cat_feeder_fixed/` | The cat feeder as a KiCad netlist (`orig.net`, its module pins named, e.g. `U1.GP2`), its modules in its own `footprints.json`, with every part `fixed` where it's soldered on the real board (`orig.json`; `orig-nostar.json` without the star rules). Routed by hand with 4 jumpers and no solder-side wire, so CI checks the router joins every pin without one too. Also `feeder.net`, the same board with two voltage dividers and a capacitor more, and board files for it, given with `--board-file` (`free.json` places everything; `keep*.json` and `add*.json` keep the modules, or more, where they are), and `hand.json` / `hand-nostar.json`: `orig.json`'s star and near rules with the sketch's pin names (`place circuits/cat_feeder.diy --board-file circuits/cat_feeder_fixed/hand.json` measures the hand wiring). |
 | `TODO.md` | The maintainer's own list of ideas for later. |
-| `src/constraints.rs` | Reads the board file and keeps its rules: where parts may go (fixed, edge, orientation, within, all-of, one-of), keep-outs, near, close, star. |
+| `src/constraints.rs` | Reads the board file and keeps its rules: where parts may go (fixed, edge, orientation, within, all-of, one-of), keep-outs, near, close, star; and makes one design per case of them. |
 | `circuits/bench.txt` | The benchmark set: the circuits `bench` places. Never used to train a network. |
 | `circuits/bench/` | Ten classic hobby circuits for the benchmark (a 7805 supply, a transistor flasher, an LM386 amp, a 555 + 4017 LED chaser, ...), written as KiCad netlists after datasheet applications and well-known designs, each with a board file (its size, power, ground, and the connectors on edges). |
 | `footprints.json` | Footprint name → size in holes and where each pad is. |
@@ -296,7 +300,8 @@ text board. Pins are named like the `nets` command prints them.
 | `src/route.rs` | The router: joins every net with copper traces, and hops over with a jumper (or, last, a solder-side wire) where a trace can't get through or going round costs more; for a finished layout it makes 200 complete routings in different orders and keeps the one the score likes best; a pin walled in so that not even a wire fits is left unrouted. It also turns a sketch's own copper into a routing, to measure your wiring. |
 | `src/route/search.rs` | The router's search: the board as it sees it (who owns each hole, where wires lie) and the A* search for the cheapest way to a run's next pin, in traces and wires, with what each step costs. |
 | `src/route/sketch.rs` | Your own wiring, from a DIYLC sketch, as a routing the score can measure. |
-| `src/layout.rs` | The finished board, routed and measured once (`Layout`), which the three writers below draw; and the layout file: writing it, and reading it back for `draw`. |
+| `src/build.rs` | A finished board, a `Build`: what you asked for (`Design`, in `src/board.rs`: the parts, nets, board and your rules), what was made of it (`Layout`: where each part goes and the copper), and how; scored once, and drawn by the three writers below. |
+| `src/build/file.rs` | The layout file: writing a build, and reading it back (for `draw`, and `check`'s round trip). |
 | `src/svg.rs` | Draws the layout as an SVG picture, from the parts' side or the solder side. |
 | `src/kicad_pcb.rs` | Writes the layout as a KiCad board. |
 | `src/diylc.rs` | What the program knows about DIYLC, shared by the reader and the writer: the part classes it supports (`CLASSES`: each one's pins, whether it's low, its body, how to draw a new one), DIYLC's units and turns. |
@@ -527,7 +532,7 @@ benchmark before and after it and compare the layouts, not the old numbers.
   in ten put a part anywhere it fits on the board. On a crowded board, a place that's only reachable
   by moving two parts at once is still hard to find.
 - **KiCad has no traces.** `rules.kicad_pcb` has the parts and their nets, not the routed copper.
-  The copper is in the layout file (`runs`) and in the `Layout` that `src/kicad_pcb.rs` is given,
+  The copper is in the layout file (`runs`) and in the `Build` that `src/kicad_pcb.rs` is given,
   so writing it into the KiCad board only needs that writer to draw it.
 - **DIP pin names from DIYLC.** Reading a `.diy`, a DIP chip's right-hand pins are numbered top to
   bottom (5–8) where the chip's own numbering runs bottom to top, so the top-right pin is called 5,

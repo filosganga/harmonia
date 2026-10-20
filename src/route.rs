@@ -45,7 +45,7 @@ mod sketch;
 
 pub use sketch::from_sketch;
 
-use crate::board::{Circuit, Geometry, Measures, Place, Point, WEIGHTS};
+use crate::board::{Design, Geometry, Measures, Place, Point, WEIGHTS};
 use rand::{SeedableRng, rngs::StdRng, seq::SliceRandom};
 use search::{Grid, RULE, Scratch, Step, bend, empty_grid, holes_between, join, jumper_shapes, lay, octile, spread};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -108,7 +108,7 @@ impl Routing {
     /// Length of copper (traces, jumpers and solder-side wires), in holes, between two holes the
     /// same net joins, going the way the router laid it. A star net's runs only meet at the star
     /// point (unless they joined, see `joins`), so between two runs it goes through there.
-    pub fn copper_between(&self, c: &Circuit, net: usize, from: Point, to: Point) -> f64 {
+    pub fn copper_between(&self, c: &Design, net: usize, from: Point, to: Point) -> f64 {
         // Every piece of copper of that net, as links between holes, both ways.
         let mut links: HashMap<Point, Vec<(Point, f64)>> = HashMap::new();
         for &(run, a, b) in self.traces.iter().chain(&self.jumpers).chain(&self.bottom) {
@@ -187,7 +187,7 @@ impl Routing {
 }
 
 /// The `!!` lines for connections the router couldn't make, naming each pin left out.
-pub fn unrouted_problems(c: &Circuit, g: &Geometry, routing: &Routing) -> Vec<String> {
+pub fn unrouted_problems(c: &Design, g: &Geometry, routing: &Routing) -> Vec<String> {
     let name_of = |hole: Point| {
         let pins = c.components.iter().enumerate().flat_map(|(ci, comp)| comp.pins.iter().enumerate().map(move |(pi, pin)| (ci, pi, pin)));
         pins.filter(|&(ci, pi, _)| g.pins[ci][pi] == hole)
@@ -226,7 +226,7 @@ fn distance(a: Point, b: Point) -> f64 {
 /// router has no rules of its own about what to try again or what to keep room for: it proposes,
 /// the score judges. The random orders come from a fixed seed, so the same placement always gets
 /// the same copper.
-pub fn route(c: &Circuit, placement: &[Place], g: &Geometry) -> Routing {
+pub fn route(c: &Design, placement: &[Place], g: &Geometry) -> Routing {
     let canonical = order(c, g);
     let empty = empty_grid(c, g);
     // What the placement alone costs (power and crowding): the same for every candidate, so a
@@ -268,7 +268,7 @@ pub fn route(c: &Circuit, placement: &[Place], g: &Geometry) -> Routing {
 
 /// Routes every run once, shortest first: what the placer judges each move by (see
 /// `place::anneal`). It's `route`'s first candidate, so `route` is never worse.
-pub fn route_once(c: &Circuit, g: &Geometry) -> Routing {
+pub fn route_once(c: &Design, g: &Geometry) -> Routing {
     route_in_order(c, g, empty_grid(c, g), &order(c, g), f64::INFINITY).0
 }
 
@@ -277,7 +277,7 @@ pub fn route_once(c: &Circuit, g: &Geometry) -> Routing {
 /// only grow as more is laid (wire, diagonal, crosswise, jumpers, jumper_len, bottom, unrouted;
 /// turns can shrink, when a later step makes a bend a junction), and gives up (true) once that
 /// passes `budget`.
-fn route_in_order(c: &Circuit, g: &Geometry, mut grid: Grid, order: &[usize], budget: f64) -> (Routing, bool) {
+fn route_in_order(c: &Design, g: &Geometry, mut grid: Grid, order: &[usize], budget: f64) -> (Routing, bool) {
     let w = WEIGHTS;
     let (mut wire, mut diagonal, mut across, mut down, mut wire_len) = (0.0, 0.0, 0usize, 0usize, 0.0);
     let n = (grid.w * grid.h) as usize;
@@ -359,7 +359,7 @@ fn route_in_order(c: &Circuit, g: &Geometry, mut grid: Grid, order: &[usize], bu
 /// they have the fewest ways around things. A run's copper is laid all at once, and `route` hands
 /// back each run's pieces in this order whichever order won, so in a `Routing` each run's pieces
 /// come one after the other, runs in this order (the layout file keeps them that way).
-pub fn order(c: &Circuit, g: &Geometry) -> Vec<usize> {
+pub fn order(c: &Design, g: &Geometry) -> Vec<usize> {
     let span = |r: usize| {
         let ps: Vec<Point> = c.runs[r].pins.iter().map(|&(ci, pi)| g.pins[ci][pi]).collect();
         let (xs, ys) = (ps.iter().map(|p| p.0), ps.iter().map(|p| p.1));
