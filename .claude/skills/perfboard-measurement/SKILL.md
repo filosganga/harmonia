@@ -14,7 +14,7 @@ A measurement is in five places that the compiler only partly ties together.
    **same order**.
 2. `src/nn.rs`: `SCALE`, one rough size per measurement so inputs land around 0..1, **same order as
    FEATURES**. The compiler checks the length, not the order.
-3. `src/route.rs`: the router's costs are the matching weights × 10 (`STRAIGHT`/`DIAGONAL` for wire,
+3. `src/route/search.rs`: the router's costs are the matching weights × 10 (`STRAIGHT`/`DIAGONAL` for wire,
    `TURN` for turns, `DIAGONAL_EXTRA` for diagonal, `JUMPER_PER_HOLE` for jumper length, `RULE` for a
    soft keep-out's hole or a soft star's join, and `JUMPER` / `SOLDER_WIRE` for each wire, weighed
    against the traces' way round and a join; `crosswise` isn't priced, see `Routing::crosswise_steps`).

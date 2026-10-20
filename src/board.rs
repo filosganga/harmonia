@@ -30,13 +30,13 @@ pub const FEATURES: [&str; 11] = ["wire", "turns", "diagonal", "crosswise", "jum
 /// From random starts (`bench`): corners + 3 x jumpers 651 -> 485, solder-side wires 5 -> 5,
 /// crowding 115 -> 83.
 pub const WEIGHTS: [f64; 11] = [
-    1.0,  // wire: per hole of copper trace, as routed (see route.rs, whose costs match these)
-    5.0,  // turns: per right angle's worth of bending a trace (45° is 2, 135° is 3; see route::bend): a corner is the work, not the length
+    1.0,  // wire: per hole of copper trace, as routed (see route/search.rs, whose costs match these)
+    5.0,  // turns: per right angle's worth of bending a trace (45° is 2, 135° is 3; see route/search.rs `bend`): a corner is the work, not the length
     15.0, // diagonal: per diagonal step of copper trace, on top of its length, three corners' worth (jumpers and wires don't count)
     0.5,  // crosswise: per straight step of trace running against the board's main direction (see route.rs)
-    15.0, // jumpers: per jumper on the parts' side, three corners' worth (the router prices every jumper at this, route.rs `JUMPER`)
+    15.0, // jumpers: per jumper on the parts' side, three corners' worth (the router prices every jumper at this, route/search.rs `JUMPER`)
     0.5,  // jumper_len: per hole of jumper or solder-side wire. Not the work (a long jumper is no harder), but a long jumper takes room later jumpers can't cross: almost free (0.1) brought solder-side wires back
-    500.0, // bottom: per wire on the solder side, the last resort, a hundred corners (the router prices every one at this, route.rs `SOLDER_WIRE`)
+    500.0, // bottom: per wire on the solder side, the last resort, a hundred corners (the router prices every one at this, route/search.rs `SOLDER_WIRE`)
     5000.0, // unrouted: per connection the router couldn't make at all (a pin walled in; nothing for the router to price): a thousand corners, ten solder-side wires
     1.5,  // power: per hole between each 5V pin and its nearest GND pin
     4.0,  // crowding: per pair of neighbouring holes taken by two parts (twice for pins of two nets): room to solder; at 2 the parts packed with the board half empty
