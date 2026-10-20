@@ -7,7 +7,7 @@
 //! footprints.json in the config folder (`user_footprints`) adds parts for every circuit, and one
 //! next to the netlist for the circuits in that folder; each replaces entries of the same name.
 
-use crate::board::{BoardSize, Design, Component, Net, Pin, Point};
+use crate::board::{BoardSize, Design, Component, Layers, Net, Pin, Point};
 use crate::diylc;
 use crate::sexpr::{self, Sexpr};
 use serde::Deserialize;
@@ -37,10 +37,15 @@ struct Footprint {
     /// Low enough to sit under a module on headers. Leave out if it isn't.
     #[serde(default)]
     low: bool,
-    /// A module on headers (an Arduino Nano, a motor driver breakout): only its pin holes are
-    /// taken, and low parts can go under its board, like a DIYLC group with pins in it.
+    /// A module (an Arduino Nano, a motor driver breakout): a board of its own, standing on its
+    /// pins, like a DIYLC group with pins in it. On headers unless `layers` says otherwise, so low
+    /// parts and jumper wires can go under it.
     #[serde(default)]
     module: bool,
+    /// Which layers above the board it takes, [from, to] (see `board::Layers`), if not what
+    /// `module` and `low` say: a module on headers [2, 2], a low part [1, 1], any other [1, 2].
+    #[serde(default)]
+    layers: Option<Layers>,
 }
 
 pub struct Options {
@@ -142,7 +147,12 @@ pub fn describe(path: &str) -> Vec<String> {
         .chain(names.into_iter()
         .map(|name| {
             let fp = &library.parts[name];
-            let kind = if fp.module { ", a module on headers" } else if fp.low { ", low" } else { "" };
+            let kind = match (fp.layers, fp.module, fp.low) {
+                (Some(l), module, _) => format!("{}, on layers {}-{}", if module { ", a module" } else { "" }, l.lo, l.hi),
+                (None, true, _) => ", a module on headers".to_string(),
+                (None, false, true) => ", low".to_string(),
+                (None, false, false) => String::new(),
+            };
             let origin = match library.from.get(name) {
                 Some((file, Some(what))) => format!(" (from {}, replacing {what})", file.display()),
                 Some((file, None)) => format!(" (from {})", file.display()),
@@ -174,7 +184,8 @@ fn component(comp: &Sexpr, library: &Library) -> Component {
         Some(what) => format!("{name} from {}, replacing {what}", file.display()),
         None => format!("{name} from {}", file.display()),
     });
-    Component { reference, value, footprint: footprint.to_string(), diylc: fp.diylc.clone(), w: fp.w, h: fp.h, pins, body, source: None, low: fp.low, footprint_from }
+    let layers = fp.layers.map_or(Layers::of(fp.module, fp.low), |l| l.checked(&format!("{FOOTPRINTS}: {name}")));
+    Component { reference, value, footprint: footprint.to_string(), diylc: fp.diylc.clone(), w: fp.w, h: fp.h, pins, body, source: None, layers, module: fp.module, footprint_from }
 }
 
 fn net(net: &Sexpr) -> Net {

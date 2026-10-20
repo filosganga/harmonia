@@ -10,7 +10,7 @@
 //! board) becomes one part. Only its pins' holes are taken, so low parts can go under it.
 
 use super::{HOLE, Kind, MARGIN, Source, class};
-use crate::board::{BoardSize, Design, Component, Net, Pin, Place, Placement, Point, bounds};
+use crate::board::{BoardSize, Design, Component, Layers, Net, Pin, Place, Placement, Point, bounds};
 use crate::netlist::{self, NET_NAME_HINTS, Options};
 use roxmltree::Node;
 use std::collections::{BTreeSet, HashMap};
@@ -259,18 +259,23 @@ fn components(path: &str, root: &Node, parts: &[Drawn], decorations: &HashMap<St
         let local = |(x, y): Point| (x - x0, y - y0);
         let single = members.len() == 1 && !in_group;
         let first = &parts[members[0]];
+        // A group standing on less than its outline (its headers) is a module, on headers.
+        let (w, h) = (x1 - x0 + 1, y1 - y0 + 1);
+        let module = !single && body.len() < (w * h) as usize;
+        let low = single && class(&first.class).is_some_and(|c| c.low);
         let xml = members.iter().map(|&pi| parts[pi].node).chain(extra).map(|n| n.document().input_text()[n.range()].to_string()).collect();
         out.push(Component {
             reference,
             value: if single { first.value.clone() } else { String::new() },
             footprint: format!("DIYLC:{}", if single { class(&first.class).map_or("", |c| c.short) } else { "module" }),
             diylc: None,
-            w: x1 - x0 + 1,
-            h: y1 - y0 + 1,
+            w,
+            h,
             pins: pins.into_iter().map(|(name, at, off_grid)| Pin { name, at: local(at), off_grid }).collect(),
             body: body.into_iter().map(local).collect(),
             source: Some(Source { xml, group, origin: (x0, y0) }),
-            low: single && class(&first.class).is_some_and(|c| c.low),
+            layers: Layers::of(module, low),
+            module,
             footprint_from: None,
         });
         places.push((x0, y0));
@@ -334,14 +339,17 @@ fn name_nets(nets: Vec<Vec<String>>) -> Vec<Net> {
 fn body_of(class: &str, item: Node, pins: &[(String, Inches)]) -> Vec<Point> {
     let holes: Vec<Point> = pins.iter().map(|(_, at)| hole(*at)).collect();
     let ((mut x0, mut y0), (mut x1, mut y1)) = bounds(&holes);
-    if holes.len() == 2 && x0 != x1 && y0 != y1 {
-        return holes; // a two-legged part drawn at an angle: just its legs
+    let radial = super::class(class).is_some_and(|c| c.radial);
+    let angled = holes.len() == 2 && x0 != x1 && y0 != y1;
+    if let [a, b] = holes[..] && angled && !radial {
+        return line(a, b); // a two-legged part lying at an angle: the line between its legs
     }
-    if super::class(class).is_some_and(|c| c.radial) {
-        // A standing part is round: grow its box to its diameter along the legs and its width across them.
+    if radial {
+        // A standing part is round: grow its box to its diameter along the legs and its width across
+        // them (its diameter both ways if its legs are at an angle).
         let along = size_of(item, "length").map(|d| (d / HOLE).round() as i32).unwrap_or(1).max(1);
         let across = size_of(item, "width").map(|d| (d / HOLE).round() as i32).unwrap_or(along).max(1);
-        let (want_x, want_y) = if y0 == y1 { (along, across) } else { (across, along) };
+        let (want_x, want_y) = if angled { (along.max(across), along.max(across)) } else if y0 == y1 { (along, across) } else { (across, along) };
         let grow = |lo: &mut i32, hi: &mut i32, want: i32| {
             while *hi - *lo + 1 < want {
                 *hi += 1;
@@ -354,6 +362,15 @@ fn body_of(class: &str, item: Node, pins: &[(String, Inches)]) -> Vec<Point> {
         grow(&mut y0, &mut y1, want_y);
     }
     (x0..=x1).flat_map(|x| (y0..=y1).map(move |y| (x, y))).collect()
+}
+
+/// The holes on the straight line from `a` to `b`, both ends included: one per hole along its
+/// longer side, the nearest to the line.
+fn line(a: Point, b: Point) -> Vec<Point> {
+    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+    let n = dx.abs().max(dy.abs());
+    let step = |from: i32, d: i32, k: i32| from + (d as f64 * k as f64 / n as f64).round() as i32;
+    (0..=n).map(|k| (step(a.0, dx, k), step(a.1, dy, k))).collect()
 }
 
 /// The holes inside a rectangle given by two corner points. A hole counts only if the rectangle

@@ -83,11 +83,12 @@ to work it out again, and a saved board can be scored again later. It's JSON, wi
   - **board** (its width and height in holes), **power** and **ground** (the two net names).
   - **rules**: the board file's rules as written (what you left out is left out), and
     **choices**: the option this case took in each one-of.
-  - **parts**: each part's reference, value and footprint; its `size` in holes before turning,
-    whether it's `low`, the `"diylc"` entry from `footprints.json` if it has one, and its pins: name,
+  - **parts**: each part's reference, value and footprint; its `size` in holes before turning, its
+    `layers` (as its footprint or sketch says; a `layers` rule may say otherwise) and whether it's a
+    `module`, the `"diylc"` entry from `footprints.json` if it has one, and its pins: name,
     `at` (its hole inside the part, before turning), and `off_grid` for a pin between holes. A part
-    that doesn't take its whole outline (a module, or a DIYLC part drawn at an angle) also has its
-    `body`, the holes it takes; a part from a DIYLC sketch has its `diylc_drawing`, your drawing of
+    that doesn't stand on its whole outline (a module, or a DIYLC part lying at an angle) also has its
+    `body`, the holes it stands on; a part from a DIYLC sketch has its `diylc_drawing`, your drawing of
     it, which is how the `.diy` keeps it.
   - **nets**: each net's name and pins (two or more).
 - **layout**: what was made of it.
@@ -134,10 +135,12 @@ The optional `"diylc"` entry says how to draw the part in DIYLC: `Resistor`, `Ra
 DIYLC's first leg: that's + on a capacitor but the anode on an LED, which is KiCad's pad 2. Without a
 `"diylc"` entry the part is drawn as a labelled box.
 
-`"low": true` marks a part low enough to sit under a module on headers (see below); leave it out otherwise.
-`"module": true` marks a module on headers (an Arduino Nano, a Pico, a motor driver breakout): only its
-pins take holes, and low parts can go under its board, like a DIYLC group (below). `footprints.json`
-has five, from KiCad's `Module` library.
+`"low": true` marks a part low enough to sit under a module on headers (see "How a board is judged");
+leave it out otherwise. `"module": true` marks a module (an Arduino Nano, a Pico, a motor driver
+breakout): a board of its own standing on its pins, on headers, so low parts and jumpers can go under
+it, like a DIYLC group (below). `"layers": [from, to]` says which layers it takes when that's not
+what `low` and `module` say (a module soldered flat on its pads is `[0, 1]`); a board file's `layers`
+rule can say so for one board. `footprints.json` has five modules, from KiCad's `Module` library.
 
 ## Or sketch it in DIYLC
 
@@ -164,9 +167,10 @@ a weight) or on a line of their own (without one).
 - **A DIYLC group with pins in it is one part, a module**: say two pin headers, a rectangle for the
   module's board and some labels. Its outline is the rectangle's holes: a hole counts if the rectangle
   reaches clearly past its centre, so a board drawn with its edge on a line of holes ends there (the
-  same rule as for footprints). It moves as a whole, and only its pin holes are taken: **low parts**
-  (a resistor lying flat, a ceramic disc, a diode) can go under it. Taller parts can't, and two modules
-  can't overlap. `:` on the text board marks the space under a module.
+  same rule as for footprints). It moves as a whole, and stands only on its pins, on headers: **low parts**
+  (a resistor lying flat, a ceramic disc, a diode) and jumpers can go under it. Taller parts can't, and
+  two modules can't overlap (a `layers` rule says when it's soldered another way). `:` on the text board
+  marks the space under a module.
 - **The `.diy` it writes keeps your own drawing**: your parts with their values, colours and labels,
   moved and turned, your groups still grouped. Everything you drew to connect things (traces, jumpers,
   wires, solder pads) is replaced by the routed copper.
@@ -208,7 +212,8 @@ one, say a copy with a weight changed). Everything in it is optional:
     { "kind": "edge",    "name": "D1 on the right, if it can", "part": "D1", "edge": "right", "weight": 0.01 },
     { "kind": "near",    "name": "C2 by CTRL", "pins": ["C2.1", "U1.5"], "weight": 0.05 },
     { "kind": "close",   "pins": ["D1.2", "U1.3"] },
-    { "kind": "star",    "at": "C1.2", "runs": [["U1.1", "C2.2"], ["D1.1"]] }
+    { "kind": "star",    "at": "C1.2", "runs": [["U1.1", "C2.2"], ["D1.1"]] },
+    { "kind": "layers",  "name": "C2 bent over, lying flat", "part": "C2", "layers": [1, 1] }
   ]
 }
 ```
@@ -246,7 +251,14 @@ one, say a copy with a weight changed). Everything in it is optional:
 - **close**: two pins of any nets should be as close together as possible, straight across the
   board. For a connection the board doesn't carry, like a wire from pads under a module to a header.
   It costs per hole like near, is counted with it, and takes a `weight` too.
-- **weight**, on any rule: how much it matters, from 0 to 1. Left out, the rule is hard: the placer
+- **layers**: how the part is mounted, as `[from, to]`, the layers above the board it takes (see
+  "How a board is judged"), in place of what its footprint or your sketch says. A module on headers
+  is `[2, 2]`, above the parts; soldered on its pins, `[1, 2]`, like any part; soldered flat on its
+  pads, `[0, 1]` (nothing goes over it either) or `[0, 0]` (a jumper may). A capacitor bent over to
+  lie flat is `[1, 1]`, and fits under a module on headers. It's how the part is built, so it has no
+  weight; to let the placer try two ways, put them in a `one-of`:
+  `{ "kind": "one-of", "rules": [ { "kind": "layers", "name": "on headers", "part": "ESP32C6", "layers": [2, 2] }, { "kind": "layers", "name": "on its pins", "part": "ESP32C6", "layers": [1, 2] } ] }`.
+- **weight**, on any rule but `layers`: how much it matters, from 0 to 1. Left out, the rule is hard: the placer
   never breaks it (below). With one, it may be broken, at a cost of the weight times a thousand for
   each hole it's broken by. At 1 that's as much as two solder-side wires, so the placer trades any
   corners, jumpers or crowding to keep it, and only three solder-side wires or an unrouted pin cost
@@ -318,9 +330,20 @@ text board. Pins are named like the `nets` command prints them.
 
 First, whether it's **allowed**: whether it can be built at all. A layout isn't allowed if two parts
 take the same hole, a part hangs off the board (a module's board too), a part sits on a keep-out (one without a weight), or
-a part that isn't low sits under a module's board (`board::clashes`). That's a yes-or-no check, not
+a part sits under a module's board where they'd touch (`board::clashes`). That's a yes-or-no check, not
 a cost: the placer never makes a layout that isn't allowed, so the score below only ever compares
 layouts that can be built.
+
+What may go under what is told by **layers** above the parts' side of the board: 0 is the surface
+(copper, a module soldered flat on its pads), 1 where parts lie and jumper wires run, 2 above them (a
+module's board on headers). Each part takes a span of them (`board::Layers`, written `[from, to]`):
+where it stands on the board (its body, or a module's pins) from the surface up to its top, and a
+module's board its span over the rest of its outline. Two things clash where they share a hole and a
+layer. Unless the footprint, your sketch or a `layers` rule says otherwise, a **low** part (a resistor
+lying flat, a ceramic disc, a diode) takes `[1, 1]`, a **module** `[2, 2]` and any other part `[1, 2]`:
+so low parts and jumpers go under a module on headers, and taller parts don't. A two-legged part
+lying at an angle stands on the line between its legs; a standing one (an electrolytic) on its round
+body, whichever way its legs point.
 
 Then how good it is. `src/board.rs` measures eleven things (weights in `WEIGHTS`):
 
@@ -404,8 +427,8 @@ or a wire lies over costs the weight times a thousand, so the router goes round 
 - A **jumper** is a wire on the parts' side, used where traces can't get through, or where going
   round costs more than the jumper (three corners and half a hole per hole, as the score charges): traces
   run up to a free hole, the jumper hops over, and traces carry on from where it lands. It goes across, down or at
-  45°, 2 to 10 holes long. It can't pass over a part, a pin or a hard keep-out (it can go under a module's
-  board, like low parts), or over or across another run's jumper. A jumper is like a part: its legs
+  45°, 2 to 10 holes long. It lies on layer 1: it can't pass over a part, a pin or a hard keep-out (it
+  can go under a module on headers, like low parts), or over or across another run's jumper. A jumper is like a part: its legs
   need holes of their own, never a pin's. It may lie over a hole where a solder-side wire ends:
   hopping over things is what it's for.
 - A **wire on the solder side** is the last resort: it costs a hundred corners, as in the score, so
@@ -540,8 +563,6 @@ benchmark before and after it and compare the layouts, not the old numbers.
   bottom (5–8) where the chip's own numbering runs bottom to top, so the top-right pin is called 5,
   not 8. The connections are right; only the names are off. Check with `nets` before naming such a pin
   in a board file.
-- **Angled parts from DIYLC.** A two-legged part drawn at an angle only takes its two leg holes, so the
-  placer treats it like a module: low parts may go under it, and jumpers may pass over it.
 - **Scores of big circuits are low.** The score's scale (`SCORE_SCALE`) was set on the 555, under
   cheaper corners; the cat-feeder board scores under 1 even when it's good, and a board file with a
   near or close rule at weight 1 always scores 0 (each costs a thousand a hole, and copper between

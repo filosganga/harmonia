@@ -92,7 +92,7 @@ touches, and every constant the diff changes, grep the whole repo for the old va
 - **Hard rules are never learned.** Placement rules without a `weight` (fixed, edge, orientation,
   within, and all-of and one-of of them) are enforced by the placer (`Constraints::allowed`, kept by
   `constraints::apply`), and so is what's allowed for every part (`board::clashes`: no collisions,
-  nothing off the board, on a keep-out without a weight, or under a module without being low): the placer starts
+  nothing off the board, on a keep-out without a weight, or under a module sharing one of its layers, as footprints and the always-hard `layers` rule say): the placer starts
   from an allowed layout (`place::allowed_start`) and never accepts a move that isn't. A change that
   turns any of these into a cost without the board file asking for it with a `weight` (a
   measurement, a network input), or lets the placer or `train` judge a layout that isn't allowed, is

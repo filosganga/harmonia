@@ -22,7 +22,8 @@
 //!         { "kind": "edge",    "part": "D1", "edge": "right", "weight": 0.01 },
 //!         { "kind": "near",    "pins": ["C2.1", "U1.5"], "weight": 0.5 },
 //!         { "kind": "close",   "pins": ["D1.2", "U1.3"] },
-//!         { "kind": "star",    "name": "ground at C1", "at": "C1.2", "runs": [["U1.1", "D1.1"]] }
+//!         { "kind": "star",    "name": "ground at C1", "at": "C1.2", "runs": [["U1.1", "D1.1"]] },
+//!         { "kind": "layers",  "name": "C2 bent over, lying flat", "part": "C2", "layers": [1, 1] }
 //!       ]
 //!     }
 //!
@@ -40,7 +41,7 @@
 //! close, below, cost as at weight 1). With one it may be broken, and each hole it's broken by costs
 //! the weight times a thousand (`board::WEIGHTS`' rules): at 1 that's two solder-side wires, nearly
 //! a hard limit; at 0 nothing. A weight on an all-of or one-of is the weight of every rule inside
-//! without its own.
+//! without its own. Except layers (below), which has none: it's how a part is built.
 //!
 //! fixed, edge, orientation and within say where one part may go. In each case, each part with such
 //! rules gets the list of places (x, y, rot) its hard ones allow, and the placer only ever puts the
@@ -62,8 +63,14 @@
 //! goes its own way, never sharing copper with another run. Each run in `runs` joins its pins; any
 //! other pin of the net gets a run of its own, straight from `at`. A soft one is broken by each join
 //! of one run onto another's copper, which the router takes when it's cheaper (see route.rs).
+//!
+//! layers says how a part is mounted: which layers above the board it takes (`board::Layers`), in
+//! place of what its footprint says. A module soldered on headers takes [2, 2], above the parts,
+//! so low parts and jumper wires go under it; soldered on its pins, [1, 2], like any part;
+//! flat on its pads, [0, 1] or [0, 0]. It has no weight: it's how the part is built. To let the
+//! placer try two ways of mounting, put them in a one-of.
 
-use crate::board::{self, Design, Component, Place, Placement, Point, Run};
+use crate::board::{self, Design, Component, Layers, Place, Placement, Point, Run};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
@@ -184,6 +191,13 @@ pub enum Rule {
         #[serde(skip_serializing_if = "Option::is_none")]
         weight: Option<f64>,
     },
+    /// How the part is mounted: the layers above the board it takes, like [0, 1]. No weight.
+    Layers {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        part: String,
+        layers: Layers,
+    },
 }
 
 /// For leaving a `fixed` rule's `rot` out when it's 0, as it may be written.
@@ -210,6 +224,7 @@ impl Rule {
             Rule::Near { name, .. } => ("near", name),
             Rule::Close { name, .. } => ("close", name),
             Rule::Star { name, .. } => ("star", name),
+            Rule::Layers { name, .. } => ("layers", name),
         };
         (kind, name.as_deref())
     }
@@ -227,6 +242,7 @@ impl Rule {
             | Rule::Near { weight, .. }
             | Rule::Close { weight, .. }
             | Rule::Star { weight, .. } => *weight,
+            Rule::Layers { .. } => None,
         }
     }
 
@@ -247,7 +263,7 @@ impl Rule {
                 let first = rules.first()?.one_part()?;
                 rules.iter().all(|r| r.one_part() == Some(first)).then_some(first)
             }
-            Rule::Keepout { .. } | Rule::Near { .. } | Rule::Close { .. } | Rule::Star { .. } => None,
+            Rule::Keepout { .. } | Rule::Near { .. } | Rule::Close { .. } | Rule::Star { .. } | Rule::Layers { .. } => None,
         }
     }
 
@@ -271,7 +287,7 @@ impl Rule {
                 rules.iter().for_each(|r| _ = r.part(w, h));
                 self.one_part()
             }
-            Rule::Keepout { .. } | Rule::Near { .. } | Rule::Close { .. } | Rule::Star { .. } => None,
+            Rule::Keepout { .. } | Rule::Near { .. } | Rule::Close { .. } | Rule::Star { .. } | Rule::Layers { .. } => None,
         }
     }
 
@@ -505,6 +521,8 @@ pub struct Constraints {
     /// Two pins of any nets: as close together as possible.
     pub close: Vec<CloseRule>,
     pub stars: Vec<StarRule>,
+    /// layers[component]: how the board file says it's mounted, if it does (see `Design::layers`).
+    pub layers: Vec<Option<Layers>>,
 }
 
 impl Constraints {
@@ -554,7 +572,7 @@ pub fn resolve(case: &Case, c: &Design) -> Result<Constraints, String> {
     let net_of = |p: (usize, usize)| c.net_pins.iter().position(|pins| pins.contains(&p));
     let n = c.components.len();
     let (w, h) = (c.board.width, c.board.height);
-    let mut out = Constraints { choices: case.choices.clone(), allowed: vec![None; n], place_cost: vec![HashMap::new(); n], ..Default::default() };
+    let mut out = Constraints { choices: case.choices.clone(), allowed: vec![None; n], place_cost: vec![HashMap::new(); n], layers: vec![None; n], ..Default::default() };
     // rules_for[component] = the rules about where it goes, with their weights
     let mut rules_for: Vec<Vec<(&Rule, Option<f64>)>> = vec![Vec::new(); n];
     for &(rule, weight) in &case.rules {
@@ -608,6 +626,13 @@ pub fn resolve(case: &Case, c: &Design) -> Result<Constraints, String> {
                     }
                 }
                 out.stars.push(StarRule { net, at: at_pin, runs: resolved, weight });
+            }
+            Rule::Layers { part, layers, .. } => {
+                let i = index(part);
+                if out.layers[i].is_some() {
+                    panic!("board file: {called}: {part} already has a layers rule");
+                }
+                out.layers[i] = Some(layers.checked(&format!("board file: {called}")));
             }
             _ => unreachable!("rules about where a part goes were handled above"),
         }
