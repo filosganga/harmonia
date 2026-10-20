@@ -167,8 +167,8 @@ a weight) or on a line of their own (without one).
   moved and turned, your groups still grouped. Everything you drew to connect things (traces, jumpers,
   wires, solder pads) is replaced by the routed copper.
 - Supported DIYLC parts: resistors, ceramic/film/electrolytic capacitors, LEDs, plastic diodes, DIP chips,
-  TO-92/126/220 transistors, pin headers, tactile switches; copper traces, jumpers, hook-up and
-  orthogonal wires, solder pads; labels, text and shapes. Anything else stops with a message naming
+  TO-92/126/220 transistors, pin headers, tactile switches; copper traces, jumpers, hook-up,
+  orthogonal and twisted wires, solder pads; labels, text, shapes and chassis drawings. Anything else stops with a message naming
   it, because its connections would otherwise be missed.
 
 Checked against DIYLC itself: on 216 DIYLC files, the program finds exactly the connections DIYLC's own
@@ -297,8 +297,9 @@ text board. Pins are named like the `nets` command prints them.
 | `src/layout.rs` | The finished board, routed and measured once (`Layout`), which the three writers below draw; and the layout file: writing it, and reading it back for `draw`. |
 | `src/svg.rs` | Draws the layout as an SVG picture, from the parts' side or the solder side. |
 | `src/kicad_pcb.rs` | Writes the layout as a KiCad board. |
-| `src/diylc_import.rs` | Reads a DIYLC sketch: its parts, its modules (groups), which pins connect, and the copper you drew, to measure your own wiring. |
-| `src/diylc.rs` | Writes the layout as a DIYLC project (your own parts, moved, if it came from one). |
+| `src/diylc.rs` | What the program knows about DIYLC, shared by the reader and the writer: the part classes it supports (`CLASSES`: each one's pins, whether it's low, its body, how to draw a new one), DIYLC's units and turns. |
+| `src/diylc/read.rs` | Reads a DIYLC sketch: its parts, its modules (groups), which pins connect, and the copper you drew, to measure your own wiring. |
+| `src/diylc/write.rs` | Writes the layout as a DIYLC project (your own parts, moved, if it came from one). |
 | `src/place.rs` | The auto-placer: starts from an allowed layout and keeps nudging/rotating/swapping/jumping parts, only ever to allowed layouts, keeping changes the judge likes. |
 | `src/nn.rs` | The neural network, written out by hand (8 hidden neurons, 105 weights). |
 | `src/bench.rs` | The benchmark: places every circuit of `circuits/bench.txt` with three seeds, several runs at once, and records the best costs. |

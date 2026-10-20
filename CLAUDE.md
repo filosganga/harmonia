@@ -33,7 +33,7 @@ if there is one. CONTRIBUTING.md is the same for people.
   three seeds, and on a folder of real sketches if there is one (CLAUDE.local.md).
 - Look at the pictures you changed, not just the text output.
 - After a change meant to make layouts better: `cargo run --release -- bench` (README "The benchmark").
-- `cargo clippy` has two old warnings (`board::size`, `diylc::two_legged`); don't add new ones.
+- `cargo clippy` has two old warnings (`board::size`, `diylc::write::two_legged`); don't add new ones.
 - Commit subjects use Conventional Commits prefixes (`feat:`, `fix:`, `docs:`, `ci:`, `chore:`...;
   CONTRIBUTING.md "Commit messages"): the release PR builds the changelog and the version from them.
 - Before committing, run the `drift-check` agent (`.claude/agents/`) on the change: it looks for

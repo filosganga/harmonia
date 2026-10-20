@@ -31,7 +31,7 @@ Follow README "Checking a change". In short:
 - If the change is meant to make layouts better, `cargo run --release -- bench` and compare the costs
   with the last run (`out/bench.json`); after a change to the score's weights or measurements the
   old costs no longer compare (README "The benchmark").
-- `cargo clippy` has two known warnings (`board::size`, `diylc::two_legged`); don't add new ones.
+- `cargo clippy` has two known warnings (`board::size`, `diylc::write::two_legged`); don't add new ones.
 - If you changed what a board is measured on, run `cargo run --release -- train` again and say how far
   off the network is on unseen boards.
 

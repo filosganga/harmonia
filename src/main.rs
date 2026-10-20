@@ -17,7 +17,6 @@ mod bench;
 mod board;
 mod constraints;
 mod diylc;
-mod diylc_import;
 mod kicad_pcb;
 mod layout;
 mod netlist;
@@ -169,7 +168,7 @@ struct Loaded {
     /// For a DIYLC sketch, where you put things: a starting point.
     sketch: Option<board::Placement>,
     /// For a DIYLC sketch, the copper you drew, to score your own wiring.
-    copper: Option<diylc_import::Copper>,
+    copper: Option<diylc::Copper>,
     /// The board file's path, if there is one.
     board_file: Option<String>,
 }
@@ -187,7 +186,7 @@ fn load(path: &str, args: &Args) -> Loaded {
         user_footprints: args.command != "bench",
     };
     let (circuit, sketch, copper) = if path.ends_with(".diy") {
-        let (c, s, copper) = diylc_import::load(path, opts);
+        let (c, s, copper) = diylc::load(path, opts);
         (c, Some(s), Some(copper))
     } else {
         (netlist::load(path, opts), None, None)
@@ -534,7 +533,7 @@ fn made(args: &Args, path: &str, board_file: Option<String>, start: &str, cases:
     }
 }
 
-fn place_cmd(cases: &[Circuit], args: &Args, sketch: Option<board::Placement>, copper: Option<diylc_import::Copper>, board_file: Option<String>) {
+fn place_cmd(cases: &[Circuit], args: &Args, sketch: Option<board::Placement>, copper: Option<diylc::Copper>, board_file: Option<String>) {
     let t0 = Instant::now();
     let mut rng = StdRng::seed_from_u64(args.seed);
     let net = (args.judge == "net").then(|| Net::load(&model_path(&args.out)));

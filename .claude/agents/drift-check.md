@@ -38,7 +38,7 @@ Real examples from this project, all shipped and fixed later:
 Places that restate the code and drift with it:
 
 - README "Each `place` run ... writes": every file in `out/` and what it contains
-  (`src/main.rs` `place_cmd`, `src/layout.rs`, `src/svg.rs`, `src/diylc.rs`, `src/kicad_pcb.rs`);
+  (`src/main.rs` `place_cmd`, `src/layout.rs`, `src/svg.rs`, `src/diylc/write.rs`, `src/kicad_pcb.rs`);
   and README "The layout file": the fields of `out/<judge>.layout.json` (`src/layout.rs`), including
   "the eleven measurements by name".
 - README "The board file" and the doc comment at the top of `src/constraints.rs`: every kind of
@@ -74,6 +74,8 @@ touches, and every constant the diff changes, grep the whole repo for the old va
   and unrouted weights have no router constant on purpose (see their comments). `CANDIDATES`
   against README "How it routes", "Known limits" and the unrouted bullet of "How a board is judged",
   and the `src/place.rs` comment in `anneal` (how many routings, how long they take).
+- `CLASSES` in `src/diylc.rs` against README "Supported DIYLC parts" (every class) and the
+  `"diylc"` list in "Using your own circuit" (the classes with a `drawing`).
 - `SCORE_SCALE` against the score formula in README.
 - Timings and errors (README intro, "Two ways to train", "Known limits", CLAUDE.md). You can't run
   anything, so when a change touches the placer, router, `measure` or training, flag every timing and
@@ -101,7 +103,7 @@ touches, and every constant the diff changes, grep the whole repo for the old va
 
 The `.diy` the program writes must, when read back by the program, have exactly the connections it
 was given (README "Checking a change"). You can't run it, but flag a change to `src/route.rs`,
-`src/diylc.rs` or `src/diylc_import.rs` that came without saying this check was run. Also look for
+`src/diylc/` (the reader, the writer or `CLASSES`) that came without saying this check was run. Also look for
 copper written on a hole that belongs to another net, or two runs of a star net joined anywhere but
 the star point.
 

@@ -54,8 +54,9 @@ const STYLE: &str = "
   .warn { font-size: 11px; fill: #b00020; }
 ";
 
-/// What to draw a part as: DIYLC's name for it, or "module" for a part parts can go under (a DIYLC
-/// group, or a footprint with "module": true).
+/// What to draw a part as: the short name of its DIYLC class (`diylc::CLASSES`, the same name
+/// whether it came from footprints.json or a sketch), or "module" for a part parts can go under (a
+/// DIYLC group, or a footprint with "module": true).
 fn shape(comp: &Component) -> &str {
     let full = comp.body.len() == (comp.w * comp.h) as usize;
     match &comp.diylc {

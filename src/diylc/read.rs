@@ -9,73 +9,17 @@
 //! A DIYLC group with pins in it (say two pin headers plus a rectangle for a module's
 //! board) becomes one part. Only its pins' holes are taken, so low parts can go under it.
 
+use super::{HOLE, Kind, MARGIN, Source, class};
 use crate::board::{BoardSize, Circuit, Component, Net, Pin, Place, Placement, Point};
 use crate::netlist::{self, NET_NAME_HINTS, Options};
 use roxmltree::Node;
 use std::collections::{BTreeSet, HashMap};
 
-/// DIYLC measures in inches; one perfboard hole is 0.1".
-const HOLE: f64 = 0.1;
 /// How close (in inches) two things must be to count as touching.
 const EPS: f64 = 0.005;
 /// Half the side of the square around a pin or wire end that copper must overlap to touch it.
 /// DIYLC uses a 4 x 4 pixel square at 200 pixels per inch, so 0.01" each way.
 const PIN_REACH: f64 = 0.01;
-
-/// The original drawing of a part, kept so it can be written back to DIYLC moved and turned
-/// (the layout file keeps it too, as the part's "diylc_drawing").
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
-pub struct Source {
-    /// The XML of each DIYLC item the part is made of, exactly as in the file.
-    pub xml: Vec<String>,
-    /// The DIYLC group it was, if any: (group name, ids of its items).
-    pub group: Option<(String, Vec<String>)>,
-    /// The sketch hole that is the part's top-left corner.
-    pub origin: Point,
-}
-
-/// What a DIYLC item is, as far as connections go.
-enum Kind {
-    /// A part with pins: DIYLC's names for its pins, in order (None = number them 1, 2, ...).
-    Part(Option<&'static [&'static str]>),
-    /// A copper trace: joins everything it touches along its length.
-    Trace,
-    /// A jumper or wire: joins whatever is at its two ends.
-    Wire,
-    /// A solder pad: joins whatever is on it.
-    Pad,
-    /// Text and shapes: no connections, but kept when inside a group.
-    Decoration,
-    Board,
-}
-
-fn kind(class: &str) -> Option<Kind> {
-    const TWO: &[&str] = &["1", "2"];
-    Some(match class {
-        "passive.Resistor" | "passive.RadialCeramicDiskCapacitor" | "passive.RadialFilmCapacitor" | "passive.AxialFilmCapacitor" => Kind::Part(Some(TWO)),
-        "passive.RadialElectrolytic" => Kind::Part(Some(&["+", "-"])),
-        "semiconductors.LED" | "semiconductors.DiodePlastic" => Kind::Part(Some(&["A", "K"])),
-        "semiconductors.DIL__IC" | "semiconductors.TransistorTO92" | "semiconductors.TransistorTO126" | "semiconductors.TransistorTO220"
-        | "electromechanical.PinHeader" | "electromechanical.TactileMicroSwitch" => Kind::Part(None),
-        "connectivity.CopperTrace" => Kind::Trace,
-        "connectivity.Jumper" | "connectivity.HookupWire" | "connectivity.OrthogonalWire" | "connectivity.TwistedWire" => Kind::Wire,
-        "connectivity.SolderPad" => Kind::Pad,
-        "misc.Label" | "misc.WrapLabel" | "misc.PCBText" => Kind::Decoration,
-        c if c.starts_with("shapes.") || c.starts_with("chassis.") => Kind::Decoration,
-        "boards.PerfBoard" => Kind::Board,
-        _ => return None,
-    })
-}
-
-/// Parts low enough to sit under a module on headers: ones that lie flat, and small ceramic discs.
-fn is_low(class: &str) -> bool {
-    matches!(class, "passive.Resistor" | "passive.RadialCeramicDiskCapacitor" | "passive.AxialFilmCapacitor" | "semiconductors.DiodePlastic")
-}
-
-/// Radial parts stand up, so their body is a circle around the legs; axial ones lie between their legs.
-fn is_radial(class: &str) -> bool {
-    matches!(class, "passive.RadialElectrolytic" | "passive.RadialCeramicDiskCapacitor" | "passive.RadialFilmCapacitor" | "semiconductors.LED")
-}
 
 type Inches = (f64, f64);
 
@@ -142,10 +86,10 @@ pub fn load(path: &str, opts: Options) -> (Circuit, Placement, Copper) {
         let class = item.tag_name().name().strip_prefix("diylc.").unwrap_or(item.tag_name().name()).to_string();
         let name = text_of(item, "name").unwrap_or_default();
         let points = points(item);
-        let k = kind(&class).unwrap_or_else(|| {
+        let k = super::class(&class).unwrap_or_else(|| {
             panic!("{path}: {name} is a DIYLC {class}, which isn't supported yet, so its connections would be missed")
         });
-        match k {
+        match k.kind {
             Kind::Part(names) => {
                 let count = if names.is_some() { 2 } else { points.len() };
                 let pin_names: Vec<String> = match (names, header_names(item, count)) {
@@ -167,9 +111,8 @@ pub fn load(path: &str, opts: Options) -> (Circuit, Placement, Copper) {
                 decorations.insert(text_of(item, "id").unwrap_or_default(), item);
             }
             Kind::Board => {
-                // DIYLC puts the first hole one grid step in from the board's corner.
                 let (x, y) = hole(points[0]);
-                board_origin.get_or_insert((x + 1, y + 1));
+                board_origin.get_or_insert((x + MARGIN, y + MARGIN));
             }
         }
     }
@@ -321,14 +264,14 @@ fn components(path: &str, root: &Node, parts: &[Drawn], decorations: &HashMap<St
         out.push(Component {
             reference,
             value: if single { first.value.clone() } else { String::new() },
-            footprint: format!("DIYLC:{}", if single { first.class.rsplit('.').next().unwrap() } else { "module" }),
+            footprint: format!("DIYLC:{}", if single { class(&first.class).map_or("", |c| c.short) } else { "module" }),
             diylc: None,
             w: x1 - x0 + 1,
             h: y1 - y0 + 1,
             pins: pins.into_iter().map(|(name, at, off_grid)| Pin { name, at: local(at), off_grid }).collect(),
             body: body.into_iter().map(local).collect(),
             source: Some(Source { xml, group, origin: (x0, y0) }),
-            low: single && is_low(&first.class),
+            low: single && class(&first.class).is_some_and(|c| c.low),
             footprint_from: None,
         });
         places.push((x0, y0));
@@ -396,7 +339,7 @@ fn body_of(class: &str, item: Node, pins: &[(String, Inches)]) -> Vec<Point> {
     if holes.len() == 2 && x0 != x1 && y0 != y1 {
         return holes; // a two-legged part drawn at an angle: just its legs
     }
-    if is_radial(class) {
+    if super::class(class).is_some_and(|c| c.radial) {
         // A standing part is round: grow its box to its diameter along the legs and its width across them.
         let along = size_of(item, "length").map(|d| (d / HOLE).round() as i32).unwrap_or(1).max(1);
         let across = size_of(item, "width").map(|d| (d / HOLE).round() as i32).unwrap_or(along).max(1);

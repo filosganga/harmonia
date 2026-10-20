@@ -34,8 +34,7 @@
 
 use crate::board::{self, BoardSize, Circuit, Component, Measures, Net, Pin, Place, Placement, Point, Run};
 use crate::constraints::{Constraints, Keepout};
-use crate::diylc;
-use crate::diylc_import::Source;
+use crate::diylc::{self, Source};
 use crate::route::{self, Routing};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};

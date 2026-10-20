@@ -73,7 +73,7 @@ pub struct Component {
     /// them; a module on headers only takes its header holes, and low parts can go under the rest.
     pub body: Vec<Point>,
     /// For parts read from a DIYLC file: the original drawing, so it can be written back moved.
-    pub source: Option<crate::diylc_import::Source>,
+    pub source: Option<crate::diylc::Source>,
     /// Low enough to sit under a module on headers (a resistor lying flat, a small ceramic capacitor).
     pub low: bool,
     /// The footprints.json its footprint came from, if not the built-in library (yours, or one next
