@@ -31,12 +31,13 @@ Follow README "Checking a change". In short:
 - If the change is meant to make layouts better, `cargo run --release -- bench` and compare the costs
   with the last run (`out/bench.json`); after a change to the score's weights or measurements the
   old costs no longer compare (README "The benchmark").
-- `cargo clippy` has two known warnings (`board::size`, `diylc::two_legged`); don't add new ones.
+- `cargo clippy` has two known warnings (`board::size`, `diylc::write::two_legged`); don't add new ones.
 - If you changed what a board is measured on, run `cargo run --release -- train` again and say how far
   off the network is on unseen boards.
 
 CI runs the build, clippy, the 555 example (and `draw` on the layout file it saves, which must give
-the same files) and the cat-feeder round trip on every pull request.
+the same files), the cat-feeder round trip, and the cat feeder with its parts fixed (every pin
+routed, no solder-side wire) on every pull request.
 
 ## Adding a footprint
 

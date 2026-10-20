@@ -8,27 +8,37 @@ description: Procedure for teaching the perfboard program a new DIYLC part class
 The reader refuses unknown classes on purpose: a part read wrongly means connections silently missed.
 A new class is supported only when its connections are proven to match.
 
-## Reading it (`src/diylc_import.rs`)
+## One entry in `CLASSES` (`src/diylc.rs`)
 
-1. `kind()`: map the class (`"category.Class"`, as in the error message) to `Kind::Part(names)`.
-   `Some(&[...])` for fixed pin names in DIYLC's control-point order (`["+", "-"]`, `["A", "K"]`),
-   `None` to number them 1, 2, ... or take header labels (`header_names`). Find the control-point order
-   in a real file: the `<points>` / `<controlPoints>` of an item of that class.
-2. `is_low()`: true only if it lies flat or is small enough to sit under a module on headers.
-3. `is_radial()` / `body_of()`: which holes its body covers. The body decides collisions and what a
-   jumper may pass over; too small is worse than too big.
-4. Legs between holes (spacing not a multiple of 0.1") are detected by `off_grid` and kept clear by the
-   router automatically; nothing to add.
+Everything the program knows about a DIYLC class is one `Class` in `CLASSES`; the reader
+(`src/diylc/read.rs`), the writer (`src/diylc/write.rs`) and the pictures (`src/svg.rs`) all read it.
+
+1. `name`: the class as in the error message (`"category.Class"`). `short`: what footprints.json's
+   `"diylc"` entry asks for, what a sketch part is called (`"DIYLC:<short>"`) and what `svg::shape`
+   matches on.
+2. `kind`: `Kind::Part(Some(&[...]))` for fixed pin names in DIYLC's control-point order (`["+", "-"]`,
+   `["A", "K"]`), `Kind::Part(None)` to number them 1, 2, ... or take header labels
+   (`read::header_names`). Find the control-point order in a real file: the `<points>` /
+   `<controlPoints>` of an item of that class. Wires, traces and pads have their own kinds.
+3. `low`: true only if it lies flat or is small enough to sit under a module on headers.
+4. `radial`: true if it stands up with a round body (then `read::body_of` grows its box to its
+   diameter). The body decides collisions and what a jumper may pass over; too small is worse than
+   too big.
+5. `drawing`: only if footprints.json should be able to ask for it. `Drawing::TwoLegged` with
+   DIYLC 6.6's own defaults for a new part (size, colours, settings), or a new `Drawing` variant with
+   its branch in `write.rs`; then add its `short` name to the list of `"diylc"` parts in README
+   "Using your own circuit".
+
+Legs between holes (spacing not a multiple of 0.1") are detected by `read::off_grid` and kept clear
+by the router automatically; nothing to add.
 
 ## Writing and drawing it
 
-- A part from a sketch is written back from its own XML (`Source`), moved and turned by `moved()` in
-  `src/diylc.rs`, which also turns `<orientation>`. Check the new class has no other field that
+- A part from a sketch is written back from its own XML (`Source`), moved and turned by
+  `write::moved()`, which also turns `<orientation>`. Check the new class has no other field that
   depends on direction.
-- For KiCad footprints, DIYLC drawings come from `footprints.json`'s `"diylc"` entry and the matching
-  branch in `src/diylc.rs` (`TWO_LEGGED`, `DIL_IC`, `PinHeader`); copy DIYLC's own defaults for a new one.
-- `src/svg.rs` `shape()`: add a drawing if a grey box (the default) misleads.
-- `diylc::Part` and `diylc_import::Source` are saved in the layout file (`src/layout.rs`, a part's
+- `src/svg.rs` `shape()`: add a drawing for its `short` name if a grey box (the default) misleads.
+- `diylc::Part` and `diylc::Source` are saved in the layout file (`src/build/file.rs`, a part's
   `"diylc"` and `"diylc_drawing"`): a new field on either changes the file, so raise `VERSION` there
   if an older reader would get it wrong.
 

@@ -1,4 +1,4 @@
-//! Writes a layout (src/layout.rs) as a KiCad board (.kicad_pcb) that opens in KiCad's PCB editor.
+//! Writes a build (src/build.rs) as a KiCad board (.kicad_pcb) that opens in KiCad's PCB editor.
 //!
 //! Each part becomes a simple footprint built from footprints.json: round pads (square
 //! for pad 1) on a 2.54mm grid, a box on the silkscreen and courtyard, and every pad on
@@ -9,7 +9,7 @@
 //! Written in KiCad 9's file format, which KiCad 10 opens fine.
 
 use crate::board::{self, Component, Point};
-use crate::layout::Layout;
+use crate::build::Build;
 use std::fmt::Write;
 
 /// One hole, in millimetres.
@@ -33,15 +33,15 @@ fn uuid(n: usize) -> String {
     format!("00000000-0000-4000-8000-{n:012x}")
 }
 
-pub fn write(layout: &Layout) -> String {
-    let (c, placement) = (&layout.circuit, &layout.placement);
+pub fn write(build: &Build) -> String {
+    let (c, placement) = (&build.design, &build.layout.placement);
     let g = board::geometry(c, placement);
     let mut ids = 0..;
     let mut s = String::new();
     s += "(kicad_pcb\n  (version 20241229)\n  (generator \"perfboard\")\n  (generator_version \"0.1\")\n";
     s += "  (general (thickness 1.6))\n  (paper \"A4\")\n";
     // The title block (File > Board Setup in KiCad): what it is, and how to make it again.
-    writeln!(s, "  (title_block (title {}) (comment 1 {}))", quote(&layout.title), quote(&layout.made.again())).unwrap();
+    writeln!(s, "  (title_block (title {}) (comment 1 {}))", quote(&build.title), quote(&build.made.again())).unwrap();
     s += "  (layers\n    (0 \"F.Cu\" signal)\n    (2 \"B.Cu\" signal)\n    (5 \"F.SilkS\" user \"F.Silkscreen\")\n    (7 \"B.SilkS\" user \"B.Silkscreen\")\n    (1 \"F.Mask\" user)\n    (3 \"B.Mask\" user)\n    (25 \"Edge.Cuts\" user)\n    (31 \"F.CrtYd\" user \"F.Courtyard\")\n    (29 \"B.CrtYd\" user \"B.Courtyard\")\n    (35 \"F.Fab\" user)\n    (33 \"B.Fab\" user)\n  )\n";
     s += "  (setup (pad_to_mask_clearance 0))\n";
 
@@ -85,7 +85,7 @@ pub fn write(layout: &Layout) -> String {
         }
         s += "    (attr through_hole)\n";
         // A module only takes its pin holes, so it gets no courtyard: parts may sit under it.
-        let module = comp.body.len() < (comp.w * comp.h) as usize;
+        let module = comp.room_under();
         for (layer, width) in [("F.SilkS", 0.12), ("F.CrtYd", 0.05)].into_iter().filter(|&(l, _)| !(module && l == "F.CrtYd")) {
             writeln!(
                 s,

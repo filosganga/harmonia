@@ -15,7 +15,7 @@ description: Procedure for adding or changing a rule in the perfboard board file
 |---|---|---|
 | Hard limit on where a part goes | fixed, edge, orientation, within | a `Rule` with a part: `Rule::one_part` and `Rule::part` (name the part; `part` also checks the rule alone) and `Rule::broken` (how far this place is from what it wants: 0, infinite for a hard rule, or weighted holes). `resolve` lists each part's allowed places and `apply` keeps the part on them; nothing else to wire |
 | Hard limit on what may share the board, for every part | hard keep-out holes under parts, no two parts on a hole | `board::clashes` (with words in `board::clash_words`): the placer starts from an allowed layout (`place::allowed_start`) and throws away any move that isn't allowed, before routing it. A new kind of clash is a `board::Why` variant, and is named in svg.rs's "Boxed in red" note and README's lists of what's allowed ("How a board is judged", "Or sketch it in DIYLC") |
-| Hard limit on copper | hard keep-out holes, star separation | `src/route.rs` grid (`owner`, `keepout`), or `constraints::runs` for how a net splits; with a weight, the grid's `extra` (soft keep-outs) or `route::join` (soft star) |
+| Hard limit on copper | hard keep-out holes, star separation | `src/route/search.rs` grid (`owner`, `keepout`), or `constraints::runs` for how a net splits; with a weight, the grid's `extra` (soft keep-outs) or `route::join` (soft star). `route::from_sketch` (your own wiring, measured) also counts star joins and breaks: a new copper rule must be counted there too |
 | Priced | near, close | a measurement (both count in `rules`), each rule times its `weight` (`HARD`, 1, if left out: they're only known once routed); a new one: use the `perfboard-measurement` skill |
 
   Hard limits are never learned by the network. A priced rule never makes a layout illegal, however
@@ -39,7 +39,9 @@ description: Procedure for adding or changing a rule in the perfboard board file
 
 1. `Rule`: a new variant (its `kind` is the variant's name in lowercase; a two-word kind needs
    `#[serde(rename = "all-of")]`-style, like `AllOf` and `OneOf`), with `name: Option<String>`
-   and `weight: Option<f64>` like the others (and an arm in `Rule::own_weight`), and a doc comment per field. The enum has `deny_unknown_fields`, so a typo in the
+   and `weight: Option<f64>` like the others (and an arm in `Rule::own_weight`), and a doc comment per field.
+   Every optional or defaulted field gets a `skip_serializing_if` (`Option::is_none`, `Vec::is_empty`,
+   ...), so the layout file writes the rule back the way it was written (step 7). The enum has `deny_unknown_fields`, so a typo in the
    JSON is an error; keep that for any struct a variant uses.
 2. Add it to `Rule::kind_and_name`, which names it in messages. Placement rules that contradict
    need no check of their own: `resolve` returns an error (the case is left out) when a part is
@@ -55,10 +57,11 @@ description: Procedure for adding or changing a rule in the perfboard board file
    part no place (a `fixed` hanging off the board) isn't a mistake to stop on: `resolve` returns an
    error for it and that case is left out.
 6. The module's doc comment shows every kind in its JSON example; keep it loadable.
-7. If the pictures, the KiCad board or the `.diy` draw the rule (read from `c.constraints`, like
-   keep-outs), the layout file must carry it too: `src/layout.rs` keeps only the keep-outs and the
-   one-of choices, and `draw` (and `check`'s read-back) rebuild nothing else. Add it to the file
-   (and raise `VERSION` if an older reader would get it wrong), or keep it out of the writers.
+7. The layout file (`src/build/file.rs`) keeps the board file's rules as written, and reading it
+   back works the case out again (`constraints::designs`), so a new rule round-trips by itself as
+   long as `Rule` writes it back as it was read (`Serialize`, leaving out what was left out). A rule
+   that changes what the router makes may need more in the file's `layout` (as a soft star's
+   `joins`); raise `VERSION` if an older reader would get the file wrong.
 
 ## Docs and examples
 

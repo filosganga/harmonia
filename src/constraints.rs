@@ -63,8 +63,8 @@
 //! other pin of the net gets a run of its own, straight from `at`. A soft one is broken by each join
 //! of one run onto another's copper, which the router takes when it's cheaper (see route.rs).
 
-use crate::board::{self, Circuit, Component, Place, Placement, Point, Run};
-use serde::Deserialize;
+use crate::board::{self, Design, Component, Place, Placement, Point, Run};
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
 #[derive(Deserialize, Default)]
@@ -75,66 +75,120 @@ pub struct BoardFile {
     pub ground: Option<String>,
     /// Your rules for this board, all of which hold: the same as an all-of's `rules`.
     #[serde(default)]
-    rules: Vec<Rule>,
+    pub rules: Vec<Rule>,
 }
 
 /// One entry of "rules" (the board file's, or an all-of's or one-of's). `kind` in the JSON picks the variant, like { "kind": "near", ... }.
 ///
 /// Every rule may have a `weight`, 0-1, which softens it: see `weight`.
-#[derive(Deserialize)]
+///
+/// The layout file keeps them as written, so it writes them back the same way, leaving out what
+/// was left out.
+#[derive(Deserialize, Serialize, Clone)]
 #[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
-enum Rule {
+pub enum Rule {
     /// The part goes exactly there and never moves.
     Fixed {
+        #[serde(skip_serializing_if = "Option::is_none")]
         name: Option<String>,
         part: String,
         /// Top-left hole of the part, after rotating.
         at: Point,
         /// Quarter turns clockwise, 0-3, like the placer uses.
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "is_zero")]
         rot: u8,
+        #[serde(skip_serializing_if = "Option::is_none")]
         weight: Option<f64>,
     },
     /// The part touches that edge of the board.
-    Edge { name: Option<String>, part: String, edge: Edge, weight: Option<f64> },
+    Edge {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        part: String,
+        edge: Edge,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        weight: Option<f64>,
+    },
     /// The part is turned this way: quarter turns clockwise from how it's drawn, 0-3.
-    Orientation { name: Option<String>, part: String, rot: u8, weight: Option<f64> },
+    Orientation {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        part: String,
+        rot: u8,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        weight: Option<f64>,
+    },
     /// Every hole of the part's outline is in this rectangle, `from` one corner `to` the other.
     Within {
+        #[serde(skip_serializing_if = "Option::is_none")]
         name: Option<String>,
         part: String,
         from: Point,
         to: Point,
+        #[serde(skip_serializing_if = "Option::is_none")]
         weight: Option<f64>,
     },
     /// Every rule in `rules` holds. A weight here is the weight of every rule in it that has none.
     #[serde(rename = "all-of")]
-    AllOf { name: Option<String>, rules: Vec<Rule>, weight: Option<f64> },
+    AllOf {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        rules: Vec<Rule>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        weight: Option<f64>,
+    },
     /// At least one rule in `rules` holds: each is a case of its own. A weight here is the weight
     /// of every rule in it that has none.
     #[serde(rename = "one-of")]
-    OneOf { name: Option<String>, rules: Vec<Rule>, weight: Option<f64> },
+    OneOf {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        rules: Vec<Rule>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        weight: Option<f64>,
+    },
     /// Holes no part or copper may cover (or, with a weight, may at a cost).
     Keepout {
+        #[serde(skip_serializing_if = "Option::is_none")]
         name: Option<String>,
         from: Point,
         to: Point,
+        #[serde(skip_serializing_if = "Option::is_none")]
         weight: Option<f64>,
     },
     /// Two pins of the same net, like ["R1.2", "U1.8"], joined by as little copper as possible.
-    Near { name: Option<String>, pins: [String; 2], weight: Option<f64> },
+    Near {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        pins: [String; 2],
+        #[serde(skip_serializing_if = "Option::is_none")]
+        weight: Option<f64>,
+    },
     /// Two pins of any nets as close together as possible, straight across the board.
-    Close { name: Option<String>, pins: [String; 2], weight: Option<f64> },
+    Close {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        pins: [String; 2],
+        #[serde(skip_serializing_if = "Option::is_none")]
+        weight: Option<f64>,
+    },
     /// How the net of the `at` pin is wired.
     Star {
+        #[serde(skip_serializing_if = "Option::is_none")]
         name: Option<String>,
         /// The pin every run starts from, like "C1.+".
         at: String,
         /// Pins that share a run, like [["U1.8", "J2.1"], ["U2.4"]].
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
         runs: Vec<Vec<String>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         weight: Option<f64>,
     },
+}
+
+/// For leaving a `fixed` rule's `rot` out when it's 0, as it may be written.
+fn is_zero(rot: &u8) -> bool {
+    *rot == 0
 }
 
 /// What a near or close rule left without a weight costs as. They're measured along the routed
@@ -210,9 +264,7 @@ impl Rule {
             }
             Rule::Edge { part, .. } => Some(part),
             Rule::Within { part, from, to, .. } => {
-                if rectangle(*from, *to).any(|(x, y)| x < 0 || x >= w || y < 0 || y >= h) {
-                    panic!("board file: {rule}: {from:?} to {to:?} goes off the {w}x{h} board");
-                }
+                on_board(&rule, *from, *to, w, h);
                 Some(part)
             }
             Rule::AllOf { rules, .. } | Rule::OneOf { rules, .. } => {
@@ -274,9 +326,30 @@ pub struct Case<'a> {
 
 /// The board file's rules as cases: one, unless a one-of makes more (see `rule_cases`). The file's
 /// `rules` all hold, like an all-of's.
-pub fn cases(file: &BoardFile) -> Vec<Case<'_>> {
-    check_weights(&file.rules);
-    every_case(&file.rules, None)
+fn cases(rules: &[Rule]) -> Vec<Case<'_>> {
+    check_weights(rules);
+    every_case(rules, None)
+}
+
+/// `design` (with no rules yet) with the board file's `rules`, once for each case of them that can
+/// be met; and why each other case can't (some part has no place meeting its rules). Stops on a
+/// mistake in the board file.
+pub fn designs(design: &Design, rules: &[Rule]) -> (Vec<Design>, Vec<String>) {
+    let (mut designs, mut left_out) = (Vec::new(), Vec::new());
+    for case in cases(rules) {
+        match resolve(&case, design) {
+            Ok(constraints) => {
+                let mut d = design.clone();
+                d.rules = rules.to_vec();
+                d.constraints = constraints;
+                d.runs = runs(&d); // now that the star rules are known
+                designs.push(d);
+            }
+            Err(why) if case.choices.is_empty() => left_out.push(why),
+            Err(why) => left_out.push(format!("{}: {why}", case.choices.join("; "))),
+        }
+    }
+    (designs, left_out)
 }
 
 /// Stops on a weight outside 0-1, in any rule however deep.
@@ -369,13 +442,20 @@ pub struct StarRule {
     pub weight: Option<f64>,
 }
 
-#[derive(Deserialize, Clone, Copy, PartialEq)]
+#[derive(Deserialize, Serialize, Clone, Copy, PartialEq)]
 #[serde(rename_all = "lowercase")]
-enum Edge {
+pub enum Edge {
     Left,
     Right,
     Top,
     Bottom,
+}
+
+/// Stops, naming the rule, if a rectangle goes off the w x h board.
+fn on_board(rule: &str, from: Point, to: Point, w: i32, h: i32) {
+    if rectangle(from, to).any(|(x, y)| x < 0 || x >= w || y < 0 || y >= h) {
+        panic!("board file: {rule}: {from:?} to {to:?} goes off the {w}x{h} board");
+    }
 }
 
 /// Every hole of a rectangle, `from` one corner `to` the other (both included).
@@ -466,7 +546,7 @@ pub fn read_board_file(netlist_path: &str, chosen: Option<&str>) -> Option<(Stri
 
 /// Matches one case's part names to the circuit and checks its rules make sense. Stops on a mistake
 /// in the board file; returns why if the rules are fine but some part has no place meeting them.
-pub fn resolve(case: &Case, c: &Circuit) -> Result<Constraints, String> {
+pub fn resolve(case: &Case, c: &Design) -> Result<Constraints, String> {
     let index = |name: &str| {
         c.components.iter().position(|comp| comp.reference == name).unwrap_or_else(|| panic!("board file: there's no part called {name}"))
     };
@@ -486,9 +566,7 @@ pub fn resolve(case: &Case, c: &Circuit) -> Result<Constraints, String> {
         match rule {
             Rule::Keepout { name, from, to, .. } => {
                 let k = Keepout { from: *from, to: *to, name: name.clone().unwrap_or_default(), weight };
-                if k.holes().any(|(x, y)| x < 0 || x >= w || y < 0 || y >= h) {
-                    panic!("board file: {called}: {from:?} to {to:?} goes off the {w}x{h} board");
-                }
+                on_board(&called, *from, *to, w, h);
                 out.add_keepout(k);
             }
             Rule::Near { pins: [a, b], .. } => {
@@ -569,10 +647,10 @@ pub fn resolve(case: &Case, c: &Circuit) -> Result<Constraints, String> {
 }
 
 /// How each net is wired: one run joining all its pins, or for a star net, one run per branch
-/// from the star point. Nets with a single pin have nothing to join.
-pub fn runs(c: &Circuit) -> Vec<Run> {
+/// from the star point.
+pub fn runs(c: &Design) -> Vec<Run> {
     let mut out = Vec::new();
-    for (net, pins) in c.net_pins.iter().enumerate().filter(|(_, pins)| pins.len() > 1) {
+    for (net, pins) in c.net_pins.iter().enumerate() {
         match c.constraints.stars.iter().find(|s| s.net == net) {
             Some(star) => {
                 let listed: HashSet<(usize, usize)> = star.runs.iter().flatten().copied().collect();
@@ -590,7 +668,7 @@ pub fn runs(c: &Circuit) -> Vec<Run> {
 /// Moves every part with placement rules to the nearest place they allow, keeping its rotation if
 /// one allows it (so a quarter turn by the placer stays a quarter turn when the rules allow it).
 /// The placer calls this after every move, so these rules can never be broken.
-pub fn apply(c: &Circuit, placement: &mut Placement) {
+pub fn apply(c: &Design, placement: &mut Placement) {
     for (p, allowed) in placement.iter_mut().zip(&c.constraints.allowed) {
         if let Some(allowed) = allowed {
             let away = |q: &&Place| (q.rot != p.rot, (q.x - p.x).abs() + (q.y - p.y).abs());

@@ -7,7 +7,7 @@
 //! The runs don't depend on each other, so several go at once, one per processor core. Each run has
 //! its own random numbers, made from its seed, so the costs are the same as running them one by one.
 
-use crate::board::{self, Circuit};
+use crate::board::{self, Design};
 use rand::{SeedableRng, rngs::StdRng};
 use serde::Serialize;
 use std::sync::Mutex;
@@ -44,7 +44,7 @@ pub fn run() {
     let t0 = Instant::now();
     let list = std::fs::read_to_string(LIST).unwrap_or_else(|e| panic!("can't read {LIST}: {e}"));
     let paths: Vec<&str> = list.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')).collect();
-    let circuits: Vec<Vec<Circuit>> = paths.iter().map(|path| load(path)).collect();
+    let circuits: Vec<Vec<Design>> = paths.iter().map(|path| load(path)).collect();
 
     // One job per (circuit, seed). The slowest first (many parts, several cases), so the machine
     // isn't left waiting on one long run at the end.
@@ -100,7 +100,7 @@ pub fn run() {
 
 /// The circuit once for each case of its board file's rules, read as `place` reads it, ignoring
 /// any flags: the benchmark's settings don't change.
-fn load(path: &str) -> Vec<Circuit> {
+fn load(path: &str) -> Vec<Design> {
     let args = crate::Args {
         command: "bench".into(),
         circuit: path.into(),
@@ -118,10 +118,10 @@ fn load(path: &str) -> Vec<Circuit> {
 
 /// Places every case from a random start, as `place --seed <seed>` does, and returns the best cost.
 /// A DIYLC sketch starts from random too, not from where it was drawn.
-fn best_cost(cases: &[Circuit], seed: u64) -> f64 {
+fn best_cost(cases: &[Design], seed: u64) -> f64 {
     let mut rng = StdRng::seed_from_u64(seed);
-    let (k, _, layout) = crate::place_cases(cases, board::cost, STEPS, &mut rng, None, false);
-    board::cost(&board::measure(&cases[k], &layout))
+    let (_, _, _, m) = crate::place_cases(cases, board::cost, STEPS, &mut rng, None, false);
+    board::cost(&m)
 }
 
 fn print_table(results: &[Found]) {

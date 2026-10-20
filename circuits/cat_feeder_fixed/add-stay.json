@@ -1,0 +1,187 @@
+{
+  "board": "24x18",
+  "power": "5V",
+  "ground": "GND",
+  "rules": [
+    {
+      "kind": "star",
+      "name": "ground starred on C1 -",
+      "at": "C1.2",
+      "runs": [
+        [
+          "U2.GND",
+          "J3.1"
+        ],
+        [
+          "U1.GND",
+          "U3.GND",
+          "R5.2",
+          "R7.2",
+          "C2.2"
+        ]
+      ],
+      "weight": 0.015
+    },
+    {
+      "kind": "star",
+      "name": "5 V starred on C1 +",
+      "at": "C1.1",
+      "runs": [
+        [
+          "U2.VCC",
+          "J3.2"
+        ],
+        [
+          "U1.5V"
+        ]
+      ],
+      "weight": 0.015
+    },
+    {
+      "kind": "near",
+      "name": "R1 at the GPIO2 end",
+      "pins": [
+        "R1.2",
+        "U1.GP2"
+      ],
+      "weight": 0.01
+    },
+    {
+      "kind": "near",
+      "name": "battery divider at GPIO4",
+      "pins": [
+        "R7.1",
+        "U1.GP4"
+      ],
+      "weight": 0.01
+    },
+    {
+      "kind": "near",
+      "name": "C2 at GPIO4",
+      "pins": [
+        "C2.1",
+        "U1.GP4"
+      ],
+      "weight": 0.01
+    },
+    {
+      "kind": "near",
+      "name": "USB divider at GPIO3",
+      "pins": [
+        "R5.1",
+        "U1.GP3"
+      ],
+      "weight": 0.01
+    },
+    {
+      "kind": "fixed",
+      "name": "the Zero where it is",
+      "part": "U1",
+      "at": [
+        14,
+        2
+      ],
+      "rot": 0
+    },
+    {
+      "kind": "fixed",
+      "name": "the DRV8833 where it is",
+      "part": "U2",
+      "at": [
+        1,
+        2
+      ],
+      "rot": 0
+    },
+    {
+      "kind": "fixed",
+      "name": "the DS3231 where it is",
+      "part": "U3",
+      "at": [
+        9,
+        10
+      ],
+      "rot": 0
+    },
+    {
+      "kind": "fixed",
+      "name": "C1 where it is",
+      "part": "C1",
+      "at": [
+        4,
+        12
+      ],
+      "rot": 0
+    },
+    {
+      "kind": "fixed",
+      "name": "the MBRF where it is",
+      "part": "D1",
+      "at": [
+        3,
+        15
+      ],
+      "rot": 2
+    },
+    {
+      "kind": "fixed",
+      "name": "R1 where it is",
+      "part": "R1",
+      "at": [
+        14,
+        1
+      ],
+      "rot": 0
+    },
+    {
+      "kind": "fixed",
+      "name": "R2 where it is",
+      "part": "R2",
+      "at": [
+        9,
+        4
+      ],
+      "rot": 3
+    },
+    {
+      "kind": "fixed",
+      "name": "R3 where it is",
+      "part": "R3",
+      "at": [
+        14,
+        3
+      ],
+      "rot": 3
+    },
+    {
+      "kind": "fixed",
+      "name": "the back-pad plug where it is",
+      "part": "J2",
+      "at": [
+        10,
+        8
+      ],
+      "rot": 3
+    },
+    {
+      "kind": "fixed",
+      "name": "the cable header where it is",
+      "part": "J1",
+      "at": [
+        0,
+        17
+      ],
+      "rot": 1
+    },
+    {
+      "kind": "fixed",
+      "name": "Ext where it is",
+      "part": "J3",
+      "at": [
+        9,
+        2
+      ],
+      "rot": 3
+    }
+  ]
+}

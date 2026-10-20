@@ -1,4 +1,4 @@
-//! Turns a KiCad netlist (.net) plus our footprint library into a `Circuit`.
+//! Turns a KiCad netlist (.net) plus our footprint library into a `Design`.
 //!
 //! The netlist says which pin connects to which net and names each part's
 //! footprint. It says nothing about where the pins physically are, so that
@@ -7,7 +7,7 @@
 //! footprints.json in the config folder (`user_footprints`) adds parts for every circuit, and one
 //! next to the netlist for the circuits in that folder; each replaces entries of the same name.
 
-use crate::board::{BoardSize, Circuit, Component, Net, Pin, Point};
+use crate::board::{BoardSize, Design, Component, Net, Pin, Point};
 use crate::diylc;
 use crate::sexpr::{self, Sexpr};
 use serde::Deserialize;
@@ -52,7 +52,7 @@ pub struct Options {
     pub user_footprints: bool,
 }
 
-pub fn load(path: &str, opts: Options) -> Circuit {
+pub fn load(path: &str, opts: Options) -> Design {
     let text = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("can't read {path}: {e}"));
     let root = sexpr::parse(&text).unwrap_or_else(|e| panic!("bad netlist {path}: {e}"));
     if root.head() != Some("export") {
@@ -73,7 +73,7 @@ pub fn load(path: &str, opts: Options) -> Circuit {
         root.child("nets").into_iter().flat_map(|ns| ns.children("net")).map(net).filter(|n| n.pins.len() > 1).collect();
 
     let (power, ground) = power_and_ground(&nets, &opts);
-    Circuit::new(opts.board, components, nets, power, ground)
+    Design::new(opts.board, components, nets, power, ground)
 }
 
 /// Your own footprints.json, for every circuit: in harmonia's config folder,

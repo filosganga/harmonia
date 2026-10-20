@@ -9,73 +9,17 @@
 //! A DIYLC group with pins in it (say two pin headers plus a rectangle for a module's
 //! board) becomes one part. Only its pins' holes are taken, so low parts can go under it.
 
-use crate::board::{BoardSize, Circuit, Component, Net, Pin, Place, Placement, Point};
+use super::{HOLE, Kind, MARGIN, Source, class};
+use crate::board::{BoardSize, Design, Component, Net, Pin, Place, Placement, Point, bounds};
 use crate::netlist::{self, NET_NAME_HINTS, Options};
 use roxmltree::Node;
 use std::collections::{BTreeSet, HashMap};
 
-/// DIYLC measures in inches; one perfboard hole is 0.1".
-const HOLE: f64 = 0.1;
 /// How close (in inches) two things must be to count as touching.
 const EPS: f64 = 0.005;
 /// Half the side of the square around a pin or wire end that copper must overlap to touch it.
 /// DIYLC uses a 4 x 4 pixel square at 200 pixels per inch, so 0.01" each way.
 const PIN_REACH: f64 = 0.01;
-
-/// The original drawing of a part, kept so it can be written back to DIYLC moved and turned
-/// (the layout file keeps it too, as the part's "diylc_drawing").
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
-pub struct Source {
-    /// The XML of each DIYLC item the part is made of, exactly as in the file.
-    pub xml: Vec<String>,
-    /// The DIYLC group it was, if any: (group name, ids of its items).
-    pub group: Option<(String, Vec<String>)>,
-    /// The sketch hole that is the part's top-left corner.
-    pub origin: Point,
-}
-
-/// What a DIYLC item is, as far as connections go.
-enum Kind {
-    /// A part with pins: DIYLC's names for its pins, in order (None = number them 1, 2, ...).
-    Part(Option<&'static [&'static str]>),
-    /// A copper trace: joins everything it touches along its length.
-    Trace,
-    /// A jumper or wire: joins whatever is at its two ends.
-    Wire,
-    /// A solder pad: joins whatever is on it.
-    Pad,
-    /// Text and shapes: no connections, but kept when inside a group.
-    Decoration,
-    Board,
-}
-
-fn kind(class: &str) -> Option<Kind> {
-    const TWO: &[&str] = &["1", "2"];
-    Some(match class {
-        "passive.Resistor" | "passive.RadialCeramicDiskCapacitor" | "passive.RadialFilmCapacitor" | "passive.AxialFilmCapacitor" => Kind::Part(Some(TWO)),
-        "passive.RadialElectrolytic" => Kind::Part(Some(&["+", "-"])),
-        "semiconductors.LED" | "semiconductors.DiodePlastic" => Kind::Part(Some(&["A", "K"])),
-        "semiconductors.DIL__IC" | "semiconductors.TransistorTO92" | "semiconductors.TransistorTO126" | "semiconductors.TransistorTO220"
-        | "electromechanical.PinHeader" | "electromechanical.TactileMicroSwitch" => Kind::Part(None),
-        "connectivity.CopperTrace" => Kind::Trace,
-        "connectivity.Jumper" | "connectivity.HookupWire" | "connectivity.OrthogonalWire" | "connectivity.TwistedWire" => Kind::Wire,
-        "connectivity.SolderPad" => Kind::Pad,
-        "misc.Label" | "misc.WrapLabel" | "misc.PCBText" => Kind::Decoration,
-        c if c.starts_with("shapes.") || c.starts_with("chassis.") => Kind::Decoration,
-        "boards.PerfBoard" => Kind::Board,
-        _ => return None,
-    })
-}
-
-/// Parts low enough to sit under a module on headers: ones that lie flat, and small ceramic discs.
-fn is_low(class: &str) -> bool {
-    matches!(class, "passive.Resistor" | "passive.RadialCeramicDiskCapacitor" | "passive.AxialFilmCapacitor" | "semiconductors.DiodePlastic")
-}
-
-/// Radial parts stand up, so their body is a circle around the legs; axial ones lie between their legs.
-fn is_radial(class: &str) -> bool {
-    matches!(class, "passive.RadialElectrolytic" | "passive.RadialCeramicDiskCapacitor" | "passive.RadialFilmCapacitor" | "semiconductors.LED")
-}
 
 type Inches = (f64, f64);
 
@@ -100,17 +44,32 @@ struct Drawn<'a> {
     node: Node<'a, 'a>,
 }
 
+/// The copper you drew, in holes of the board, each piece with the index of its net in the
+/// circuit: what `route::from_sketch` turns into a routing, to score your own wiring the way the
+/// router's is scored. A piece that joins no pins is left out.
+#[derive(Default, Clone)]
+pub struct Copper {
+    /// Copper traces, (net, one end, the other), as drawn: a trace may be many holes long.
+    pub traces: Vec<(usize, Point, Point)>,
+    /// Jumpers and wires on the parts' side.
+    pub jumpers: Vec<(usize, Point, Point)>,
+    /// Wires on the solder side: a jumper whose name says "(solder side)", as this program writes them.
+    pub bottom: Vec<(usize, Point, Point)>,
+}
+
 /// Everything that conducts, for working out the nets.
+#[derive(Clone, Copy)]
 enum Conductor {
     Pin(usize, usize),
     /// Two ends, half the width, copper layer.
     Trace(Inches, Inches, f64, u8),
-    Wire(Inches, Inches),
+    /// Two ends, and whether it's on the solder side.
+    Wire(Inches, Inches, bool),
     /// Centre, radius, copper layer.
     Pad(Inches, f64, u8),
 }
 
-pub fn load(path: &str, opts: Options) -> (Circuit, Placement) {
+pub fn load(path: &str, opts: Options) -> (Design, Placement, Copper) {
     let text = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("can't read {path}: {e}"));
     let doc = roxmltree::Document::parse(&text).unwrap_or_else(|e| panic!("bad DIYLC file {path}: {e}"));
     let root = doc.root_element();
@@ -127,10 +86,10 @@ pub fn load(path: &str, opts: Options) -> (Circuit, Placement) {
         let class = item.tag_name().name().strip_prefix("diylc.").unwrap_or(item.tag_name().name()).to_string();
         let name = text_of(item, "name").unwrap_or_default();
         let points = points(item);
-        let k = kind(&class).unwrap_or_else(|| {
+        let k = super::class(&class).unwrap_or_else(|| {
             panic!("{path}: {name} is a DIYLC {class}, which isn't supported yet, so its connections would be missed")
         });
-        match k {
+        match k.kind {
             Kind::Part(names) => {
                 let count = if names.is_some() { 2 } else { points.len() };
                 let pin_names: Vec<String> = match (names, header_names(item, count)) {
@@ -143,15 +102,17 @@ pub fn load(path: &str, opts: Options) -> (Circuit, Placement) {
                 parts.push(Drawn { id: text_of(item, "id").unwrap_or_default(), name, class, value: value_of(item), pins, body, node: item });
             }
             Kind::Trace => conductors.push(Conductor::Trace(points[0], points[1], size_of(item, "thickness").unwrap_or(0.04) / 2.0, layer_of(item))),
-            Kind::Wire => conductors.push(Conductor::Wire(points[0], if class == "connectivity.Jumper" { points[1] } else { *points.last().unwrap() })),
+            Kind::Wire => {
+                let end = if class == "connectivity.Jumper" { points[1] } else { *points.last().unwrap() };
+                conductors.push(Conductor::Wire(points[0], end, name.ends_with("(solder side)")));
+            }
             Kind::Pad => conductors.push(Conductor::Pad(points[0], size_of(item, "size").unwrap_or(0.09) / 2.0, layer_of(item))),
             Kind::Decoration => {
                 decorations.insert(text_of(item, "id").unwrap_or_default(), item);
             }
             Kind::Board => {
-                // DIYLC puts the first hole one grid step in from the board's corner.
                 let (x, y) = hole(points[0]);
-                board_origin.get_or_insert((x + 1, y + 1));
+                board_origin.get_or_insert((x + MARGIN, y + MARGIN));
             }
         }
     }
@@ -164,7 +125,7 @@ pub fn load(path: &str, opts: Options) -> (Circuit, Placement) {
         }
     }
 
-    let nets = nets(&parts, &conductors);
+    let (nets, net_of) = nets(&parts, &conductors);
     let (components, places, owner) = components(path, &root, &parts, &decorations);
     // A pin's name in the circuit: "R1.2" for a part on its own, "ESP32C6.ESP32C6-L.5v" in a module.
     let label = |pi: usize, i: usize| {
@@ -181,13 +142,34 @@ pub fn load(path: &str, opts: Options) -> (Circuit, Placement) {
     });
     let sketch: Placement = places.iter().map(|&(x, y)| Place { x: x - origin.0, y: y - origin.1, rot: 0 }).collect();
 
+    // Your copper, in the same holes as the sketch.
+    let on_board = |p: Inches| {
+        let (x, y) = hole(p);
+        (x - origin.0, y - origin.1)
+    };
+    let mut copper = Copper::default();
+    for (conductor, net) in conductors.iter().zip(&net_of) {
+        match (*conductor, *net) {
+            (Conductor::Trace(a, b, ..), Some(net)) => copper.traces.push((net, on_board(a), on_board(b))),
+            (Conductor::Wire(a, b, bottom), Some(net)) => {
+                let list = if bottom { &mut copper.bottom } else { &mut copper.jumpers };
+                list.push((net, on_board(a), on_board(b)));
+            }
+            _ => {}
+        }
+    }
+
     let (power, ground) = netlist::power_and_ground(&nets, &opts);
     let board: BoardSize = opts.board;
-    (Circuit::new(board, components, nets, power, ground), sketch)
+    (Design::new(board, components, nets, power, ground), sketch, copper)
 }
 
-/// Joins everything that touches, then lists each group of two or more pins.
-fn nets(parts: &[Drawn], conductors: &[Conductor]) -> Vec<Vec<(usize, usize)>> {
+/// Each net as its pins: (drawn part, pin).
+type Nets = Vec<Vec<(usize, usize)>>;
+
+/// Joins everything that touches, then lists each group of two or more pins; and for each
+/// conductor, which of those groups it's in (None if it joins fewer than two pins).
+fn nets(parts: &[Drawn], conductors: &[Conductor]) -> (Nets, Vec<Option<usize>>) {
     let n = conductors.len();
     let mut parent: Vec<usize> = (0..n).collect();
     fn find(parent: &mut [usize], i: usize) -> usize {
@@ -204,7 +186,7 @@ fn nets(parts: &[Drawn], conductors: &[Conductor]) -> Vec<Vec<(usize, usize)>> {
             Conductor::Pin(pi, i) => (vec![(parts[pi].pins[i].1, parts[pi].pins[i].1)], 0.0, None),
             Conductor::Trace(a, b, r, layer) => (vec![(a, b)], r, Some(layer)),
             // A wire only touches things at its ends; what it passes over isn't connected.
-            Conductor::Wire(a, b) => (vec![(a, a), (b, b)], 0.0, None),
+            Conductor::Wire(a, b, _) => (vec![(a, a), (b, b)], 0.0, None),
             Conductor::Pad(p, r, layer) => (vec![(p, p)], r, Some(layer)),
         }
     };
@@ -233,9 +215,14 @@ fn nets(parts: &[Drawn], conductors: &[Conductor]) -> Vec<Vec<(usize, usize)>> {
             groups.entry(find(&mut parent, i)).or_default().insert((pi, pin));
         }
     }
-    let mut out: Vec<Vec<(usize, usize)>> = groups.into_values().filter(|g| g.len() > 1).map(|g| g.into_iter().collect()).collect();
+    let mut out: Vec<(Vec<(usize, usize)>, usize)> = groups.into_iter().filter(|(_, g)| g.len() > 1).map(|(root, g)| (g.into_iter().collect(), root)).collect();
     out.sort();
-    out
+    let net_of = (0..n).map(|i| {
+        let root = find(&mut parent, i);
+        out.iter().position(|&(_, r)| r == root)
+    });
+    let net_of = net_of.collect();
+    (out.into_iter().map(|(g, _)| g).collect(), net_of)
 }
 
 /// Turns the drawn parts into circuit parts: one per DIYLC group with pins in it, one per other part.
@@ -268,8 +255,7 @@ fn components(path: &str, root: &Node, parts: &[Drawn], decorations: &HashMap<St
         body.sort();
         body.dedup();
         outline.extend(&body);
-        let (x0, x1) = (outline.iter().map(|p| p.0).min().unwrap(), outline.iter().map(|p| p.0).max().unwrap());
-        let (y0, y1) = (outline.iter().map(|p| p.1).min().unwrap(), outline.iter().map(|p| p.1).max().unwrap());
+        let ((x0, y0), (x1, y1)) = bounds(&outline);
         let local = |(x, y): Point| (x - x0, y - y0);
         let single = members.len() == 1 && !in_group;
         let first = &parts[members[0]];
@@ -277,14 +263,14 @@ fn components(path: &str, root: &Node, parts: &[Drawn], decorations: &HashMap<St
         out.push(Component {
             reference,
             value: if single { first.value.clone() } else { String::new() },
-            footprint: format!("DIYLC:{}", if single { first.class.rsplit('.').next().unwrap() } else { "module" }),
+            footprint: format!("DIYLC:{}", if single { class(&first.class).map_or("", |c| c.short) } else { "module" }),
             diylc: None,
             w: x1 - x0 + 1,
             h: y1 - y0 + 1,
             pins: pins.into_iter().map(|(name, at, off_grid)| Pin { name, at: local(at), off_grid }).collect(),
             body: body.into_iter().map(local).collect(),
             source: Some(Source { xml, group, origin: (x0, y0) }),
-            low: single && is_low(&first.class),
+            low: single && class(&first.class).is_some_and(|c| c.low),
             footprint_from: None,
         });
         places.push((x0, y0));
@@ -347,12 +333,11 @@ fn name_nets(nets: Vec<Vec<String>>) -> Vec<Net> {
 /// The holes a part's body takes in the sketch.
 fn body_of(class: &str, item: Node, pins: &[(String, Inches)]) -> Vec<Point> {
     let holes: Vec<Point> = pins.iter().map(|(_, at)| hole(*at)).collect();
-    let (mut x0, mut x1) = (holes.iter().map(|p| p.0).min().unwrap(), holes.iter().map(|p| p.0).max().unwrap());
-    let (mut y0, mut y1) = (holes.iter().map(|p| p.1).min().unwrap(), holes.iter().map(|p| p.1).max().unwrap());
+    let ((mut x0, mut y0), (mut x1, mut y1)) = bounds(&holes);
     if holes.len() == 2 && x0 != x1 && y0 != y1 {
         return holes; // a two-legged part drawn at an angle: just its legs
     }
-    if is_radial(class) {
+    if super::class(class).is_some_and(|c| c.radial) {
         // A standing part is round: grow its box to its diameter along the legs and its width across them.
         let along = size_of(item, "length").map(|d| (d / HOLE).round() as i32).unwrap_or(1).max(1);
         let across = size_of(item, "width").map(|d| (d / HOLE).round() as i32).unwrap_or(along).max(1);
