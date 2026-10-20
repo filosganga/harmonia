@@ -304,11 +304,16 @@ pub fn draw(layout: &Layout, side: Side) -> String {
         // named. A row of pins has its names turned to fit.
         if pins.len() > 2 || matches!(shape(comp), "PinHeader" | "module") {
             // A module from footprints.json has plain pin numbers, no header names: its headers are
-            // the columns of its footprint, each named after the part.
+            // the lines of pins in its footprint, each named after the part. Columns for a module
+            // whose rows run down (a DRV8833 breakout), rows for one whose rows run across (an
+            // ESP32-C6-Zero lying across): whichever makes fewer lines.
             let unnamed_module = shape(comp) == "module" && comp.pins.iter().all(|pin| split_pin(&pin.name).0.is_empty());
+            let lines = |axis: fn(Point) -> i32| comp.pins.iter().map(|pin| axis(pin.at)).collect::<HashSet<i32>>().len();
+            let by_row = lines(|p| p.1) < lines(|p| p.0);
             let mut groups: Vec<(String, &str, Vec<usize>)> = Vec::new(); // (key, name, pins)
             for (pi, pin) in comp.pins.iter().enumerate() {
-                let (key, group) = if unnamed_module { (format!("column {}", pin.at.0), "") } else { (split_pin(&pin.name).0.to_string(), split_pin(&pin.name).0) };
+                let line = if by_row { format!("row {}", pin.at.1) } else { format!("column {}", pin.at.0) };
+                let (key, group) = if unnamed_module { (line, "") } else { (split_pin(&pin.name).0.to_string(), split_pin(&pin.name).0) };
                 match groups.iter_mut().find(|(k, _, _)| *k == key) {
                     Some((_, _, members)) => members.push(pi),
                     None => groups.push((key, group, vec![pi])),
