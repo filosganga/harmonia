@@ -66,7 +66,8 @@ fn check_one(path: &str, args: &Args) -> Outcome {
         let (k, _, best, _) = place_cases(&loaded.cases, board::cost, args.steps, &mut rng, Some(sketch), true);
         let c = &loaded.cases[k];
         let made = made(args, path, loaded.board_file.clone(), "sketch", &loaded.cases, k);
-        let build = Build::new(c.clone(), best.clone(), "check", made);
+        let placed = best.placement.clone();
+        let build = Build::routed(c.clone(), best, "check", made);
         let written = format!("{}/check.diy", args.out);
         let diy = diylc::write(&build);
         std::fs::write(&written, &diy).unwrap();
@@ -85,7 +86,7 @@ fn check_one(path: &str, args: &Args) -> Outcome {
         // The placer's layouts are allowed, so no two pins share a hole and none is off the board:
         // nets can't join by themselves. Pins the router couldn't reach aren't joined in the drawing at all. Leave them out on both
         // sides: if everything else matches, only they are missing; if not, the writer is wrong.
-        let g = board::geometry(c, &best);
+        let g = board::geometry(c, &placed);
         let holes: std::collections::HashSet<board::Point> = build.layout.routing.unrouted.iter().map(|&(_, _, hole)| hole).collect();
         let mut unrouted = std::collections::HashSet::new();
         for (ci, comp) in c.components.iter().enumerate() {

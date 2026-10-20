@@ -35,7 +35,16 @@ prints both wirings of the sketch's placement ("wired as you drew it", "wired by
 
 The hand route saves 5 jumpers (75 + 23.5 for their length), but has 20 diagonal steps (300) and
 28 more quarter turns (140), and 62 more holes of trace. With every part fixed by the board file
-(`circuits/cat_feeder_fixed/orig.net`, `orig.json`), the router finds 677 with 11 jumpers.
+(`circuits/cat_feeder_fixed/orig.net`, `orig.json`), the router found 677 with 11 jumpers.
+
+**Since then (2026-10-20).** The router now improves its best routing a few runs at a time
+(README "How it routes"): on the sketch's placement it finds 600 with 10 jumpers (the table above is
+from before), on the fixed board 622 with 11. And a dearer jumper now works: before, no jumper price
+got the router to the hand wiring (at 95 a jumper it still found 1503 with 9 jumpers, against the
+hand wiring's 1349 with 4); now at 95 it finds 1123 with 6. A sweep of the solder-side wire's price
+changed nothing above about 45; at a jumper's price (15) it swaps most jumpers for wires on the back
+(the fixed board: 3 jumpers and 7 back wires). You chose to keep it at 500. So this question is now
+only about prices: the router follows them.
 
 The weights say what they say on purpose (`WEIGHTS` in src/board.rs, and the memory "corners over
 length"): a jumper is three corners' worth, a diagonal step three corners on top of its length, and
@@ -45,17 +54,17 @@ and the weights are wrong for you, or the diagonals were a compromise and the ro
 what you'd rather solder.
 
 **Options.**
-- Keep the weights: the router's 9 to 11 jumpers are the better board by your own prices.
-- Make jumpers dearer. For the hand route to win on this placement as it is, a jumper would need
-  to cost about 95 instead of 15. A dearer jumper also changes what the router proposes, so the
-  real result would be a new route somewhere between the two.
+- Keep the weights: the router's 10 to 11 jumpers are the better board by your own prices.
+- Make jumpers dearer. At 95 the router finds 6 jumpers on the sketch's placement, with more
+  corners and trace than at 15; somewhere between gives fewer jumpers for a few more corners.
 - Make diagonals or corners cheaper, if you're happy to solder them.
 
 **How to try it.** A weight is a constant (README "Principles": no flags for these). Change one
 in `WEIGHTS`, run the line above and `place circuits/cat_feeder_fixed/orig.net --steps 1` (both
-take a second), then `bench` (about 50s) to see what it does to every other circuit. The router
-prices its search with the same weights (route/search.rs `JUMPER` and the others), so change those
-to match.
+take a few seconds), then `bench` (about 50s) to see what it does to every other circuit. The
+router prices its search with the same weights (route/search.rs `JUMPER` and the others read
+`WEIGHTS`), except the price of a hole of trace: `STRAIGHT` and `DIAGONAL` there are plain numbers
+for a wire weight of 1, so a new wire weight needs them changed to match.
 
 **Suggestion.** Look at the router's board first (`out/rules.svg` after the second command) and
 the hand route next to it. If you'd solder the router's, nothing to change. If not, tell me which of
@@ -167,7 +176,8 @@ Still to decide and build, each on its own branch with the benchmark:
 
 ## Also worth knowing
 
-- Placing is slower since the router rework: `place circuits/cat_feeder.diy` takes about 37s
-  (18s before) and `bench` about 50s (33s), because wires became part of the router's search.
+- Placing is slower since the router rework: `place circuits/cat_feeder.diy` takes about 40s
+  (18s before) and `bench` about 50s (33s): wires became part of the router's search, and the
+  finished layout's routing is improved a few runs at a time (`route::IMPROVE`).
 - The installed `harmonia` (`cargo install --path .`) must be reinstalled to read layout files of
   version 3.

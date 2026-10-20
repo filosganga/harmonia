@@ -5,7 +5,7 @@ Harmonia turns parts, fits them on a perfboard and wires them up.
 
 Rust, with four small crates (`rand`, `serde`, `serde_json`, and `roxmltree` to read DIYLC files).
 Every placer step routes the whole board, so commands take seconds: on the 555, `place` takes about
-4s, `train` 11s and `evolve` 12s; placing the bigger cat-feeder board about 37s (its board file makes two cases). A board file
+5s, `train` 11s and `evolve` 12s; placing the bigger cat-feeder board about 40s (its board file makes two cases). A board file
 whose `one-of`s make cases (below) is placed once per case, so it takes that many times longer. Anything up to
 the time to make and drink an espresso is fine.
 
@@ -309,7 +309,7 @@ text board. Pins are named like the `nets` command prints them.
 | `src/sexpr.rs` | Reads KiCad's bracket format, `(comp (ref "R1") ...)`, into a tree. |
 | `src/netlist.rs` | Turns a KiCad netlist plus `footprints.json` (built in, yours in `~/.config/harmonia`, and one next to the netlist) into the circuit the placer works on. |
 | `src/board.rs` | Places parts, works out where every pin lands, measures the board and gives it a score. |
-| `src/route.rs` | The router: joins every net with copper traces, and hops over with a jumper (or, last, a solder-side wire) where a trace can't get through or going round costs more; for a finished layout it makes 200 complete routings in different orders and keeps the one the score likes best; a pin walled in so that not even a wire fits is left unrouted. It also turns a sketch's own copper into a routing, to measure your wiring. |
+| `src/route.rs` | The router: joins every net with copper traces, and hops over with a jumper (or, last, a solder-side wire) where a trace can't get through or going round costs more; for a finished layout it makes 200 complete routings in different orders, keeps the one the score likes best, and improves it a few runs at a time; a pin walled in so that not even a wire fits is left unrouted. It also turns a sketch's own copper into a routing, to measure your wiring. |
 | `src/route/search.rs` | The router's search: the board as it sees it (who owns each hole, where wires lie) and the A* search for the cheapest way to a run's next pin, in traces and wires, with what each step costs. |
 | `src/route/sketch.rs` | Your own wiring, from a DIYLC sketch, as a routing the score can measure. |
 | `src/build.rs` | A finished board, a `Build`: what you asked for (`Design`, in `src/board.rs`: the parts, nets, board and your rules), what was made of it (`Layout`: where each part goes and the copper), and how; scored once, and drawn by the three writers below. |
@@ -378,7 +378,7 @@ Then how good it is. `src/board.rs` measures eleven things (weights in `WEIGHTS`
   Each costs five thousand holes of trace (as much as ten solder-side wires), far more than any wiring, so the placer keeps away from such
   layouts; one that's left is drawn as a thin dotted line, with a `!!` line naming the pin. It stays
   a cost, not part of "allowed": it's only known once the board is routed, it's the greedy router's
-  limit rather than the board's (it tries 200 orders, but not every way, and a wire added by hand fixes it),
+  limit rather than the board's (it tries 200 orders and improves the best, but not every way, and a wire added by hand fixes it),
   and at the placer's low temperatures that already works like a "never".
 - **power**: for every supply pin, the distance to the nearest ground pin (keeps supply and ground close).
 - **crowding**: pairs of neighbouring holes (across or down) taken by two different parts, where the
@@ -452,7 +452,18 @@ random orders (and with the search's ties broken in random orders), and the scor
 every measurement and rule counted. The router has no rules of its own about what to try again or
 what to keep room for: it proposes, the score judges. A routing whose copper so far already costs
 more than the best one's stops there, so most stop early (all 200 take about 0.1 to 0.15s on the
-cat feeder with its parts fixed). The random orders come from a fixed seed, so the same placement always gets the same copper.
+cat feeder with its parts fixed).
+
+Each of those routings is still built run after run on an empty board, each run the cheapest way
+the ones before it left, so no run ever leaves room for a later one. So the best one is then
+improved, a few runs at a time: 2000 times (`IMPROVE`), a random run and every run with copper or a pin in the box around it
+(grown by up to 3 holes) are ripped up and routed again in a random order, and the change is kept if the whole board then costs
+less. A soft star's runs go again together, since one may have joined another's copper. On the cat
+feeder with its parts fixed, this takes the best routing from 677 to 622 (about 1.3s), and on the
+hand-wired sketch's placement from 635 to 600. With jumpers priced at 95 instead of 15, the 200
+routings alone never got below the hand wiring (1349, with 4 jumpers; they found 1503 with 9), and
+improved they find 1123 with 6. The random choices come from fixed seeds, so the same placement
+always gets the same copper.
 
 The placer can't afford 200 routings for every move, so it judges each move by the first one,
 shortest first, alone (`route_once`); judging moves by the best of several also made the 4017 LED
@@ -548,9 +559,10 @@ benchmark before and after it and compare the layouts, not the old numbers.
 - **Layouts depend on the seed.** On the cat feeder, different seeds land on quite different layouts
   and costs. Try more `--steps` and two or three `--seed`s, and compare the costs. Each output names
   its seed, so a layout you like can be made again (with the same code and board file).
-- **The router is greedy.** It routes one run at a time and never undoes one. For a finished
-  layout it tries 200 orders and keeps the best, but the placer judges its moves by one order,
-  shortest first, so it may pass over a placement that another order would route well. A pin walled
+- **The router is greedy, per move.** It routes one run at a time. For a finished layout it tries
+  200 orders, keeps the best and improves it a few runs at a time, but the placer judges its moves
+  by one order, shortest first, so it may pass over a placement that the thorough routing would
+  route well. A pin walled
   in in every order tried is left unrouted (very expensive, so the placer finds another layout).
 - **A part can't pass through another.** The placer only ever holds allowed layouts, so a nudge
   that would put a part on top of its neighbour is thrown away. To get past, it jumps: three moves

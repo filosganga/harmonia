@@ -318,7 +318,7 @@ pub fn from_json(text: &str) -> Build {
     }
     let placement: Placement = l.parts.iter().map(|p| Place { x: p.at.0, y: p.at.1, rot: p.rot }).collect();
 
-    // The runs, in the order the router routes them first, as `Build::new` keeps them: they must be
+    // The runs, in the order the router routes them first, as `Build::routed` keeps them: they must be
     // the ones the design's rules make, or the copper would be on the wrong runs.
     let g = crate::board::geometry(&design, &placement);
     let order = crate::route::order(&design, &g);
