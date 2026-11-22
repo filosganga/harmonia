@@ -1,6 +1,6 @@
 //! `check`: the round trip for DIYLC files. Each is placed as `place` places it, written out,
 //! and read back, and must come back with the connections it started with. Its layout file, read
-//! back, must give the same drawings.
+//! back, must give the same outputs.
 
 use crate::board::{self, Design};
 use crate::measure;
@@ -32,7 +32,7 @@ enum Outcome {
     Unfinished(usize),
     /// Nets in the file but not in what was written back, and the other way round.
     Different(Vec<Vec<String>>, Vec<Vec<String>>),
-    /// The layout file, read back, doesn't give the same layout file or the same drawings: what differs.
+    /// The layout file, read back, doesn't give the same layout file or the same outputs: what differs.
     LayoutChanged(String),
     /// Something stopped after the file was read: the placer, the router, the writer, or reading
     /// back what was written.
@@ -72,8 +72,8 @@ fn check_one(path: &str, args: &Args) -> Outcome {
         let written = format!("{}/check.diy", args.out);
         let diy = diylc::write(&build);
         std::fs::write(&written, &diy).unwrap();
-        // The layout file must keep everything the drawings need: write it, read it back, and the
-        // file and the drawings from what was read must be the same as from the layout in memory.
+        // The layout file must keep everything the outputs need: write it, read it back, and the
+        // file and the outputs from what was read must be the same as from the layout in memory.
         let saved = build::to_json(&build);
         std::fs::write(format!("{}/check.layout.json", args.out), &saved).unwrap();
         let read = build::from_json(&saved);
@@ -114,7 +114,7 @@ fn check_one(path: &str, args: &Args) -> Outcome {
 }
 
 /// What differs between a layout and the same layout written to a layout file (`saved`) and read
-/// back (`read`): the file it writes again, or any of the drawings. None if nothing does.
+/// back (`read`): the file it writes again, or any of the outputs. None if nothing does.
 fn differences(build: &Build, read: &Build, saved: &str, diy: &str) -> Option<String> {
     let checks = [
         ("the layout file written again", saved.to_string(), build::to_json(read)),

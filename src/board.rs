@@ -1,11 +1,13 @@
 //! Perfboard model: the circuit, the board, and where the parts are (placement geometry), plus each
-//! net's colour for the drawings. How a layout is judged is in the `measure` module (src/measure.rs).
+//! net's colour for the outputs. How a layout is judged is in the `measure` module (src/measure.rs).
 //!
 //! Coordinates are perfboard holes: x grows to the right, y grows downwards.
 //! A placement gives each component the position of its top-left hole and a
 //! rotation (0..3, in 90 degree steps).
 
 use rand::Rng;
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 pub type Point = (i32, i32);
 
@@ -20,7 +22,7 @@ pub struct Pin {
 }
 
 /// The shape of a part on the board, in its own holes (before it's turned): its name, its outline,
-/// its pins, and the holes its body covers. Many parts can use the same one (each `Part` keeps its
+/// its pins, the holes its body covers, and its look. Many parts can use the same one (each `Part` keeps its
 /// own copy).
 #[derive(Clone)]
 pub struct Footprint {
@@ -35,7 +37,60 @@ pub struct Footprint {
     /// (`Part::layers`). For most footprints that's the whole outline; a module's only its pins (its
     /// headers), and a two-legged part drawn at an angle the line between its legs.
     pub body: Vec<Point>,
+    /// What it looks like from above, in the pictures.
+    pub look: Look,
+    /// How file formats draw it (footprints.json's "diylc" entry, for DIYLC).
+    pub drawings: Drawings,
 }
+
+/// What a footprint looks like from above, in the pictures: no file format's words. A look for
+/// two legs (lying, round) on a footprint without exactly two pins is drawn as a box.
+#[derive(Clone, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+#[serde(tag = "as", rename_all = "kebab-case")]
+pub enum Look {
+    /// A box over its outline: a chip, a transistor, a switch, anything else.
+    #[default]
+    Box,
+    /// Lying flat between its two legs, like a resistor; with a band at its second leg, a diode.
+    Lying {
+        #[serde(default, skip_serializing_if = "is_false")]
+        band: bool,
+    },
+    /// Standing up, a round body over its two legs, like an electrolytic capacitor, with a + by
+    /// the pin called `plus`; lit, an LED.
+    Round {
+        plus: String,
+        #[serde(default, skip_serializing_if = "is_false")]
+        lit: bool,
+    },
+    /// A small rounded box, like a ceramic disc capacitor.
+    Disc,
+    /// Only its pins, boxed and named, like a pin header.
+    Header,
+    /// A board of its own over its outline (a microcontroller board, a breakout), its pins boxed
+    /// and named by header.
+    OwnBoard,
+}
+
+fn is_false(b: &bool) -> bool {
+    !b
+}
+
+/// A file format that keeps its own drawings of parts and footprints.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Format {
+    Diylc,
+}
+
+/// How one file format draws a part or a footprint, in that format's own JSON, kept with it so
+/// that format can write it back. Only that format looks inside.
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Drawing(pub serde_json::Value);
+
+/// A part's or a footprint's drawings, one per format at most.
+pub type Drawings = BTreeMap<Format, Drawing>;
 
 impl Footprint {
     /// Every hole of a w x h outline: the body of an ordinary part.
@@ -52,18 +107,31 @@ pub struct Part {
     /// What the netlist says it is, e.g. "NE555P" or "10k". Only used when exporting.
     pub value: String,
     pub footprint: Footprint,
-    /// Which DIYLC part to draw it as, if footprints.json says.
-    pub diylc: Option<crate::diylc::Part>,
-    /// For parts read from a DIYLC file: the original drawing, so it can be written back moved.
-    pub source: Option<crate::diylc::Source>,
+    /// How file formats draw this part itself: for a part read from a DIYLC sketch, your drawing
+    /// of it, so it can be written back moved.
+    pub drawings: Drawings,
     /// Which layers it takes, unless the board file says otherwise (`Design::layers`).
     pub layers: Layers,
     /// A module: a board of its own (a microcontroller, a motor driver breakout), which covers its
-    /// whole outline at its layers while standing only on its body. Also how it's drawn.
+    /// whole outline at its layers while standing only on its body. (The pictures draw it by its
+    /// footprint's look, `Look::OwnBoard`.)
     pub module: bool,
     /// The footprints.json its footprint came from, if not the built-in library (yours, or one next
     /// to the netlist), so a layout can say it depends on that file.
     pub footprint_from: Option<String>,
+}
+
+/// The copper drawn in a DIYLC sketch, in holes of the board, each piece with the index of its net
+/// in the circuit: what `route::from_sketch` turns into a routing, to score your own wiring the way the
+/// router's is scored. A piece that joins no pins is left out.
+#[derive(Default, Clone)]
+pub struct Copper {
+    /// Copper traces, (net, one end, the other), as drawn: a trace may be many holes long.
+    pub traces: Vec<(usize, Point, Point)>,
+    /// Jumpers and wires on the parts' side.
+    pub jumpers: Vec<(usize, Point, Point)>,
+    /// Wires on the solder side: a jumper whose name says "(solder side)", as this program writes them.
+    pub bottom: Vec<(usize, Point, Point)>,
 }
 
 /// Which layers above the board a part takes, `lo` to `hi`, both included: 0 is the board's

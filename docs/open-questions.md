@@ -180,4 +180,4 @@ Still to decide and build, each on its own branch with the benchmark:
   (18s before) and `bench` about 50s (33s): wires became part of the router's search, and the
   finished layout's routing is improved a few runs at a time (`route::IMPROVE`).
 - The installed `harmonia` (`cargo install --path .`) must be reinstalled to read layout files of
-  version 3.
+  version 4.

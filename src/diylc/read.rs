@@ -9,8 +9,8 @@
 //! A DIYLC group with pins in it (say two pin headers plus a rectangle for a module's
 //! board) becomes one part. Only its pins' holes are taken, so low parts can go under it.
 
-use super::{HOLE, Kind, MARGIN, Source, class};
-use crate::board::{BoardSize, Design, Footprint, Part, Layers, Net, Pin, Place, Placement, Point, bounds};
+use super::{HOLE, Kind, MARGIN, PartDrawing, class, class_look, seal};
+use crate::board::{BoardSize, Copper, Design, Drawings, Footprint, Format, Layers, Look, Net, Part, Pin, Place, Placement, Point, bounds};
 use crate::netlist::{self, NET_NAME_HINTS, Options};
 use roxmltree::Node;
 use std::collections::{BTreeSet, HashMap};
@@ -42,19 +42,6 @@ struct Drawn<'a> {
     pins: Vec<(String, Inches)>,
     body: Vec<Point>,
     node: Node<'a, 'a>,
-}
-
-/// The copper you drew, in holes of the board, each piece with the index of its net in the
-/// circuit: what `route::from_sketch` turns into a routing, to score your own wiring the way the
-/// router's is scored. A piece that joins no pins is left out.
-#[derive(Default, Clone)]
-pub struct Copper {
-    /// Copper traces, (net, one end, the other), as drawn: a trace may be many holes long.
-    pub traces: Vec<(usize, Point, Point)>,
-    /// Jumpers and wires on the parts' side.
-    pub jumpers: Vec<(usize, Point, Point)>,
-    /// Wires on the solder side: a jumper whose name says "(solder side)", as this program writes them.
-    pub bottom: Vec<(usize, Point, Point)>,
 }
 
 /// Everything that conducts, for working out the nets.
@@ -264,18 +251,27 @@ fn circuit_parts(path: &str, root: &Node, drawn: &[Drawn], decorations: &HashMap
         let module = !single && body.len() < (w * h) as usize;
         let low = single && class(&first.class).is_some_and(|c| c.low);
         let xml = members.iter().map(|&pi| drawn[pi].node).chain(extra).map(|n| n.document().input_text()[n.range()].to_string()).collect();
+        let short = if single { class(&first.class).map_or("", |c| c.short) } else { "module" };
+        let pins: Vec<Pin> = pins.into_iter().map(|(name, at, off_grid)| Pin { name, at: local(at), off_grid }).collect();
+        // A group that isn't a module (say, a header and its label) looks like a header.
+        let look = match (single, module) {
+            (true, _) => class_look(short, &pins, None),
+            (false, true) => Look::OwnBoard,
+            (false, false) => Look::Header,
+        };
         out.push(Part {
             reference,
             value: if single { first.value.clone() } else { String::new() },
             footprint: Footprint {
-                name: format!("DIYLC:{}", if single { class(&first.class).map_or("", |c| c.short) } else { "module" }),
+                name: format!("DIYLC:{short}"),
                 w,
                 h,
-                pins: pins.into_iter().map(|(name, at, off_grid)| Pin { name, at: local(at), off_grid }).collect(),
+                pins,
                 body: body.into_iter().map(local).collect(),
+                look,
+                drawings: Drawings::new(),
             },
-            diylc: None,
-            source: Some(Source { xml, group, origin: (x0, y0) }),
+            drawings: Drawings::from([(Format::Diylc, seal(&PartDrawing { xml, group, origin: (x0, y0) }))]),
             layers: Layers::of(module, low),
             module,
             footprint_from: None,

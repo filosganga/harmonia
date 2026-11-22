@@ -2,12 +2,13 @@
 //!
 //! A .diy file is XML: a perfboard, then each part with the positions of its legs, in
 //! inches (one hole = 0.1"). A part from your own sketch is written back as you drew it, moved
-//! and turned. Any other is drawn as the DIYLC class its footprints.json "diylc" entry asks for
-//! (`super::CLASSES`, its `drawing`); a footprint without one is drawn as a labelled box. The
-//! routed copper becomes DIYLC copper traces (solder side) and jumpers, coloured by net.
+//! and turned. Any other is drawn as the DIYLC class its footprint's DIYLC drawing (footprints.json's
+//! "diylc" entry) asks for (`super::CLASSES`, its `template`); a footprint without one is drawn as a
+//! labelled box. The routed copper becomes DIYLC copper traces (solder side) and jumpers, coloured
+//! by net.
 
-use super::{Drawing, HOLE, MARGIN, ORIENTATIONS, Source, class_named, xml};
-use crate::board::{self, Place, Point};
+use super::{FootprintDrawing, HOLE, MARGIN, ORIENTATIONS, PartDrawing, Template, class_named, open, xml};
+use crate::board::{self, Format, Place, Point};
 use crate::build::Build;
 use std::fmt::Write;
 
@@ -26,10 +27,10 @@ fn inch_f(hole: f64) -> f64 {
 
 /// One item of your DIYLC drawing, moved to where the placer put its part: every
 /// x="..." y="..." point is turned and shifted, and any <orientation> turned to match.
-fn moved(xml: &str, comp: &crate::board::Part, src: &Source, place: &Place) -> String {
+fn moved(xml: &str, comp: &crate::board::Part, yours: &PartDrawing, place: &Place) -> String {
     let to_new = |x: f64, y: f64| {
         // Sketch inches -> holes inside the part's outline -> turned -> holes on the board -> inches.
-        let (mut lx, mut ly) = (x / HOLE - src.origin.0 as f64, y / HOLE - src.origin.1 as f64);
+        let (mut lx, mut ly) = (x / HOLE - yours.origin.0 as f64, y / HOLE - yours.origin.1 as f64);
         let (mut w, mut h) = (comp.footprint.w as f64, comp.footprint.h as f64);
         for _ in 0..place.rot % 4 {
             (lx, ly, w, h) = (h - 1.0 - ly, lx, h, w);
@@ -117,12 +118,13 @@ pub fn write(build: &Build) -> String {
     let mut groups: Vec<(String, Vec<String>)> = Vec::new();
     for (ci, (comp, place)) in c.parts.iter().zip(placement).enumerate() {
         // A part that came from your own DIYLC file: write back your drawing, moved and turned.
-        if let Some(src) = &comp.source {
-            for xml in &src.xml {
-                s += &moved(xml, comp, src, place);
+        if let Some(drawing) = comp.drawings.get(&Format::Diylc) {
+            let yours: PartDrawing = open(drawing, &comp.reference);
+            for xml in &yours.xml {
+                s += &moved(xml, comp, &yours, place);
                 s += "\n";
             }
-            groups.extend(src.group.clone());
+            groups.extend(yours.group);
             continue;
         }
         let pins = &g.pins[ci];
@@ -136,28 +138,29 @@ pub fn write(build: &Build) -> String {
         by_column.sort_by_key(|&i| comp.footprint.pins[i].at);
 
         // The DIYLC class the footprint asks for, and how to draw it.
-        let wanted = comp.diylc.as_ref().map(|p| {
-            let class = class_named(&p.part).filter(|c| c.drawing.is_some());
-            let class = class.unwrap_or_else(|| panic!("footprints.json: {} wants DIYLC part {}, which isn't supported (see src/diylc.rs)", comp.reference, p.part));
-            (p, class.name, class.drawing.unwrap())
+        let wanted = comp.footprint.drawings.get(&Format::Diylc).map(|drawing| {
+            let asked: FootprintDrawing = open(drawing, &comp.footprint.name);
+            let class = class_named(&asked.part).filter(|c| c.template.is_some());
+            let class = class.unwrap_or_else(|| panic!("footprints.json: {} wants DIYLC part {}, which isn't supported (see src/diylc.rs)", comp.reference, asked.part));
+            (asked, class.name, class.template.unwrap())
         });
         match wanted {
-            Some((_, class, Drawing::Dil)) => {
+            Some((_, class, Template::Dil)) => {
                 writeln!(s, "<diylc.{class}><id>{}</id><name>{}</name><alphaPercent><value>100</value></alphaPercent><value>{}</value>", id(), xml(&comp.reference), xml(&comp.value)).unwrap();
                 writeln!(s, r#"<orientation>{orientation}</orientation><pinCount>_{}</pinCount><pinSpacing value="0.1" unit="in"/><rowSpacing value="{:.1}" unit="in"/><controlPoints>"#, comp.footprint.pins.len(), (comp.footprint.w - 1) as f64 * HOLE).unwrap();
                 by_column.iter().for_each(|&i| point(&mut s, to_inch(pins[i])));
                 s += r#"</controlPoints><display>BOTH</display><bodyColor hex="808080"/><borderColor hex="595959"/><labelColor hex="ffffff"/><indentColor hex="595959"/><displayNumbers>NO</displayNumbers>"#;
                 writeln!(s, "\n</diylc.{class}>").unwrap();
             }
-            Some((_, class, Drawing::PinHeader)) => {
+            Some((_, class, Template::PinHeader)) => {
                 writeln!(s, "<diylc.{class}><id>{}</id><name>{}</name><alphaPercent><value>100</value></alphaPercent><orientation>{orientation}</orientation><controlPoints>", id(), xml(&comp.reference)).unwrap();
                 by_column.iter().for_each(|&i| point(&mut s, to_inch(pins[i])));
                 // DIYLC's "rows" run across, its "columns" down.
                 writeln!(s, r#"</controlPoints><rowCount>{}</rowCount><columnCount>{}</columnCount><spacing value="0.1" unit="in"/><shrouded>false</shrouded><nodeNames></nodeNames><bodyColor hex="808080"/><shroudColor hex="595959"/>"#, comp.footprint.w, comp.footprint.h).unwrap();
                 writeln!(s, "</diylc.{class}>").unwrap();
             }
-            Some((part, class, Drawing::TwoLegged { size, colors: [body, border, label], extra })) => {
-                let legs = &part.legs;
+            Some((asked, class, Template::TwoLegged { size, colors: [body, border, label], extra })) => {
+                let legs = &asked.legs;
                 let (first, second) = match legs.as_slice() {
                     [] => (pin("1"), pin("2")),
                     [a, b] => (pin(a), pin(b)),

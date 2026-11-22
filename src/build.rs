@@ -54,7 +54,7 @@ pub struct Made {
 }
 
 impl Made {
-    /// One line for the drawings: the seed, and how to make the build again.
+    /// One line for the outputs: the seed, and how to make the build again.
     pub fn again(&self) -> String {
         let line = format!("seed {}: to make it again, {} ({})", self.seed, self.command, self.version);
         match self.footprints.len() {
@@ -64,7 +64,7 @@ impl Made {
     }
 }
 
-/// A design, what was made of it, and how: everything the drawings need. The score and the
+/// A design, what was made of it, and how: everything the outputs need. The score and the
 /// problems are worked out from the design and the layout, never saved ones.
 pub struct Build {
     /// Its runs are in the order the router routes them first (`route::order`), so each of the

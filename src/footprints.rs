@@ -5,8 +5,7 @@
 //! footprints.json in the config folder (`user_footprints`) adds footprints for every circuit, and one
 //! next to the netlist for the circuits in that folder; each replaces entries of the same name.
 
-use crate::board::{Footprint, Layers, Pin, Point};
-use crate::diylc;
+use crate::board::{Drawing, Drawings, Footprint, Format, Layers, Look, Pin, Point};
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -24,7 +23,8 @@ struct Entry {
     h: i32,
     /// Pad number -> hole, counted from the footprint's top-left hole.
     pins: BTreeMap<String, Point>,
-    diylc: Option<diylc::Part>,
+    /// How DIYLC draws it: kept as the footprint's DIYLC drawing, unread (only `diylc` reads it).
+    diylc: Option<serde_json::Value>,
     /// Low enough to sit under a module on headers. Leave out if it isn't.
     #[serde(default)]
     low: bool,
@@ -70,6 +70,7 @@ pub fn library(path: &str, user: bool) -> Library {
         let more: HashMap<String, Entry> = serde_json::from_str(&text).unwrap_or_else(|e| panic!("bad {}: {e}", file.display()));
         for (name, entry) in more {
             let replaced = match lib.entries.get(&name) {
+                // The "diylc" entry is compared as written: only diylc knows what it means.
                 Some(old) if *old == entry => continue,
                 Some(_) => Some(match lib.from.get(&name) {
                     Some((earlier, _)) => format!("a different one from {}", earlier.display()),
@@ -134,8 +135,6 @@ pub struct Found {
     pub layers: Layers,
     /// A module (see `Part::module`).
     pub module: bool,
-    /// Which DIYLC part to draw it as, if the entry says.
-    pub diylc: Option<diylc::Part>,
     /// The file it came from, if not the built-in library, and what it replaced: see `Part::footprint_from`.
     pub from: Option<String>,
 }
@@ -158,10 +157,18 @@ impl Library {
         });
         let layers = entry.layers.map_or(Layers::of(entry.module, entry.low), |l| l.checked(&format!("{FOOTPRINTS}: {name}")));
         Found {
-            footprint: Footprint { name: full_name.to_string(), w: entry.w, h: entry.h, pins, body },
+            footprint: Footprint {
+                name: full_name.to_string(),
+                w: entry.w,
+                h: entry.h,
+                pins,
+                body,
+                // A module is a board of its own; what a DIYLC drawing says comes later (`diylc::look`).
+                look: if entry.module { Look::OwnBoard } else { Look::Box },
+                drawings: entry.diylc.iter().map(|d| (Format::Diylc, Drawing(d.clone()))).collect::<Drawings>(),
+            },
             layers,
             module: entry.module,
-            diylc: entry.diylc.clone(),
             from,
         }
     }

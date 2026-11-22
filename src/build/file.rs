@@ -1,13 +1,15 @@
 //! The layout file: one plain JSON file that holds a `Build`, what you asked for and what was
 //! made of it. `to_json` writes it, `from_json` reads it back.
 //!
-//!     { "format": "harmonia-layout", "version": 3, "title": "Placed by rules",
+//!     { "format": "harmonia-layout", "version": 4, "title": "Placed by rules",
 //!       "made": { "circuit": "circuits/555_blinker.net", "judge": "rules", "seed": 1, ... },
 //!       "design": {
 //!         "board": { "width": 18, "height": 12 }, "power": "+5V", "ground": "GND",
 //!         "rules": [ { "kind": "edge", "part": "J1", "edge": "left" }, ... ], "choices": [],
 //!         "parts": [ { "reference": "U1", "value": "NE555", "footprint": "...", "size": [4, 4],
-//!                      "layers": [1, 2], "pins": [ { "name": "1", "at": [0, 3] }, ... ] }, ... ],
+//!                      "layers": [1, 2], "look": { "as": "round", "plus": "1" },
+//!                      "footprint_drawings": { "diylc": { "part": "RadialElectrolytic" } },
+//!                      "pins": [ { "name": "1", "at": [0, 3] }, ... ] }, ... ],
 //!         "nets": [ { "name": "GND", "pins": ["U1.1", "C1.2", "J1.2"] }, ... ] },
 //!       "layout": {
 //!         "parts": [ { "reference": "U1", "at": [6, 3], "rot": 0,
@@ -28,9 +30,8 @@
 //! out again from the design and the layout, with today's measurements.
 
 use super::{Build, Layout, Made};
-use crate::board::{BoardSize, Design, Footprint, Part, Layers, Net, Pin, Place, Placement, Point, Run};
+use crate::board::{BoardSize, Design, Drawings, Footprint, Layers, Look, Net, Part, Pin, Place, Placement, Point, Run};
 use crate::constraints::{self, Rule};
-use crate::diylc::{self, Source};
 use crate::route::Routing;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -38,7 +39,7 @@ use std::collections::BTreeMap;
 /// What the file says it is, and which version of the file format. A change to the format that
 /// an older reader would get wrong gets a new version.
 const FORMAT: &str = "harmonia-layout";
-const VERSION: u32 = 3;
+const VERSION: u32 = 4;
 
 /// Lines in the file are kept to about this many characters (see `pretty`).
 const LINE: usize = 100;
@@ -101,17 +102,25 @@ struct PartEntry {
     /// A module: a board of its own, over its whole outline, standing only on its `body`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     module: bool,
-    /// footprints.json's "diylc" entry: which DIYLC part to draw it as.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    diylc: Option<diylc::Part>,
+    /// What its footprint looks like in the pictures: left out for a box.
+    #[serde(default, skip_serializing_if = "is_box")]
+    look: Look,
+    /// How file formats draw its footprint (footprints.json's "diylc" entry), by format.
+    #[serde(default, skip_serializing_if = "Drawings::is_empty")]
+    footprint_drawings: Drawings,
     pins: Vec<PinEntry>,
     /// The holes the part stands on, inside its outline before turning: only written when it isn't
     /// the whole outline (a module's headers, or a part drawn at an angle).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     body: Option<Vec<Point>>,
-    /// For a part read from a DIYLC sketch: your drawing of it, written back moved and turned.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    diylc_drawing: Option<Source>,
+    /// How file formats draw the part itself, by format: for a part read from a DIYLC sketch, your
+    /// drawing of it, written back moved and turned.
+    #[serde(default, skip_serializing_if = "Drawings::is_empty")]
+    drawings: Drawings,
+}
+
+fn is_box(look: &Look) -> bool {
+    *look == Look::Box
 }
 
 #[derive(Serialize, Deserialize)]
@@ -200,10 +209,11 @@ pub fn to_json(build: &Build) -> String {
             size: (comp.footprint.w, comp.footprint.h),
             layers: comp.layers,
             module: comp.module,
-            diylc: comp.diylc.clone(),
+            look: comp.footprint.look.clone(),
+            footprint_drawings: comp.footprint.drawings.clone(),
             pins: comp.footprint.pins.iter().map(|pin| PinEntry { name: pin.name.clone(), at: pin.at, off_grid: pin.off_grid }).collect(),
             body: (comp.footprint.body != Footprint::full_body(comp.footprint.w, comp.footprint.h)).then(|| comp.footprint.body.clone()),
-            diylc_drawing: comp.source.clone(),
+            drawings: comp.drawings.clone(),
         })
         .collect();
     let placed = c
@@ -218,7 +228,7 @@ pub fn to_json(build: &Build) -> String {
             pins: comp.footprint.pins.iter().enumerate().map(|(pi, pin)| HoleEntry { name: pin.name.clone(), hole: g.pins[ci][pi] }).collect(),
         })
         .collect();
-    // Each run's copper. The traces as straight pieces, the way the drawings show them; each run's
+    // Each run's copper. The traces as straight pieces, the way the outputs show them; each run's
     // pieces come one after the other (see `Build::design`), so picking them out keeps their order.
     let routing = &layout.routing;
     let straight = routing.straight_traces();
@@ -294,9 +304,10 @@ pub fn from_json(text: &str) -> Build {
                 h: p.size.1,
                 pins: p.pins.iter().map(|pin| Pin { name: pin.name.clone(), at: pin.at, off_grid: pin.off_grid }).collect(),
                 body: p.body.clone().unwrap_or_else(|| Footprint::full_body(p.size.0, p.size.1)),
+                look: p.look.clone(),
+                drawings: p.footprint_drawings.clone(),
             },
-            diylc: p.diylc.clone(),
-            source: p.diylc_drawing.clone(),
+            drawings: p.drawings.clone(),
             layers: p.layers.checked(&format!("layout file: {}", p.reference)),
             module: p.module,
             // Which file each footprint came from is in `made.footprints`; the part's shape is here.
