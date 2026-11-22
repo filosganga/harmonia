@@ -75,7 +75,7 @@ pub fn load(path: &str, opts: Options) -> (Design, Placement, Copper) {
     let root = doc.root_element();
     let items: Vec<Node> = child(root, "components").map(|c| c.children().filter(|n| n.is_element()).collect()).unwrap_or_default();
 
-    let mut parts: Vec<Drawn> = Vec::new();
+    let mut drawn: Vec<Drawn> = Vec::new();
     let mut conductors: Vec<Conductor> = Vec::new();
     let mut decorations: HashMap<String, Node> = HashMap::new();
     let mut board_origin: Option<Point> = None;
@@ -99,7 +99,7 @@ pub fn load(path: &str, opts: Options) -> (Design, Placement, Copper) {
                 };
                 let pins: Vec<(String, Inches)> = pin_names.into_iter().zip(points.iter().copied()).collect();
                 let body = body_of(&class, item, &pins);
-                parts.push(Drawn { id: text_of(item, "id").unwrap_or_default(), name, class, value: value_of(item), pins, body, node: item });
+                drawn.push(Drawn { id: text_of(item, "id").unwrap_or_default(), name, class, value: value_of(item), pins, body, node: item });
             }
             Kind::Trace => conductors.push(Conductor::Trace(points[0], points[1], size_of(item, "thickness").unwrap_or(0.04) / 2.0, layer_of(item))),
             Kind::Wire => {
@@ -116,7 +116,7 @@ pub fn load(path: &str, opts: Options) -> (Design, Placement, Copper) {
             }
         }
     }
-    for (pi, p) in parts.iter().enumerate() {
+    for (pi, p) in drawn.iter().enumerate() {
         if p.name.contains('.') {
             panic!("{path}: part name {} has a '.' in it, which would confuse pin names like R1.2", p.name);
         }
@@ -125,13 +125,13 @@ pub fn load(path: &str, opts: Options) -> (Design, Placement, Copper) {
         }
     }
 
-    let (nets, net_of) = nets(&parts, &conductors);
-    let (components, places, owner) = components(path, &root, &parts, &decorations);
+    let (nets, net_of) = nets(&drawn, &conductors);
+    let (parts, places, owner) = circuit_parts(path, &root, &drawn, &decorations);
     // A pin's name in the circuit: "R1.2" for a part on its own, "ESP32C6.ESP32C6-L.5v" in a module.
     let label = |pi: usize, i: usize| {
         let (ci, in_group) = owner[pi];
-        let pin = &parts[pi].pins[i].0;
-        if in_group { format!("{}.{}.{pin}", components[ci].reference, parts[pi].name) } else { format!("{}.{pin}", components[ci].reference) }
+        let pin = &drawn[pi].pins[i].0;
+        if in_group { format!("{}.{}.{pin}", parts[ci].reference, drawn[pi].name) } else { format!("{}.{pin}", parts[ci].reference) }
     };
     let nets = name_nets(nets.iter().map(|members| members.iter().map(|&(pi, i)| label(pi, i)).collect()).collect());
 
@@ -161,7 +161,7 @@ pub fn load(path: &str, opts: Options) -> (Design, Placement, Copper) {
 
     let (power, ground) = netlist::power_and_ground(&nets, &opts);
     let board: BoardSize = opts.board;
-    (Design::new(board, components, nets, power, ground), sketch, copper)
+    (Design::new(board, parts, nets, power, ground), sketch, copper)
 }
 
 /// Each net as its pins: (drawn part, pin).
@@ -169,7 +169,7 @@ type Nets = Vec<Vec<(usize, usize)>>;
 
 /// Joins everything that touches, then lists each group of two or more pins; and for each
 /// conductor, which of those groups it's in (None if it joins fewer than two pins).
-fn nets(parts: &[Drawn], conductors: &[Conductor]) -> (Nets, Vec<Option<usize>>) {
+fn nets(drawn: &[Drawn], conductors: &[Conductor]) -> (Nets, Vec<Option<usize>>) {
     let n = conductors.len();
     let mut parent: Vec<usize> = (0..n).collect();
     fn find(parent: &mut [usize], i: usize) -> usize {
@@ -183,7 +183,7 @@ fn nets(parts: &[Drawn], conductors: &[Conductor]) -> (Nets, Vec<Option<usize>>)
     // through the board and so touches copper on any layer.
     let shape = |c: &Conductor| -> (Vec<(Inches, Inches)>, f64, Option<u8>) {
         match *c {
-            Conductor::Pin(pi, i) => (vec![(parts[pi].pins[i].1, parts[pi].pins[i].1)], 0.0, None),
+            Conductor::Pin(pi, i) => (vec![(drawn[pi].pins[i].1, drawn[pi].pins[i].1)], 0.0, None),
             Conductor::Trace(a, b, r, layer) => (vec![(a, b)], r, Some(layer)),
             // A wire only touches things at its ends; what it passes over isn't connected.
             Conductor::Wire(a, b, _) => (vec![(a, a), (b, b)], 0.0, None),
@@ -226,8 +226,8 @@ fn nets(parts: &[Drawn], conductors: &[Conductor]) -> (Nets, Vec<Option<usize>>)
 }
 
 /// Turns the drawn parts into circuit parts: one per DIYLC group with pins in it, one per other part.
-/// Also returns each one's top-left hole in the sketch, and for each drawn part (its component, in a group?).
-fn components(path: &str, root: &Node, parts: &[Drawn], decorations: &HashMap<String, Node>) -> (Vec<Part>, Vec<Point>, Vec<(usize, bool)>) {
+/// Also returns each one's top-left hole in the sketch, and for each drawn part (its part, in a group?).
+fn circuit_parts(path: &str, root: &Node, drawn: &[Drawn], decorations: &HashMap<String, Node>) -> (Vec<Part>, Vec<Point>, Vec<(usize, bool)>) {
     let mut groups: Vec<(String, Vec<String>)> = Vec::new();
     if let Some(gx) = child(*root, "groupsEx") {
         for g in gx.children().filter(|n| n.has_tag_name("group")) {
@@ -235,7 +235,7 @@ fn components(path: &str, root: &Node, parts: &[Drawn], decorations: &HashMap<St
             groups.push((text_of(g, "name").unwrap_or_default(), ids));
         }
     }
-    let mut owner: Vec<Option<(usize, bool)>> = vec![None; parts.len()];
+    let mut owner: Vec<Option<(usize, bool)>> = vec![None; drawn.len()];
     let mut out: Vec<Part> = Vec::new();
     let mut places: Vec<Point> = Vec::new();
     let add = |reference: String, members: Vec<usize>, extra: Vec<Node>, group: Option<(String, Vec<String>)>, out: &mut Vec<Part>, places: &mut Vec<Point>| {
@@ -245,7 +245,7 @@ fn components(path: &str, root: &Node, parts: &[Drawn], decorations: &HashMap<St
         let mut pins: Vec<(String, Point, bool)> = Vec::new();
         let mut body: Vec<Point> = Vec::new();
         for &pi in &members {
-            let p = &parts[pi];
+            let p = &drawn[pi];
             for (name, at) in &p.pins {
                 let name = if in_group { format!("{}.{name}", p.name) } else { name.clone() };
                 pins.push((name, hole(*at), off_grid(*at)));
@@ -258,12 +258,12 @@ fn components(path: &str, root: &Node, parts: &[Drawn], decorations: &HashMap<St
         let ((x0, y0), (x1, y1)) = bounds(&outline);
         let local = |(x, y): Point| (x - x0, y - y0);
         let single = members.len() == 1 && !in_group;
-        let first = &parts[members[0]];
+        let first = &drawn[members[0]];
         // A group standing on less than its outline (its headers) is a module, on headers.
         let (w, h) = (x1 - x0 + 1, y1 - y0 + 1);
         let module = !single && body.len() < (w * h) as usize;
         let low = single && class(&first.class).is_some_and(|c| c.low);
-        let xml = members.iter().map(|&pi| parts[pi].node).chain(extra).map(|n| n.document().input_text()[n.range()].to_string()).collect();
+        let xml = members.iter().map(|&pi| drawn[pi].node).chain(extra).map(|n| n.document().input_text()[n.range()].to_string()).collect();
         out.push(Part {
             reference,
             value: if single { first.value.clone() } else { String::new() },
@@ -283,7 +283,7 @@ fn components(path: &str, root: &Node, parts: &[Drawn], decorations: &HashMap<St
         places.push((x0, y0));
     };
     for (gname, ids) in &groups {
-        let members: Vec<usize> = (0..parts.len()).filter(|&pi| owner[pi].is_none() && ids.contains(&parts[pi].id)).collect();
+        let members: Vec<usize> = (0..drawn.len()).filter(|&pi| owner[pi].is_none() && ids.contains(&drawn[pi].id)).collect();
         if members.is_empty() {
             continue; // a group of labels and shapes only: nothing to place
         }
@@ -291,13 +291,13 @@ fn components(path: &str, root: &Node, parts: &[Drawn], decorations: &HashMap<St
         for &pi in &members {
             owner[pi] = Some((out.len(), true));
         }
-        let name = if gname.is_empty() { parts[members[0]].name.clone() } else { gname.clone() };
+        let name = if gname.is_empty() { drawn[members[0]].name.clone() } else { gname.clone() };
         add(name, members, extra, Some((gname.clone(), ids.clone())), &mut out, &mut places);
     }
-    for pi in 0..parts.len() {
+    for pi in 0..drawn.len() {
         if owner[pi].is_none() {
             owner[pi] = Some((out.len(), false));
-            add(parts[pi].name.clone(), vec![pi], Vec::new(), None, &mut out, &mut places);
+            add(drawn[pi].name.clone(), vec![pi], Vec::new(), None, &mut out, &mut places);
         }
     }
     // DIYLC lets two things share a name; here each part needs its own, so add -2, -3...

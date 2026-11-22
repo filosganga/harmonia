@@ -115,7 +115,7 @@ pub fn write(build: &Build) -> String {
     s += "\n</diylc.boards.PerfBoard>\n";
 
     let mut groups: Vec<(String, Vec<String>)> = Vec::new();
-    for (ci, (comp, place)) in c.components.iter().zip(placement).enumerate() {
+    for (ci, (comp, place)) in c.parts.iter().zip(placement).enumerate() {
         // A part that came from your own DIYLC file: write back your drawing, moved and turned.
         if let Some(src) = &comp.source {
             for xml in &src.xml {

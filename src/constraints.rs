@@ -566,11 +566,11 @@ pub fn read_board_file(netlist_path: &str, chosen: Option<&str>) -> Option<(Stri
 /// in the board file; returns why if the rules are fine but some part has no place meeting them.
 pub fn resolve(case: &Case, c: &Design) -> Result<Constraints, String> {
     let index = |name: &str| {
-        c.components.iter().position(|comp| comp.reference == name).unwrap_or_else(|| panic!("board file: there's no part called {name}"))
+        c.parts.iter().position(|comp| comp.reference == name).unwrap_or_else(|| panic!("board file: there's no part called {name}"))
     };
     // The net a pin is on, if it's connected to anything.
     let net_of = |p: (usize, usize)| c.net_pins.iter().position(|pins| pins.contains(&p));
-    let n = c.components.len();
+    let n = c.parts.len();
     let (w, h) = (c.board.width, c.board.height);
     let mut out = Constraints { choices: case.choices.clone(), allowed: vec![None; n], place_cost: vec![HashMap::new(); n], layers: vec![None; n], ..Default::default() };
     // rules_for[component] = the rules about where it goes, with their weights
@@ -641,7 +641,7 @@ pub fn resolve(case: &Case, c: &Design) -> Result<Constraints, String> {
     // how broken its soft ones are there. A part with rules also stays on the board and off the
     // hard keep-outs, so a rule never pushes it there.
     for (i, rules) in rules_for.iter().enumerate().filter(|(_, rules)| !rules.is_empty()) {
-        let comp = &c.components[i];
+        let comp = &c.parts[i];
         let fits = |p: Place| {
             let (pw, ph) = board::size(comp, p.rot);
             let on_keepout = comp.footprint.body.iter().any(|&hole| {

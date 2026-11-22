@@ -191,7 +191,7 @@ pub fn to_json(build: &Build) -> String {
     let (c, layout) = (&build.design, &build.layout);
     let g = crate::board::geometry(c, &layout.placement);
     let parts = c
-        .components
+        .parts
         .iter()
         .map(|comp| PartEntry {
             reference: comp.reference.clone(),
@@ -207,7 +207,7 @@ pub fn to_json(build: &Build) -> String {
         })
         .collect();
     let placed = c
-        .components
+        .parts
         .iter()
         .zip(&layout.placement)
         .enumerate()
@@ -282,7 +282,7 @@ pub fn from_json(text: &str) -> Build {
     let d = file.design;
 
     // The design, then the case of its rules the file says it took.
-    let components: Vec<Part> = d
+    let parts: Vec<Part> = d
         .parts
         .iter()
         .map(|p| Part {
@@ -307,7 +307,7 @@ pub fn from_json(text: &str) -> Build {
     if let Some(net) = d.nets.iter().find(|n| n.pins.len() < 2) {
         panic!("layout file: net {} joins fewer than two pins", net.name);
     }
-    let unruled = Design::new(board, components, d.nets, d.power, d.ground);
+    let unruled = Design::new(board, parts, d.nets, d.power, d.ground);
     let (cases, _) = constraints::designs(&unruled, &d.rules);
     let mut design = cases.into_iter().find(|c| c.constraints.choices == d.choices).unwrap_or_else(|| {
         panic!("layout file: its rules have no case that takes {:?}", d.choices)
@@ -315,7 +315,7 @@ pub fn from_json(text: &str) -> Build {
 
     // Where each part sits, in the design's order of parts.
     let l = file.layout;
-    if l.parts.len() != design.components.len() || l.parts.iter().zip(&design.components).any(|(p, c)| p.reference != c.reference) {
+    if l.parts.len() != design.parts.len() || l.parts.iter().zip(&design.parts).any(|(p, c)| p.reference != c.reference) {
         panic!("layout file: \"layout\" should place the design's parts, in the same order");
     }
     let placement: Placement = l.parts.iter().map(|p| Place { x: p.at.0, y: p.at.1, rot: p.rot }).collect();
@@ -351,7 +351,7 @@ pub fn from_json(text: &str) -> Build {
     for (ci, part) in l.parts.iter().enumerate() {
         for (pi, pin) in part.pins.iter().enumerate() {
             let name = design.pin_name((ci, pi));
-            if pin.name != design.components[ci].footprint.pins[pi].name || pin.hole != g.pins[ci][pi] {
+            if pin.name != design.parts[ci].footprint.pins[pi].name || pin.hole != g.pins[ci][pi] {
                 panic!("layout file: {name} says it's in hole {:?}, but its part's at, rot and size put it in {:?}", pin.hole, g.pins[ci][pi]);
             }
         }

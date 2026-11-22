@@ -141,7 +141,7 @@ pub fn draw(build: &Build, side: Side) -> String {
     // Parts that collide, hang off the board, sit on a hard keep-out or don't fit under a module (both
     // parts of a collision): only in a layout that isn't allowed, like a sketch as you drew it.
     let mut misplaced: HashSet<usize> = HashSet::new();
-    for clash in measure::clashes(c, &g, &vec![true; c.components.len()]) {
+    for clash in measure::clashes(c, &g, &vec![true; c.parts.len()]) {
         misplaced.insert(clash.part);
         if let measure::Why::OnPart(other) = clash.why {
             misplaced.insert(other);
@@ -239,7 +239,7 @@ pub fn draw(build: &Build, side: Side) -> String {
     }
 
     // --- the parts
-    for (i, comp) in c.components.iter().enumerate() {
+    for (i, comp) in c.parts.iter().enumerate() {
         let (pins, outline) = (&g.pins[i], &g.outlines[i]);
         let reference = esc(&comp.reference);
         let label = esc(format!("{} {}", comp.reference, comp.value).trim());
@@ -378,7 +378,7 @@ pub fn draw(build: &Build, side: Side) -> String {
         line(&mut legend, &mut ly, "not allowed, so not scored", "legend");
     }
     ly += line_h * 0.5;
-    if (0..c.components.len()).any(clashes) {
+    if (0..c.parts.len()).any(clashes) {
         for text in wrap("Boxed in red: a part that collides, hangs off the board, sits on a hard keep-out, or doesn't fit under a module.", 60) {
             line(&mut legend, &mut ly, &text, "warn");
         }
@@ -398,7 +398,7 @@ pub fn draw(build: &Build, side: Side) -> String {
         }
         ly += line_h * lines.len() as f64 + line_h * 0.45;
     }
-    let alone = (0..c.components.len()).flat_map(|ci| (0..c.components[ci].footprint.pins.len()).map(move |pi| (ci, pi))).filter(|p| !net_of.contains_key(p)).count();
+    let alone = (0..c.parts.len()).flat_map(|ci| (0..c.parts[ci].footprint.pins.len()).map(move |pi| (ci, pi))).filter(|p| !net_of.contains_key(p)).count();
     if alone > 0 {
         writeln!(legend, r#"<rect x="{lx:.1}" y="{:.1}" width="{swatch:.1}" height="{swatch:.1}" rx="{:.1}" fill="{LONE}"/>"#, ly - swatch * 0.8, swatch / 4.0).unwrap();
         writeln!(legend, r#"<text x="{:.1}" y="{ly:.1}" class="legend">connected to nothing: {alone} pins</text>"#, lx + swatch * 1.6).unwrap();

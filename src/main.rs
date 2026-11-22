@@ -272,8 +272,8 @@ fn case_name(c: &Design) -> String {
 /// board file's rules.
 fn print_nets(cases: &[Design]) {
     let c = &cases[0]; // the parts and nets are the same in every case (how one is mounted may not be: this is the first's)
-    println!("{} parts:", c.components.len());
-    for (i, comp) in c.components.iter().enumerate() {
+    println!("{} parts:", c.parts.len());
+    for (i, comp) in c.parts.iter().enumerate() {
         let kind = if comp.module && c.room_under(i) { "  (module: parts can go under it)" } else { "" };
         println!("  {:<12} {:>2}x{:<2} holes, {} pins{kind}", comp.reference, comp.footprint.w, comp.footprint.h, comp.footprint.pins.len());
     }
@@ -344,7 +344,7 @@ fn made(args: &Args, path: &str, board_file: Option<String>, start: &str, cases:
         command: again(args, "place", path),
         version: version(),
         footprints: {
-            let mut from: Vec<String> = cases[k].components.iter().filter_map(|c| c.footprint_from.clone()).collect();
+            let mut from: Vec<String> = cases[k].parts.iter().filter_map(|c| c.footprint_from.clone()).collect();
             from.sort();
             from.dedup();
             from

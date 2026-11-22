@@ -254,7 +254,7 @@ pub(super) fn empty_grid(c: &Design, g: &Geometry) -> Grid {
 
     // Holes where a part takes layer 1, where jumper wires lie: where it stands, and a module's
     // board if it comes down that low. A jumper goes under a module on headers.
-    for (k, comp) in c.components.iter().enumerate() {
+    for (k, comp) in c.parts.iter().enumerate() {
         let layers = c.layers(k);
         let stands = layers.standing().takes(1).then_some(&g.bodies[k]);
         let board = (comp.module && layers.takes(1)).then_some(&g.outlines[k]);
@@ -295,7 +295,7 @@ pub(super) fn empty_grid(c: &Design, g: &Geometry) -> Grid {
     // only (or nobody's, for a pin on no run, or where two such pins of different runs meet).
     let run_of: std::collections::HashMap<(usize, usize), usize> =
         c.runs.iter().enumerate().flat_map(|(r, run)| run.pins.iter().map(move |&p| (p, r))).collect();
-    for (ci, comp) in c.components.iter().enumerate() {
+    for (ci, comp) in c.parts.iter().enumerate() {
         for (pi, _) in comp.footprint.pins.iter().enumerate().filter(|(_, pin)| pin.off_grid) {
             let (x, y) = g.pins[ci][pi];
             let mine = run_of.get(&(ci, pi)).map_or(Owner::Blocked, |&r| Owner::Run(r));

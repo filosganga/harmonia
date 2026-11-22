@@ -197,7 +197,7 @@ impl Routing {
 /// The `!!` lines for connections the router couldn't make, naming each pin left out.
 pub fn unrouted_problems(c: &Design, g: &Geometry, routing: &Routing) -> Vec<String> {
     let name_of = |hole: Point| {
-        let pins = c.components.iter().enumerate().flat_map(|(ci, comp)| (0..comp.footprint.pins.len()).map(move |pi| (ci, pi)));
+        let pins = c.parts.iter().enumerate().flat_map(|(ci, comp)| (0..comp.footprint.pins.len()).map(move |pi| (ci, pi)));
         pins.filter(|&(ci, pi)| g.pins[ci][pi] == hole)
             .map(|pin| c.pin_name(pin))
             .next()
