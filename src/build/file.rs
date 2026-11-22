@@ -30,9 +30,10 @@
 //! out again from the design and the layout, with today's measurements.
 
 use super::{Build, Layout, Made};
-use crate::board::{BoardSize, Design, Drawings, Footprint, Layers, Look, Net, Part, Pin, Place, Placement, Point, Run};
-use crate::constraints::{self, Rule};
+use crate::board::{Board, Layers, Place, Placement, Point};
+use crate::circuit::{Circuit, Drawings, Footprint, Look, Net, Part, Pin};
 use crate::route::Routing;
+use crate::rules::{self, Rule, Run};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -197,9 +198,10 @@ struct Score {
 
 /// The build as the text of a layout file.
 pub fn to_json(build: &Build) -> String {
-    let (c, layout) = (&build.design, &build.layout);
-    let g = crate::board::geometry(c, &layout.placement);
-    let parts = c
+    let (c, layout) = (&build.case, &build.layout);
+    let circuit = &c.circuit;
+    let g = crate::board::geometry(circuit, &layout.placement);
+    let parts = circuit
         .parts
         .iter()
         .map(|comp| PartEntry {
@@ -216,7 +218,7 @@ pub fn to_json(build: &Build) -> String {
             drawings: comp.drawings.clone(),
         })
         .collect();
-    let placed = c
+    let placed = circuit
         .parts
         .iter()
         .zip(&layout.placement)
@@ -229,7 +231,7 @@ pub fn to_json(build: &Build) -> String {
         })
         .collect();
     // Each run's copper. The traces as straight pieces, the way the outputs show them; each run's
-    // pieces come one after the other (see `Build::design`), so picking them out keeps their order.
+    // pieces come one after the other (see `Build::case`), so picking them out keeps their order.
     let routing = &layout.routing;
     let straight = routing.straight_traces();
     let of_run = |list: &[(usize, Point, Point)], r: usize| list.iter().filter(|t| t.0 == r).map(|&(_, a, b)| [a, b]).collect();
@@ -238,9 +240,9 @@ pub fn to_json(build: &Build) -> String {
         .iter()
         .enumerate()
         .map(|(r, run)| RunEntry {
-            net: c.nets[run.net].name.clone(),
-            star: run.star.map(|p| c.pin_name(p)),
-            pins: run.pins.iter().map(|&p| c.pin_name(p)).collect(),
+            net: circuit.nets[run.net].name.clone(),
+            star: run.star.map(|p| circuit.pin_name(p)),
+            pins: run.pins.iter().map(|&p| circuit.pin_name(p)).collect(),
             traces: of_run(&straight, r),
             jumpers: of_run(&routing.jumpers, r),
             solder_wires: of_run(&routing.bottom, r),
@@ -256,12 +258,12 @@ pub fn to_json(build: &Build) -> String {
         made: build.made.clone(),
         design: DesignEntry {
             board: BoardEntry { width: c.board.width, height: c.board.height },
-            power: c.power.clone(),
-            ground: c.ground.clone(),
+            power: circuit.power.clone(),
+            ground: circuit.ground.clone(),
             rules: c.rules.clone(),
             choices: c.constraints.choices.clone(),
             parts,
-            nets: c.nets.clone(),
+            nets: circuit.nets.clone(),
         },
         layout: LayoutEntry { parts: placed, runs },
         score: Score {
@@ -314,30 +316,30 @@ pub fn from_json(text: &str) -> Build {
             footprint_from: None,
         })
         .collect();
-    let board = BoardSize { width: d.board.width, height: d.board.height };
+    let board = Board { width: d.board.width, height: d.board.height };
     if let Some(net) = d.nets.iter().find(|n| n.pins.len() < 2) {
         panic!("layout file: net {} joins fewer than two pins", net.name);
     }
-    let unruled = Design::new(board, parts, d.nets, d.power, d.ground);
-    let (cases, _) = constraints::designs(&unruled, &d.rules);
-    let mut design = cases.into_iter().find(|c| c.constraints.choices == d.choices).unwrap_or_else(|| {
+    let circuit = Circuit::new(parts, d.nets).with_power_and_ground(d.power, d.ground);
+    let (cases, _) = rules::cases(&circuit, board, &d.rules);
+    let mut case = cases.into_iter().find(|c| c.constraints.choices == d.choices).unwrap_or_else(|| {
         panic!("layout file: its rules have no case that takes {:?}", d.choices)
     });
 
-    // Where each part sits, in the design's order of parts.
+    // Where each part sits, in the case's order of parts.
     let l = file.layout;
-    if l.parts.len() != design.parts.len() || l.parts.iter().zip(&design.parts).any(|(p, c)| p.reference != c.reference) {
+    if l.parts.len() != case.circuit.parts.len() || l.parts.iter().zip(&case.circuit.parts).any(|(p, c)| p.reference != c.reference) {
         panic!("layout file: \"layout\" should place the design's parts, in the same order");
     }
     let placement: Placement = l.parts.iter().map(|p| Place { x: p.at.0, y: p.at.1, rot: p.rot }).collect();
 
     // The runs, in the order the router routes them first, as `Build::routed` keeps them: they must be
-    // the ones the design's rules make, or the copper would be on the wrong runs.
-    let g = crate::board::geometry(&design, &placement);
-    let order = crate::route::order(&design, &g);
-    design.runs = order.iter().map(|&r| design.runs[r].clone()).collect();
+    // the ones the case's rules make, or the copper would be on the wrong runs.
+    let g = crate::board::geometry(&case.circuit, &placement);
+    let order = crate::route::order(&case, &g);
+    case.runs = order.iter().map(|&r| case.runs[r].clone()).collect();
     let said: Vec<(String, Option<String>, Vec<String>)> = l.runs.iter().map(|e| (e.net.clone(), e.star.clone(), e.pins.clone())).collect();
-    let made_by_rules: Vec<(String, Option<String>, Vec<String>)> = design.runs.iter().map(|run: &Run| (design.nets[run.net].name.clone(), run.star.map(|p| design.pin_name(p)), run.pins.iter().map(|&p| design.pin_name(p)).collect())).collect();
+    let made_by_rules: Vec<(String, Option<String>, Vec<String>)> = case.runs.iter().map(|run: &Run| (case.circuit.nets[run.net].name.clone(), run.star.map(|p| case.circuit.pin_name(p)), run.pins.iter().map(|&p| case.circuit.pin_name(p)).collect())).collect();
     if said != made_by_rules {
         panic!("layout file: its runs aren't the ones its design's rules make");
     }
@@ -354,20 +356,20 @@ pub fn from_json(text: &str) -> Build {
 
     // What's left unrouted is one of its run's pins.
     for &(r, _, pin) in &routing.unrouted {
-        if !design.runs[r].pins.iter().any(|&(ci, pi)| g.pins[ci][pi] == pin) {
-            panic!("layout file: {} has something unrouted at {pin:?}, which isn't one of its pins", design.nets[design.runs[r].net].name);
+        if !case.runs[r].pins.iter().any(|&(ci, pi)| g.pins[ci][pi] == pin) {
+            panic!("layout file: {} has something unrouted at {pin:?}, which isn't one of its pins", case.circuit.nets[case.runs[r].net].name);
         }
     }
     // What the file says twice must agree: each pin's hole.
     for (ci, part) in l.parts.iter().enumerate() {
         for (pi, pin) in part.pins.iter().enumerate() {
-            let name = design.pin_name((ci, pi));
-            if pin.name != design.parts[ci].footprint.pins[pi].name || pin.hole != g.pins[ci][pi] {
+            let name = case.circuit.pin_name((ci, pi));
+            if pin.name != case.circuit.parts[ci].footprint.pins[pi].name || pin.hole != g.pins[ci][pi] {
                 panic!("layout file: {name} says it's in hole {:?}, but its part's at, rot and size put it in {:?}", pin.hole, g.pins[ci][pi]);
             }
         }
     }
-    Build::of(design, Layout { placement, routing }, file.title, file.made)
+    Build::of(case, Layout { placement, routing }, file.title, file.made)
 }
 
 /// A straight trace from `a` to `b` (across, down or at 45°) as the steps between neighbouring

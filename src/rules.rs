@@ -1,4 +1,6 @@
-//! The board file: which perfboard you're building on and your own rules for it.
+//! The board file: which perfboard you're building on and your own rules for it; and what they mean
+//! for a circuit: `cases` works them out, one `Case` per option of their one-ofs, which is what the
+//! placer, the router and the score work on.
 //!
 //! It sits next to the netlist with the same name (circuits/555_blinker.net ->
 //! circuits/555_blinker.json), or is the file `--board-file` names, and every part of it is optional:
@@ -70,7 +72,8 @@
 //! flat on its pads, [0, 1] or [0, 0]. It has no weight: it's how the part is built. To let the
 //! placer try two ways of mounting, put them in a one-of.
 
-use crate::board::{self, Design, Part, Layers, Place, Placement, Point, Run};
+use crate::board::{self, Board, Layers, Place, Placement, Point};
+use crate::circuit::{Circuit, Part};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
@@ -331,10 +334,10 @@ impl Rule {
     }
 }
 
-/// One way for all the board file's rules to hold: a plain list of rules (no all-of or one-of), and
-/// for messages, the option it took in each one-of on the way.
+/// One way for all the board file's rules to hold, as written: a plain list of rules (no all-of or
+/// one-of), and for messages, the option it took in each one-of on the way.
 #[derive(Default)]
-pub struct Case<'a> {
+pub struct CaseRules<'a> {
     /// Each rule with its weight: its own, or one from an all-of or one-of around it.
     rules: Vec<(&'a Rule, Option<f64>)>,
     pub choices: Vec<String>,
@@ -342,30 +345,67 @@ pub struct Case<'a> {
 
 /// The board file's rules as cases: one, unless a one-of makes more (see `rule_cases`). The file's
 /// `rules` all hold, like an all-of's.
-fn cases(rules: &[Rule]) -> Vec<Case<'_>> {
+fn case_rules(rules: &[Rule]) -> Vec<CaseRules<'_>> {
     check_weights(rules);
     every_case(rules, None)
 }
 
-/// `design` (with no rules yet) with the board file's `rules`, once for each case of them that can
+/// One case of the board file's rules, worked out for a circuit on a board: what the placer, the
+/// router and the score work on. With a `Layout` it makes a `Build`.
+#[derive(Clone)]
+pub struct Case {
+    pub circuit: Circuit,
+    pub board: Board,
+    /// The board file's rules as written: all of them, every case's.
+    pub rules: Vec<Rule>,
+    /// This case's rules, matched up with the parts (where parts go, keep-outs, near, star), and
+    /// the option it took in each one-of (`choices`).
+    pub constraints: Constraints,
+    /// What the router joins: one run per net, or one per branch of a star net.
+    pub runs: Vec<Run>,
+}
+
+impl Case {
+    /// The layers part `i` takes: the board file's `layers` rule for it, or its own.
+    pub fn layers(&self, i: usize) -> Layers {
+        self.constraints.layers.get(i).copied().flatten().unwrap_or(self.circuit.parts[i].layers)
+    }
+
+    /// Whether another part may sit inside part `i`'s outline: a module's board raised above the
+    /// parts, or a part drawn at an angle, which only takes the line between its legs.
+    pub fn room_under(&self, i: usize) -> bool {
+        let comp = &self.circuit.parts[i];
+        if comp.module { self.layers(i).lo >= Layers::TOP } else { comp.footprint.body.len() < (comp.footprint.w * comp.footprint.h) as usize }
+    }
+}
+
+/// Pins to join with one piece of copper. Two runs never share copper, even on the same net,
+/// unless a soft star joins them (`Routing::joins`).
+#[derive(Clone)]
+pub struct Run {
+    pub net: usize,
+    /// (component index, pin index); for a star run the star point comes first.
+    pub pins: Vec<(usize, usize)>,
+    /// The star point, if this run is a branch of a star net.
+    pub star: Option<(usize, usize)>,
+}
+
+/// The `circuit` on the `board` with the board file's `rules`, once for each case of them that can
 /// be met; and why each other case can't (some part has no place meeting its rules). Stops on a
 /// mistake in the board file.
-pub fn designs(design: &Design, rules: &[Rule]) -> (Vec<Design>, Vec<String>) {
-    let (mut designs, mut left_out) = (Vec::new(), Vec::new());
-    for case in cases(rules) {
-        match resolve(&case, design) {
+pub fn cases(circuit: &Circuit, board: Board, rules: &[Rule]) -> (Vec<Case>, Vec<String>) {
+    let (mut cases, mut left_out) = (Vec::new(), Vec::new());
+    for option in case_rules(rules) {
+        match resolve(&option, circuit, board) {
             Ok(constraints) => {
-                let mut d = design.clone();
-                d.rules = rules.to_vec();
-                d.constraints = constraints;
-                d.runs = runs(&d); // now that the star rules are known
-                designs.push(d);
+                let runs = runs(circuit, &constraints); // now that the star rules are known
+                cases.push(Case { circuit: circuit.clone(), board, rules: rules.to_vec(), constraints, runs });
             }
-            Err(why) if case.choices.is_empty() => left_out.push(why),
-            Err(why) => left_out.push(format!("{}: {why}", case.choices.join("; "))),
+            Err(why) if option.choices.is_empty() => left_out.push(why),
+            Err(why) => left_out.push(format!("{}: {why}", option.choices.join("; "))),
         }
     }
-    (designs, left_out)
+    (cases, left_out)
 }
 
 /// Stops on a weight outside 0-1, in any rule however deep.
@@ -383,16 +423,16 @@ fn check_weights(rules: &[Rule]) {
 /// Every way a list of rules can all hold: each case of the first rule with each case of the rest.
 /// (Two one-ofs of 2 and 3 options make 2 x 3 = 6 cases.)
 /// `inherited` is the weight of an all-of or one-of they're in, for the rules without their own.
-fn every_case(rules: &[Rule], inherited: Option<f64>) -> Vec<Case<'_>> {
-    let mut cases = vec![Case::default()];
+fn every_case(rules: &[Rule], inherited: Option<f64>) -> Vec<CaseRules<'_>> {
+    let mut cases = vec![CaseRules::default()];
     for rule in rules {
         let options = rule_cases(rule, inherited);
         cases = cases
             .iter()
-            .flat_map(|case| {
-                options.iter().map(|option| Case {
-                    rules: case.rules.iter().chain(&option.rules).copied().collect(),
-                    choices: case.choices.iter().chain(&option.choices).cloned().collect(),
+            .flat_map(|so_far| {
+                options.iter().map(|option| CaseRules {
+                    rules: so_far.rules.iter().chain(&option.rules).copied().collect(),
+                    choices: so_far.choices.iter().chain(&option.choices).cloned().collect(),
                 })
             })
             .collect();
@@ -401,7 +441,7 @@ fn every_case(rules: &[Rule], inherited: Option<f64>) -> Vec<Case<'_>> {
 }
 
 /// The cases of one rule: itself, unless it's an all-of or a one-of.
-fn rule_cases(rule: &Rule, inherited: Option<f64>) -> Vec<Case<'_>> {
+fn rule_cases(rule: &Rule, inherited: Option<f64>) -> Vec<CaseRules<'_>> {
     let weight = rule.own_weight().or(inherited);
     match rule {
         Rule::AllOf { rules, .. } | Rule::OneOf { rules, .. } if rules.is_empty() => {
@@ -409,7 +449,7 @@ fn rule_cases(rule: &Rule, inherited: Option<f64>) -> Vec<Case<'_>> {
         }
         // A one-of only about where one part goes makes no cases: the part may take any place one
         // of its options allows (see `broken`), so its options are all tried in the same run.
-        Rule::OneOf { .. } if rule.one_part().is_some() => vec![Case { rules: vec![(rule, weight)], choices: Vec::new() }],
+        Rule::OneOf { .. } if rule.one_part().is_some() => vec![CaseRules { rules: vec![(rule, weight)], choices: Vec::new() }],
         Rule::AllOf { rules, .. } => every_case(rules, weight),
         Rule::OneOf { rules, .. } => {
             let mut out = Vec::new();
@@ -419,14 +459,14 @@ fn rule_cases(rule: &Rule, inherited: Option<f64>) -> Vec<Case<'_>> {
                     Some(name) => format!("\"{name}\""),
                     None => format!("option {} of {}", k + 1, rules.len()),
                 };
-                for mut case in rule_cases(option, weight) {
-                    case.choices.insert(0, format!("{}: {which}", rule.called()));
-                    out.push(case);
+                for mut inner in rule_cases(option, weight) {
+                    inner.choices.insert(0, format!("{}: {which}", rule.called()));
+                    out.push(inner);
                 }
             }
             out
         }
-        _ => vec![Case { rules: vec![(rule, weight)], choices: Vec::new() }],
+        _ => vec![CaseRules { rules: vec![(rule, weight)], choices: Vec::new() }],
     }
 }
 
@@ -499,7 +539,8 @@ impl Keepout {
     }
 }
 
-/// One case of the board file's rules, matched up with the circuit's parts.
+/// What one case's rules mean for the circuit's parts (`Case::constraints`): where each may go,
+/// keep-outs, near, close, star and layers, and the option taken in each one-of.
 #[derive(Default, Clone)]
 pub struct Constraints {
     /// Which option of each one-of this case took, like `one-of "Pads by the ESP32's back pads": "by GP5"`.
@@ -521,7 +562,7 @@ pub struct Constraints {
     /// Two pins of any nets: as close together as possible.
     pub close: Vec<CloseRule>,
     pub stars: Vec<StarRule>,
-    /// layers[component]: how the board file says it's mounted, if it does (see `Design::layers`).
+    /// layers[component]: how the board file says it's mounted, if it does (see `Case::layers`).
     pub layers: Vec<Option<Layers>>,
 }
 
@@ -564,18 +605,18 @@ pub fn read_board_file(netlist_path: &str, chosen: Option<&str>) -> Option<(Stri
 
 /// Matches one case's part names to the circuit and checks its rules make sense. Stops on a mistake
 /// in the board file; returns why if the rules are fine but some part has no place meeting them.
-pub fn resolve(case: &Case, c: &Design) -> Result<Constraints, String> {
+pub fn resolve(option: &CaseRules, c: &Circuit, board: Board) -> Result<Constraints, String> {
     let index = |name: &str| {
         c.parts.iter().position(|comp| comp.reference == name).unwrap_or_else(|| panic!("board file: there's no part called {name}"))
     };
     // The net a pin is on, if it's connected to anything.
     let net_of = |p: (usize, usize)| c.net_pins.iter().position(|pins| pins.contains(&p));
     let n = c.parts.len();
-    let (w, h) = (c.board.width, c.board.height);
-    let mut out = Constraints { choices: case.choices.clone(), allowed: vec![None; n], place_cost: vec![HashMap::new(); n], layers: vec![None; n], ..Default::default() };
+    let (w, h) = (board.width, board.height);
+    let mut out = Constraints { choices: option.choices.clone(), allowed: vec![None; n], place_cost: vec![HashMap::new(); n], layers: vec![None; n], ..Default::default() };
     // rules_for[component] = the rules about where it goes, with their weights
     let mut rules_for: Vec<Vec<(&Rule, Option<f64>)>> = vec![Vec::new(); n];
-    for &(rule, weight) in &case.rules {
+    for &(rule, weight) in &option.rules {
         if let Some(part) = rule.part(w, h) {
             rules_for[index(part)].push((rule, weight));
             continue;
@@ -673,10 +714,10 @@ pub fn resolve(case: &Case, c: &Design) -> Result<Constraints, String> {
 
 /// How each net is wired: one run joining all its pins, or for a star net, one run per branch
 /// from the star point.
-pub fn runs(c: &Design) -> Vec<Run> {
+pub fn runs(c: &Circuit, constraints: &Constraints) -> Vec<Run> {
     let mut out = Vec::new();
     for (net, pins) in c.net_pins.iter().enumerate() {
-        match c.constraints.stars.iter().find(|s| s.net == net) {
+        match constraints.stars.iter().find(|s| s.net == net) {
             Some(star) => {
                 let listed: HashSet<(usize, usize)> = star.runs.iter().flatten().copied().collect();
                 let alone = pins.iter().filter(|&&p| p != star.at && !listed.contains(&p)).map(|&p| vec![p]);
@@ -693,7 +734,7 @@ pub fn runs(c: &Design) -> Vec<Run> {
 /// Moves every part with placement rules to the nearest place they allow, keeping its rotation if
 /// one allows it (so a quarter turn by the placer stays a quarter turn when the rules allow it).
 /// The placer calls this after every move, so these rules can never be broken.
-pub fn apply(c: &Design, placement: &mut Placement) {
+pub fn apply(c: &Case, placement: &mut Placement) {
     for (p, allowed) in placement.iter_mut().zip(&c.constraints.allowed) {
         if let Some(allowed) = allowed {
             let away = |q: &&Place| (q.rot != p.rot, (q.x - p.x).abs() + (q.y - p.y).abs());

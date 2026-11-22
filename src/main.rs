@@ -17,7 +17,7 @@ mod bench;
 mod board;
 mod build;
 mod check;
-mod constraints;
+mod circuit;
 mod diylc;
 mod footprints;
 mod kicad_pcb;
@@ -26,13 +26,15 @@ mod measure;
 mod netlist;
 mod nn;
 mod place;
+mod rules;
 mod route;
 mod sexpr;
 mod svg;
 
-use board::{BoardSize, Design};
+use board::Board;
+use rules::Case;
 use measure::Measures;
-use build::{Build, Layout, Made};
+use build::{Build, Layout, Made, Request};
 use nn::Net;
 use svg::Side;
 use rand::{SeedableRng, rngs::StdRng};
@@ -53,7 +55,7 @@ struct Args {
     judge: String,
     steps: usize,
     seed: u64,
-    board: Option<BoardSize>,
+    board: Option<Board>,
     power: Option<String>,
     ground: Option<String>,
     /// The folder the outputs go in.
@@ -129,9 +131,9 @@ fn parse_args() -> Args {
 }
 
 /// "18x12" -> 18 holes wide, 12 high
-fn parse_size(s: &str) -> Option<BoardSize> {
+fn parse_size(s: &str) -> Option<Board> {
     let (w, h) = s.split_once('x')?;
-    Some(BoardSize { width: w.parse().ok()?, height: h.parse().ok()? })
+    Some(Board { width: w.parse().ok()?, height: h.parse().ok()? })
 }
 
 fn main() {
@@ -166,8 +168,9 @@ fn main() {
 
 /// A circuit and the board file next to it, as `load` reads them.
 struct Loaded {
-    /// The circuit once for each case of the board file's rules (one, unless a one-of makes more).
-    cases: Vec<Design>,
+    /// One case for each option of the board file's rules that can be met (one, unless a one-of
+    /// makes more).
+    cases: Vec<Case>,
     /// Cases left out because some part has no place meeting their rules, and why.
     left_out: Vec<String>,
     /// For a DIYLC sketch, where you put things: a starting point.
@@ -181,30 +184,27 @@ struct Loaded {
 /// Reads a circuit (a KiCad netlist or a DIYLC sketch) and the board file next to it, if any.
 fn load(path: &str, args: &Args) -> Loaded {
     // Flags win over the board file, so you can try a variation quickly.
-    let (board_file_path, board_file) = constraints::read_board_file(path, args.board_file.as_deref()).unzip();
+    let (board_file_path, board_file) = rules::read_board_file(path, args.board_file.as_deref()).unzip();
     let board_file = board_file.unwrap_or_default();
     let from_file = board_file.board.as_ref().map(|s| parse_size(s).unwrap_or_else(|| panic!("board file: \"board\" should look like \"18x12\"")));
-    let opts = netlist::Options {
-        board: args.board.or(from_file).unwrap_or(BoardSize { width: 18, height: 12 }),
-        power: args.power.clone().or(board_file.power.clone()),
-        ground: args.ground.clone().or(board_file.ground.clone()),
-        user_footprints: args.command != "bench",
-    };
+    let board = args.board.or(from_file).unwrap_or(Board { width: 18, height: 12 });
     let (circuit, sketch, copper) = if path.ends_with(".diy") {
-        let (c, s, copper) = diylc::load(path, opts);
+        let (c, s, copper) = diylc::load(path);
         (c, Some(s), Some(copper))
     } else {
-        let mut circuit = netlist::load(path, opts);
-        // A footprint with a DIYLC drawing looks like its DIYLC class in the pictures: only diylc
-        // knows the classes, so it says which look that is.
-        for part in &mut circuit.parts {
-            if let Some(look) = diylc::look(&part.footprint) {
-                part.footprint.look = look;
-            }
-        }
-        (circuit, None, None)
+        (netlist::load(path, args.command != "bench"), None, None)
     };
-    let (cases, left_out) = constraints::designs(&circuit, &board_file.rules);
+    let (power, ground) = circuit.power_and_ground(args.power.clone().or(board_file.power), args.ground.clone().or(board_file.ground));
+    let mut circuit = circuit.with_power_and_ground(power, ground);
+    // A footprint with a DIYLC drawing (from footprints.json) looks like its DIYLC class in the
+    // pictures: only diylc knows the classes, so it says which look that is.
+    for part in &mut circuit.parts {
+        if let Some(look) = diylc::look(&part.footprint) {
+            part.footprint.look = look;
+        }
+    }
+    let request = Request { circuit, board, rules: board_file.rules };
+    let (cases, left_out) = request.cases();
     if cases.is_empty() {
         panic!("board file: no case of its rules can be met:\n  {}", left_out.join("\n  "));
     }
@@ -219,7 +219,7 @@ fn load(path: &str, args: &Args) -> Loaded {
 /// some part is left out, and if every case is, the program stops. With `report`, prints a line for
 /// each case when there are several, and why a case was left out.
 fn place_cases(
-    cases: &[Design],
+    cases: &[Case],
     cost: impl Fn(&Measures) -> f64,
     steps: usize,
     rng: &mut StdRng,
@@ -245,7 +245,7 @@ fn place_cases(
             }
         };
         let layout = place::anneal(c, &cost, steps, rng, start.clone(), |_| {});
-        let g = board::geometry(c, &layout);
+        let g = board::geometry(&c.circuit, &layout);
         let routing = route::route(c, &layout, &g);
         let m = measure::measure_routed(c, &layout, &g, &routing);
         if report && cases.len() > 1 {
@@ -257,7 +257,7 @@ fn place_cases(
             let shown = match sketch {
                 Some(sketch) => {
                     let mut drawn = sketch.clone();
-                    constraints::apply(c, &mut drawn);
+                    rules::apply(c, &mut drawn);
                     drawn
                 }
                 None => start,
@@ -272,22 +272,23 @@ fn place_cases(
 }
 
 /// Which option of each one-of a case took, like `one-of "Pads by the ESP32's back pads": "by GP5"`.
-fn case_name(c: &Design) -> String {
+fn case_name(c: &Case) -> String {
     c.constraints.choices.join("; ")
 }
 
 /// What the program understood from the file: the parts, which pins connect, and the cases of the
 /// board file's rules.
-fn print_nets(cases: &[Design]) {
-    let c = &cases[0]; // the parts and nets are the same in every case (how one is mounted may not be: this is the first's)
-    println!("{} parts:", c.parts.len());
-    for (i, comp) in c.parts.iter().enumerate() {
-        let kind = if comp.module && c.room_under(i) { "  (module: parts can go under it)" } else { "" };
+fn print_nets(cases: &[Case]) {
+    let case = &cases[0]; // the parts and nets are the same in every case (how one is mounted may not be: this is the first's)
+    let circuit = &case.circuit;
+    println!("{} parts:", circuit.parts.len());
+    for (i, comp) in circuit.parts.iter().enumerate() {
+        let kind = if comp.module && case.room_under(i) { "  (module: parts can go under it)" } else { "" };
         println!("  {:<12} {:>2}x{:<2} holes, {} pins{kind}", comp.reference, comp.footprint.w, comp.footprint.h, comp.footprint.pins.len());
     }
     let or_none = |n: &Option<String>| n.clone().unwrap_or_else(|| "none".into());
-    println!("\n{} nets (power: {}, ground: {}):", c.nets.len(), or_none(&c.power), or_none(&c.ground));
-    for net in &c.nets {
+    println!("\n{} nets (power: {}, ground: {}):", circuit.nets.len(), or_none(&circuit.power), or_none(&circuit.ground));
+    for net in &circuit.nets {
         println!("  {:<10} {}", net.name, net.pins.join("  "));
     }
     if cases.len() > 1 {
@@ -338,7 +339,7 @@ fn again(args: &Args, command: &str, path: &str) -> String {
 
 /// How a layout was made, for its layout file: from `args`, the circuit at `path`, its board file,
 /// where the placer started, and which case `k` of `cases` won.
-fn made(args: &Args, path: &str, board_file: Option<String>, start: &str, cases: &[Design], k: usize) -> Made {
+fn made(args: &Args, path: &str, board_file: Option<String>, start: &str, cases: &[Case], k: usize) -> Made {
     Made {
         circuit: path.to_string(),
         board_file,
@@ -352,7 +353,7 @@ fn made(args: &Args, path: &str, board_file: Option<String>, start: &str, cases:
         command: again(args, "place", path),
         version: version(),
         footprints: {
-            let mut from: Vec<String> = cases[k].parts.iter().filter_map(|c| c.footprint_from.clone()).collect();
+            let mut from: Vec<String> = cases[k].circuit.parts.iter().filter_map(|c| c.footprint_from.clone()).collect();
             from.sort();
             from.dedup();
             from
@@ -360,7 +361,7 @@ fn made(args: &Args, path: &str, board_file: Option<String>, start: &str, cases:
     }
 }
 
-fn place_cmd(cases: &[Design], args: &Args, sketch: Option<board::Placement>, copper: Option<board::Copper>, board_file: Option<String>) {
+fn place_cmd(cases: &[Case], args: &Args, sketch: Option<board::Placement>, copper: Option<board::Copper>, board_file: Option<String>) {
     let t0 = Instant::now();
     let mut rng = StdRng::seed_from_u64(args.seed);
     let net = (args.judge == "net").then(|| Net::load(&model_path(&args.out)));
@@ -383,7 +384,7 @@ fn place_cmd(cases: &[Design], args: &Args, sketch: Option<board::Placement>, co
     // Your own wiring, if you drew any, measured like the router's, and the router's on the same
     // placement (as you drew it, allowed or not), to compare.
     if let (Some(sketch), Some(copper)) = (&sketch, copper.as_ref().filter(|w| !w.traces.is_empty() || !w.jumpers.is_empty())) {
-        let g = board::geometry(c, sketch);
+        let g = board::geometry(&c.circuit, sketch);
         let (yours, breaks) = route::from_sketch(c, &g, copper);
         println!("{}", measure::report_measures(&measure::measure_routed(c, sketch, &g, &yours), "  wired as you drew it"));
         if breaks > 0 {

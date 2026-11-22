@@ -6,7 +6,8 @@
 //! `Side::Solder` is the board turned over to solder it: mirrored, so column 0 is on the right,
 //! with the copper in front and the parts behind the board, faint.
 
-use crate::board::{self, Look, Point};
+use crate::board::{self, Point};
+use crate::circuit::Look;
 use crate::measure;
 use crate::build::Build;
 use std::collections::{HashMap, HashSet};
@@ -82,10 +83,11 @@ fn wrap(text: &str, width: usize) -> Vec<String> {
 }
 
 pub fn draw(build: &Build, side: Side) -> String {
-    let (c, title) = (&build.design, build.title.as_str());
+    let (c, title) = (&build.case, build.title.as_str());
+    let circuit = &c.circuit;
     let (w, h) = (c.board.width, c.board.height);
     let mirror = side == Side::Solder;
-    let g = board::geometry(c, &build.layout.placement);
+    let g = board::geometry(circuit, &build.layout.placement);
     let m = build.measures;
 
     // Holes -> pixels. Fractions are for points between holes, like the middle of a resistor.
@@ -108,9 +110,9 @@ pub fn draw(build: &Build, side: Side) -> String {
     };
 
     // Each pin's net.
-    let colors = board::net_colors(c);
+    let colors = board::net_colors(circuit);
     let mut net_of: HashMap<(usize, usize), usize> = HashMap::new();
-    for (n, members) in c.net_pins.iter().enumerate() {
+    for (n, members) in circuit.net_pins.iter().enumerate() {
         for &p in members {
             net_of.insert(p, n);
         }
@@ -120,7 +122,7 @@ pub fn draw(build: &Build, side: Side) -> String {
     // Parts that collide, hang off the board, sit on a hard keep-out or don't fit under a module (both
     // parts of a collision): only in a layout that isn't allowed, like a sketch as you drew it.
     let mut misplaced: HashSet<usize> = HashSet::new();
-    for clash in measure::clashes(c, &g, &vec![true; c.parts.len()]) {
+    for clash in measure::clashes(c, &g, &vec![true; circuit.parts.len()]) {
         misplaced.insert(clash.part);
         if let measure::Why::OnPart(other) = clash.why {
             misplaced.insert(other);
@@ -159,7 +161,7 @@ pub fn draw(build: &Build, side: Side) -> String {
         writeln!(
             wires,
             r#"<line x1="{x1:.1}" y1="{y1:.1}" x2="{x2:.1}" y2="{y2:.1}" stroke="{}" stroke-width="{:.1}" stroke-linecap="round" opacity="{opacity}"><title>trace, {}</title></line>"#,
-            colors[net], PX * 0.42, esc(&c.nets[net].name)
+            colors[net], PX * 0.42, esc(&circuit.nets[net].name)
         )
         .unwrap();
     }
@@ -168,12 +170,12 @@ pub fn draw(build: &Build, side: Side) -> String {
         let ((x1, y1), (x2, y2)) = (at(a), at(b));
         let line = format!(r#"x1="{x1:.1}" y1="{y1:.1}" x2="{x2:.1}" y2="{y2:.1}""#);
         writeln!(wires, r#"<line {line} class="jumper-halo"/>"#).unwrap();
-        writeln!(wires, r#"<line {line} class="bottom-wire"><title>wire on the solder side, {}</title></line>"#, esc(&c.nets[c.runs[run].net].name)).unwrap();
+        writeln!(wires, r#"<line {line} class="bottom-wire"><title>wire on the solder side, {}</title></line>"#, esc(&circuit.nets[c.runs[run].net].name)).unwrap();
     }
     // Connections the router couldn't make: a thin dotted line, no copper.
     for &(run, a, b) in &routing.unrouted {
         let ((x1, y1), (x2, y2)) = (at(a), at(b));
-        writeln!(wires, r#"<line x1="{x1:.1}" y1="{y1:.1}" x2="{x2:.1}" y2="{y2:.1}" class="unrouted"><title>not connected: {} couldn't be routed here</title></line>"#, esc(&c.nets[c.runs[run].net].name)).unwrap();
+        writeln!(wires, r#"<line x1="{x1:.1}" y1="{y1:.1}" x2="{x2:.1}" y2="{y2:.1}" class="unrouted"><title>not connected: {} couldn't be routed here</title></line>"#, esc(&circuit.nets[c.runs[run].net].name)).unwrap();
     }
     for &(run, a, b) in routing.traces.iter().chain(&routing.jumpers).chain(&routing.bottom) {
         copper.insert(a, c.runs[run].net);
@@ -192,8 +194,8 @@ pub fn draw(build: &Build, side: Side) -> String {
             let (cx, cy) = at((x, y));
             match pin_at.get(&(x, y)) {
                 Some(&(ci, pi)) => {
-                    let net = net_of.get(&(ci, pi)).map_or("connected to nothing".to_string(), |&n| format!("net {}", c.nets[n].name));
-                    let pin = c.pin_name((ci, pi));
+                    let net = net_of.get(&(ci, pi)).map_or("connected to nothing".to_string(), |&n| format!("net {}", circuit.nets[n].name));
+                    let pin = circuit.pin_name((ci, pi));
                     writeln!(
                         holes,
                         r##"<circle cx="{cx:.1}" cy="{cy:.1}" r="{:.1}" fill="{}" stroke="#ffffff" stroke-width="1.5"><title>{x},{y} · {} · {}</title></circle>"##,
@@ -202,7 +204,7 @@ pub fn draw(build: &Build, side: Side) -> String {
                     .unwrap();
                 }
                 None if copper.contains_key(&(x, y)) => {
-                    let net = &c.nets[copper[&(x, y)]];
+                    let net = &circuit.nets[copper[&(x, y)]];
                     writeln!(
                         holes,
                         r##"<circle cx="{cx:.1}" cy="{cy:.1}" r="{:.1}" fill="{}" stroke="#ffffff" stroke-width="1.5"><title>{x},{y} · trace · net {}</title></circle>"##,
@@ -218,7 +220,7 @@ pub fn draw(build: &Build, side: Side) -> String {
     }
 
     // --- the parts
-    for (i, comp) in c.parts.iter().enumerate() {
+    for (i, comp) in circuit.parts.iter().enumerate() {
         let (pins, outline) = (&g.pins[i], &g.outlines[i]);
         let reference = esc(&comp.reference);
         let label = esc(format!("{} {}", comp.reference, comp.value).trim());
@@ -325,7 +327,7 @@ pub fn draw(build: &Build, side: Side) -> String {
         let ((x1, y1), (x2, y2)) = (at(a), at(b));
         let line = format!(r#"x1="{x1:.1}" y1="{y1:.1}" x2="{x2:.1}" y2="{y2:.1}""#);
         writeln!(parts, r#"<line {line} class="jumper-halo"/>"#).unwrap();
-        writeln!(parts, r#"<line {line} class="jumper"><title>jumper, {}</title></line>"#, esc(&c.nets[c.runs[run].net].name)).unwrap();
+        writeln!(parts, r#"<line {line} class="jumper"><title>jumper, {}</title></line>"#, esc(&circuit.nets[c.runs[run].net].name)).unwrap();
     }
 
     // --- the legend, beside the board
@@ -357,19 +359,19 @@ pub fn draw(build: &Build, side: Side) -> String {
         line(&mut legend, &mut ly, "not allowed, so not scored", "legend");
     }
     ly += line_h * 0.5;
-    if (0..c.parts.len()).any(clashes) {
+    if (0..circuit.parts.len()).any(clashes) {
         for text in wrap("Boxed in red: a part that collides, hangs off the board, sits on a hard keep-out, or doesn't fit under a module.", 60) {
             line(&mut legend, &mut ly, &text, "warn");
         }
         ly += line_h * 0.5;
     }
     // Supply and ground first, then the other nets by name.
-    let is_supply = |name: &String| c.power.as_ref() == Some(name) || c.ground.as_ref() == Some(name);
-    let mut shown: Vec<usize> = (0..c.nets.len()).collect();
-    shown.sort_by_key(|&n| (!is_supply(&c.nets[n].name), c.power.as_ref() != Some(&c.nets[n].name), c.nets[n].name.clone()));
+    let is_supply = |name: &String| circuit.power.as_ref() == Some(name) || circuit.ground.as_ref() == Some(name);
+    let mut shown: Vec<usize> = (0..circuit.nets.len()).collect();
+    shown.sort_by_key(|&n| (!is_supply(&circuit.nets[n].name), circuit.power.as_ref() != Some(&circuit.nets[n].name), circuit.nets[n].name.clone()));
     let swatch = 11.0 * 1.25;
     for n in shown {
-        let text = format!("{}: {}", c.nets[n].name, c.nets[n].pins.join(" "));
+        let text = format!("{}: {}", circuit.nets[n].name, circuit.nets[n].pins.join(" "));
         writeln!(legend, r#"<rect x="{lx:.1}" y="{:.1}" width="{swatch:.1}" height="{swatch:.1}" rx="{:.1}" fill="{}"/>"#, ly - swatch * 0.8, swatch / 4.0, colors[n]).unwrap();
         let lines = wrap(&text, 54);
         for (k, text) in lines.iter().enumerate() {
@@ -377,7 +379,7 @@ pub fn draw(build: &Build, side: Side) -> String {
         }
         ly += line_h * lines.len() as f64 + line_h * 0.45;
     }
-    let alone = (0..c.parts.len()).flat_map(|ci| (0..c.parts[ci].footprint.pins.len()).map(move |pi| (ci, pi))).filter(|p| !net_of.contains_key(p)).count();
+    let alone = (0..circuit.parts.len()).flat_map(|ci| (0..circuit.parts[ci].footprint.pins.len()).map(move |pi| (ci, pi))).filter(|p| !net_of.contains_key(p)).count();
     if alone > 0 {
         writeln!(legend, r#"<rect x="{lx:.1}" y="{:.1}" width="{swatch:.1}" height="{swatch:.1}" rx="{:.1}" fill="{LONE}"/>"#, ly - swatch * 0.8, swatch / 4.0).unwrap();
         writeln!(legend, r#"<text x="{:.1}" y="{ly:.1}" class="legend">connected to nothing: {alone} pins</text>"#, lx + swatch * 1.6).unwrap();

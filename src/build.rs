@@ -1,21 +1,41 @@
-//! A finished board, a `Build`: what you asked for (`Design`), what the program made of it
-//! (`Layout`: where each part goes and the copper joining them), and how it was made (`Made`).
+//! What you ask for (a `Request`: a circuit and its board file) and a finished board, a `Build`: the
+//! case of the request it took (`Case`), what the program made of it (`Layout`: where each part goes
+//! and the copper joining them), and how it was made (`Made`).
 //!
 //! `place` builds one, routing it once, and saves it as the layout file (out/<judge>.layout.json,
 //! `file`); the SVG pictures, the KiCad board and the DIYLC project are all drawn from it. `draw`
 //! reads a saved one back and draws it again with its copper as saved, so an old layout draws the
-//! same after the router changes, scored with today's measurements and its own design's rules.
+//! same after the router changes, scored with today's measurements and its own case's rules.
 
 pub mod file;
 
 pub use file::{from_json, to_json};
 
-use crate::board::{self, Design, Placement, Point};
+use crate::board::{self, Board, Placement, Point};
+use crate::circuit::Circuit;
 use crate::measure::{self, Measures};
 use crate::route::{self, Routing};
+use crate::rules::{self, Case, Rule};
 use serde::{Deserialize, Serialize};
 
-/// What the program made of a design: where each part goes, and the copper joining them.
+/// What you ask the program for: a circuit and its board file (the board, and the rules for it),
+/// with your flags applied. Answered with one layout, the best over every case of the rules.
+pub struct Request {
+    pub circuit: Circuit,
+    pub board: Board,
+    /// The board file's rules as written.
+    pub rules: Vec<Rule>,
+}
+
+impl Request {
+    /// The request once for each case of its rules that can be met, and why each other case can't
+    /// (see `rules::cases`).
+    pub fn cases(&self) -> (Vec<Case>, Vec<String>) {
+        rules::cases(&self.circuit, self.board, &self.rules)
+    }
+}
+
+/// What the program made of a case: where each part goes, and the copper joining them.
 #[derive(Clone)]
 pub struct Layout {
     pub placement: Placement,
@@ -37,7 +57,7 @@ pub struct Made {
     pub seed: u64,
     pub steps: usize,
     /// Which case of the board file's rules won, counted from 1, out of how many were placed
-    /// (the design says which options it took).
+    /// (the case says which options it took).
     pub case: usize,
     pub cases: usize,
     /// The command that makes this build again, like `cargo run --release -- place
@@ -64,17 +84,17 @@ impl Made {
     }
 }
 
-/// A design, what was made of it, and how: everything the outputs need. The score and the
-/// problems are worked out from the design and the layout, never saved ones.
+/// A case, what was made of it, and how: everything the outputs need. The score and the
+/// problems are worked out from the case and the layout, never saved ones.
 pub struct Build {
     /// Its runs are in the order the router routes them first (`route::order`), so each of the
     /// layout's copper lists has one run's pieces after the other, runs in order.
-    pub design: Design,
+    pub case: Case,
     pub layout: Layout,
     /// What the pictures and the DIYLC project are called, like "Placed by rules".
     pub title: String,
     pub made: Made,
-    /// The design's measurements with this layout (`measure::measure_routed`).
+    /// The case's measurements with this layout (`measure::measure_routed`).
     pub measures: Measures,
     /// Plain-language problems, the `!!` lines: what isn't allowed (`measure::clash_words`), and pins
     /// left unrouted.
@@ -83,20 +103,20 @@ pub struct Build {
 
 impl Build {
     /// Routes `placement` once, and keeps it all together.
-    pub fn new(design: Design, placement: Placement, title: &str, made: Made) -> Build {
-        let g = board::geometry(&design, &placement);
-        let routing = route::route(&design, &placement, &g);
-        Build::routed(design, Layout { placement, routing }, title, made)
+    pub fn new(case: Case, placement: Placement, title: &str, made: Made) -> Build {
+        let g = board::geometry(&case.circuit, &placement);
+        let routing = route::route(&case, &placement, &g);
+        Build::routed(case, Layout { placement, routing }, title, made)
     }
 
-    /// The same, for a layout already routed (`route::route`, its runs as the design has them).
-    pub fn routed(design: Design, layout: Layout, title: &str, made: Made) -> Build {
+    /// The same, for a layout already routed (`route::route`, its runs as the case has them).
+    pub fn routed(case: Case, layout: Layout, title: &str, made: Made) -> Build {
         let Layout { placement, routing } = layout;
-        let g = board::geometry(&design, &placement);
+        let g = board::geometry(&case.circuit, &placement);
         // Put the runs in the order the router routes them first (`route::order`), numbering the
         // copper to match. It's the same copper; only the run numbers change. The file then lists
         // the runs in that order, and reading it back gives the copper in the same order.
-        let order = route::order(&design, &g);
+        let order = route::order(&case, &g);
         let mut renumbered = vec![0; order.len()];
         for (new, &old) in order.iter().enumerate() {
             renumbered[old] = new;
@@ -109,19 +129,19 @@ impl Build {
             unrouted: renumber(routing.unrouted),
             joins: routing.joins.into_iter().map(|(run, at)| (renumbered[run], at)).collect(),
         };
-        let mut design = design;
-        design.runs = order.iter().map(|&old| design.runs[old].clone()).collect();
-        Build::of(design, Layout { placement, routing }, title.to_string(), made)
+        let mut case = case;
+        case.runs = order.iter().map(|&old| case.runs[old].clone()).collect();
+        Build::of(case, Layout { placement, routing }, title.to_string(), made)
     }
 
-    /// A design and a layout made of it, scored, with their problems.
-    pub fn of(design: Design, layout: Layout, title: String, made: Made) -> Build {
-        let g = board::geometry(&design, &layout.placement);
-        let measures = measure::measure_routed(&design, &layout.placement, &g, &layout.routing);
+    /// A case and a layout made of it, scored, with their problems.
+    pub fn of(case: Case, layout: Layout, title: String, made: Made) -> Build {
+        let g = board::geometry(&case.circuit, &layout.placement);
+        let measures = measure::measure_routed(&case, &layout.placement, &g, &layout.routing);
         // A layout from the placer is always allowed; a sketch as you drew it may not be.
-        let clashes = measure::clashes(&design, &g, &vec![true; layout.placement.len()]);
-        let mut problems = measure::clash_words(&design, &clashes);
-        problems.extend(route::unrouted_problems(&design, &g, &layout.routing));
-        Build { design, layout, title, made, measures, problems }
+        let clashes = measure::clashes(&case, &g, &vec![true; layout.placement.len()]);
+        let mut problems = measure::clash_words(&case, &clashes);
+        problems.extend(route::unrouted_problems(&case, &g, &layout.routing));
+        Build { case, layout, title, made, measures, problems }
     }
 }

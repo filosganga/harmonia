@@ -8,10 +8,10 @@
 //! move that would break that is thrown away before it's routed, so the judge only ever compares
 //! layouts that can be built.
 
-use crate::board::{self, Design, Place, Placement, random_placement, size};
+use crate::board::{self, Place, Placement, size};
 use crate::measure::{self, Measures};
 use crate::route;
-use crate::constraints;
+use crate::rules::{self, Case};
 use rand::Rng;
 
 /// How often a move jumps the part to any place at all, instead of nudging, turning or swapping it.
@@ -33,7 +33,7 @@ const TRIES: usize = 20;
 /// for. `start` must be allowed (see `allowed_start`). `on_step` sees every accepted-or-not current
 /// board (used by training to collect examples). Returns the best placement found.
 pub fn anneal(
-    c: &Design,
+    c: &Case,
     cost: impl Fn(&Measures) -> f64,
     steps: usize,
     rng: &mut impl Rng,
@@ -42,7 +42,7 @@ pub fn anneal(
 ) -> Placement {
     assert!(measure::allowed(c, &start), "the placer starts from a layout that's allowed");
     // Parts the placer may touch: everything except the ones the board file allows only one place.
-    let movable: Vec<usize> = (0..c.parts.len()).filter(|&i| c.constraints.allowed[i].as_ref().is_none_or(|a| a.len() > 1)).collect();
+    let movable: Vec<usize> = (0..c.circuit.parts.len()).filter(|&i| c.constraints.allowed[i].as_ref().is_none_or(|a| a.len() > 1)).collect();
     let mut cur = start;
     // Compare boards by cost, not by the 0-100 score: the score flattens out for big circuits (at
     // cost 700, the cat feeder's wiring, a much worse move barely changes it), which would make the placer accept anything.
@@ -78,7 +78,7 @@ pub fn anneal(
 }
 
 /// `cur` with one random change to one of the `movable` parts. It may not be allowed.
-fn a_move(c: &Design, cur: &Placement, movable: &[usize], rng: &mut impl Rng) -> Placement {
+fn a_move(c: &Case, cur: &Placement, movable: &[usize], rng: &mut impl Rng) -> Placement {
     let (w, h) = (c.board.width, c.board.height);
     let mut new = cur.clone();
     let k = movable[rng.random_range(0..movable.len())];
@@ -90,7 +90,7 @@ fn a_move(c: &Design, cur: &Placement, movable: &[usize], rng: &mut impl Rng) ->
             Some(allowed) => allowed[rng.random_range(0..allowed.len())],
             None => {
                 let rot = rng.random_range(0..4);
-                let (pw, ph) = size(&c.parts[k], rot);
+                let (pw, ph) = size(&c.circuit.parts[k], rot);
                 Place { x: rng.random_range(0..=(w - pw).max(0)), y: rng.random_range(0..=(h - ph).max(0)), rot }
             }
         };
@@ -107,12 +107,26 @@ fn a_move(c: &Design, cur: &Placement, movable: &[usize], rng: &mut impl Rng) ->
         (new[k].x, new[k].y, new[o].x, new[o].y) = (new[o].x, new[o].y, new[k].x, new[k].y);
     }
     // Put parts with placement rules back on a place they allow (a move may have taken them off it).
-    constraints::apply(c, &mut new);
+    rules::apply(c, &mut new);
     new
 }
 
+/// Every part dropped at a random place (parts with placement rules on the nearest place they
+/// allow). Parts may land on each other: `random_start` moves them apart.
+fn random_placement(c: &Case, rng: &mut impl Rng) -> Placement {
+    let (w, h) = (c.board.width, c.board.height);
+    let mut placement: Placement = c
+        .circuit
+        .parts
+        .iter()
+        .map(|_| Place { x: rng.random_range(0..w - 1), y: rng.random_range(0..h - 1), rot: rng.random_range(0..4) })
+        .collect();
+    rules::apply(c, &mut placement);
+    placement
+}
+
 /// A random layout that's allowed: parts put down at random, then moved apart (`allowed_start`).
-pub fn random_start(c: &Design, rng: &mut impl Rng) -> Result<Placement, String> {
+pub fn random_start(c: &Case, rng: &mut impl Rng) -> Result<Placement, String> {
     allowed_start(c, &random_placement(c, rng))
 }
 
@@ -122,21 +136,24 @@ pub fn random_start(c: &Design, rng: &mut impl Rng) -> Result<Placement, String>
 /// places first (a fixed part before one the board file only keeps on an edge, before a free one),
 /// then the biggest, so a big part keeps its place and a small one moves out of its way. Err says
 /// which part found no room.
-pub fn allowed_start(c: &Design, from: &Placement) -> Result<Placement, String> {
+pub fn allowed_start(c: &Case, from: &Placement) -> Result<Placement, String> {
     let (w, h) = (c.board.width, c.board.height);
-    let n = c.parts.len();
+    let n = c.circuit.parts.len();
     let mut order: Vec<usize> = (0..n).collect();
     let places = |i: usize| c.constraints.allowed[i].as_ref().map_or(usize::MAX, Vec::len);
-    order.sort_by_key(|&i| (places(i), std::cmp::Reverse(c.parts[i].footprint.w * c.parts[i].footprint.h)));
+    order.sort_by_key(|&i| {
+        let f = &c.circuit.parts[i].footprint;
+        (places(i), std::cmp::Reverse(f.w * f.h))
+    });
 
     let mut out = from.clone();
-    constraints::apply(c, &mut out);
+    rules::apply(c, &mut out);
     let mut placed = vec![false; n];
     for i in order {
         placed[i] = true;
         let fits = |p: Place, out: &mut Placement| {
             out[i] = p;
-            measure::clashes(c, &board::geometry(c, out), &placed).is_empty()
+            measure::clashes(c, &board::geometry(&c.circuit, out), &placed).is_empty()
         };
         if fits(out[i], &mut out) {
             continue;
@@ -149,7 +166,7 @@ pub fn allowed_start(c: &Design, from: &Placement) -> Result<Placement, String> 
         };
         candidates.sort_by_key(|q| (q.rot != at.rot, (q.x - at.x).abs() + (q.y - at.y).abs()));
         if !candidates.into_iter().any(|q| fits(q, &mut out)) {
-            return Err(format!("no room for {} on the {w}x{h} board, next to the parts already down", c.parts[i].reference));
+            return Err(format!("no room for {} on the {w}x{h} board, next to the parts already down", c.circuit.parts[i].reference));
         }
     }
     Ok(out)

@@ -14,7 +14,8 @@ pub mod write;
 pub use read::load;
 pub use write::write;
 
-use crate::board::{Drawing, Footprint, Format, Look, Pin, Point};
+use crate::board::Point;
+use crate::circuit::{Drawing, Footprint, Format, Look, Pin};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
