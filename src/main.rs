@@ -19,6 +19,7 @@ mod build;
 mod check;
 mod constraints;
 mod diylc;
+mod footprints;
 mod kicad_pcb;
 mod learn;
 mod measure;
@@ -143,7 +144,7 @@ fn main() {
     match args.command.as_str() {
         "check" => return check::run(&args),
         "draw" => return draw_cmd(&args.circuit),
-        "footprints" => return netlist::describe(&args.circuit).iter().for_each(|f| println!("{f}")),
+        "footprints" => return footprints::describe(&args.circuit).iter().for_each(|f| println!("{f}")),
         "bench" => return bench::run(),
         _ => {}
     }
@@ -274,7 +275,7 @@ fn print_nets(cases: &[Design]) {
     println!("{} parts:", c.components.len());
     for (i, comp) in c.components.iter().enumerate() {
         let kind = if comp.module && c.room_under(i) { "  (module: parts can go under it)" } else { "" };
-        println!("  {:<12} {:>2}x{:<2} holes, {} pins{kind}", comp.reference, comp.w, comp.h, comp.pins.len());
+        println!("  {:<12} {:>2}x{:<2} holes, {} pins{kind}", comp.reference, comp.footprint.w, comp.footprint.h, comp.footprint.pins.len());
     }
     let or_none = |n: &Option<String>| n.clone().unwrap_or_else(|| "none".into());
     println!("\n{} nets (power: {}, ground: {}):", c.nets.len(), or_none(&c.power), or_none(&c.ground));

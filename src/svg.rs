@@ -6,7 +6,7 @@
 //! `Side::Solder` is the board turned over to solder it: mirrored, so column 0 is on the right,
 //! with the copper in front and the parts behind the board, faint.
 
-use crate::board::{self, Component, Point};
+use crate::board::{self, Part, Point};
 use crate::measure;
 use crate::build::Build;
 use std::collections::{HashMap, HashSet};
@@ -58,14 +58,14 @@ const STYLE: &str = "
 /// What to draw a part as: the short name of its DIYLC class (`diylc::CLASSES`, the same name
 /// whether it came from footprints.json or a sketch), or "module" for a module (a DIYLC group, or a
 /// footprint with "module": true), however it's mounted.
-fn shape(comp: &Component) -> &str {
+fn shape(comp: &Part) -> &str {
     match &comp.diylc {
         Some(p) => &p.part,
         // A group that isn't a module (say, a header and its label) is drawn like a header.
-        None if comp.footprint == "DIYLC:module" && !comp.module => "PinHeader",
+        None if comp.footprint.name == "DIYLC:module" && !comp.module => "PinHeader",
         // A footprints.json module.
-        None if comp.module && !comp.footprint.starts_with("DIYLC:") => "module",
-        None => comp.footprint.strip_prefix("DIYLC:").unwrap_or(""),
+        None if comp.module && !comp.footprint.name.starts_with("DIYLC:") => "module",
+        None => comp.footprint.name.strip_prefix("DIYLC:").unwrap_or(""),
     }
 }
 
@@ -75,10 +75,10 @@ fn split_pin(name: &str) -> (&str, &str) {
 }
 
 /// The leg marked + on a polarised part: the capacitor's +, or the LED's anode.
-fn plus_leg(comp: &Component) -> usize {
+fn plus_leg(comp: &Part) -> usize {
     let named = comp.diylc.as_ref().and_then(|d| d.legs.first()).map(String::as_str);
     let is_plus = |n: &str| n == "+" || n == "A" || Some(n) == named;
-    comp.pins.iter().position(|p| is_plus(&p.name)).unwrap_or(0)
+    comp.footprint.pins.iter().position(|p| is_plus(&p.name)).unwrap_or(0)
 }
 
 fn esc(s: &str) -> String {
@@ -271,7 +271,7 @@ pub fn draw(build: &Build, side: Side) -> String {
             // Standing up: a round body over its legs.
             "RadialElectrolytic" | "LED" if pins.len() == 2 => {
                 let (cx, cy) = (ox + ow / 2.0, oy + oh / 2.0);
-                let r = comp.w.max(comp.h) as f64 * PX / 2.0 * 0.95;
+                let r = comp.footprint.w.max(comp.footprint.h) as f64 * PX / 2.0 * 0.95;
                 let class = if shape(comp) == "LED" { "led" } else { "cap" };
                 writeln!(parts, r#"<circle cx="{cx:.1}" cy="{cy:.1}" r="{r:.1}" class="{class}"><title>{label}</title></circle>"#).unwrap();
                 // The + just past its leg, on the side away from the other leg.
@@ -307,11 +307,11 @@ pub fn draw(build: &Build, side: Side) -> String {
             // the lines of pins in its footprint, each named after the part. Columns for a module
             // whose rows run down (a DRV8833 breakout), rows for one whose rows run across (an
             // ESP32-C6-Zero lying across): whichever makes fewer lines.
-            let unnamed_module = shape(comp) == "module" && comp.pins.iter().all(|pin| split_pin(&pin.name).0.is_empty());
-            let lines = |axis: fn(Point) -> i32| comp.pins.iter().map(|pin| axis(pin.at)).collect::<HashSet<i32>>().len();
+            let unnamed_module = shape(comp) == "module" && comp.footprint.pins.iter().all(|pin| split_pin(&pin.name).0.is_empty());
+            let lines = |axis: fn(Point) -> i32| comp.footprint.pins.iter().map(|pin| axis(pin.at)).collect::<HashSet<i32>>().len();
             let by_row = lines(|p| p.1) < lines(|p| p.0);
             let mut groups: Vec<(String, &str, Vec<usize>)> = Vec::new(); // (key, name, pins)
-            for (pi, pin) in comp.pins.iter().enumerate() {
+            for (pi, pin) in comp.footprint.pins.iter().enumerate() {
                 let line = if by_row { format!("row {}", pin.at.1) } else { format!("column {}", pin.at.0) };
                 let (key, group) = if unnamed_module { (line, "") } else { (split_pin(&pin.name).0.to_string(), split_pin(&pin.name).0) };
                 match groups.iter_mut().find(|(k, _, _)| *k == key) {
@@ -325,7 +325,7 @@ pub fn draw(build: &Build, side: Side) -> String {
                 for (&pi, &p) in members.iter().zip(&holes) {
                     let (x, y) = at(p);
                     let turn = if in_a_row { format!(r#" transform="rotate(-90 {x:.1} {y:.1})""#) } else { String::new() };
-                    writeln!(labels, r#"<text x="{x:.1}" y="{:.1}" class="pin"{turn}>{}</text>"#, y + 3.0, esc(split_pin(&comp.pins[pi].name).1)).unwrap();
+                    writeln!(labels, r#"<text x="{x:.1}" y="{:.1}" class="pin"{turn}>{}</text>"#, y + 3.0, esc(split_pin(&comp.footprint.pins[pi].name).1)).unwrap();
                 }
                 let shape = shape(comp);
                 if shape == "module" || shape == "PinHeader" {
@@ -398,7 +398,7 @@ pub fn draw(build: &Build, side: Side) -> String {
         }
         ly += line_h * lines.len() as f64 + line_h * 0.45;
     }
-    let alone = (0..c.components.len()).flat_map(|ci| (0..c.components[ci].pins.len()).map(move |pi| (ci, pi))).filter(|p| !net_of.contains_key(p)).count();
+    let alone = (0..c.components.len()).flat_map(|ci| (0..c.components[ci].footprint.pins.len()).map(move |pi| (ci, pi))).filter(|p| !net_of.contains_key(p)).count();
     if alone > 0 {
         writeln!(legend, r#"<rect x="{lx:.1}" y="{:.1}" width="{swatch:.1}" height="{swatch:.1}" rx="{:.1}" fill="{LONE}"/>"#, ly - swatch * 0.8, swatch / 4.0).unwrap();
         writeln!(legend, r#"<text x="{:.1}" y="{ly:.1}" class="legend">connected to nothing: {alone} pins</text>"#, lx + swatch * 1.6).unwrap();

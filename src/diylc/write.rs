@@ -26,11 +26,11 @@ fn inch_f(hole: f64) -> f64 {
 
 /// One item of your DIYLC drawing, moved to where the placer put its part: every
 /// x="..." y="..." point is turned and shifted, and any <orientation> turned to match.
-fn moved(xml: &str, comp: &crate::board::Component, src: &Source, place: &Place) -> String {
+fn moved(xml: &str, comp: &crate::board::Part, src: &Source, place: &Place) -> String {
     let to_new = |x: f64, y: f64| {
         // Sketch inches -> holes inside the part's outline -> turned -> holes on the board -> inches.
         let (mut lx, mut ly) = (x / HOLE - src.origin.0 as f64, y / HOLE - src.origin.1 as f64);
-        let (mut w, mut h) = (comp.w as f64, comp.h as f64);
+        let (mut w, mut h) = (comp.footprint.w as f64, comp.footprint.h as f64);
         for _ in 0..place.rot % 4 {
             (lx, ly, w, h) = (h - 1.0 - ly, lx, h, w);
         }
@@ -127,13 +127,13 @@ pub fn write(build: &Build) -> String {
         }
         let pins = &g.pins[ci];
         let pin = |name: &str| {
-            let i = comp.pins.iter().position(|p| p.name == name);
+            let i = comp.footprint.pins.iter().position(|p| p.name == name);
             pins[i.unwrap_or_else(|| panic!("footprints.json: {} has no pad {name} (see its \"legs\")", comp.reference))]
         };
         let orientation = ORIENTATIONS[place.rot as usize % 4];
         // DIYLC lists a chip's or header's pins column by column (left to right, top to bottom), before rotating.
-        let mut by_column: Vec<usize> = (0..comp.pins.len()).collect();
-        by_column.sort_by_key(|&i| comp.pins[i].at);
+        let mut by_column: Vec<usize> = (0..comp.footprint.pins.len()).collect();
+        by_column.sort_by_key(|&i| comp.footprint.pins[i].at);
 
         // The DIYLC class the footprint asks for, and how to draw it.
         let wanted = comp.diylc.as_ref().map(|p| {
@@ -144,7 +144,7 @@ pub fn write(build: &Build) -> String {
         match wanted {
             Some((_, class, Drawing::Dil)) => {
                 writeln!(s, "<diylc.{class}><id>{}</id><name>{}</name><alphaPercent><value>100</value></alphaPercent><value>{}</value>", id(), xml(&comp.reference), xml(&comp.value)).unwrap();
-                writeln!(s, r#"<orientation>{orientation}</orientation><pinCount>_{}</pinCount><pinSpacing value="0.1" unit="in"/><rowSpacing value="{:.1}" unit="in"/><controlPoints>"#, comp.pins.len(), (comp.w - 1) as f64 * HOLE).unwrap();
+                writeln!(s, r#"<orientation>{orientation}</orientation><pinCount>_{}</pinCount><pinSpacing value="0.1" unit="in"/><rowSpacing value="{:.1}" unit="in"/><controlPoints>"#, comp.footprint.pins.len(), (comp.footprint.w - 1) as f64 * HOLE).unwrap();
                 by_column.iter().for_each(|&i| point(&mut s, to_inch(pins[i])));
                 s += r#"</controlPoints><display>BOTH</display><bodyColor hex="808080"/><borderColor hex="595959"/><labelColor hex="ffffff"/><indentColor hex="595959"/><displayNumbers>NO</displayNumbers>"#;
                 writeln!(s, "\n</diylc.{class}>").unwrap();
@@ -153,7 +153,7 @@ pub fn write(build: &Build) -> String {
                 writeln!(s, "<diylc.{class}><id>{}</id><name>{}</name><alphaPercent><value>100</value></alphaPercent><orientation>{orientation}</orientation><controlPoints>", id(), xml(&comp.reference)).unwrap();
                 by_column.iter().for_each(|&i| point(&mut s, to_inch(pins[i])));
                 // DIYLC's "rows" run across, its "columns" down.
-                writeln!(s, r#"</controlPoints><rowCount>{}</rowCount><columnCount>{}</columnCount><spacing value="0.1" unit="in"/><shrouded>false</shrouded><nodeNames></nodeNames><bodyColor hex="808080"/><shroudColor hex="595959"/>"#, comp.w, comp.h).unwrap();
+                writeln!(s, r#"</controlPoints><rowCount>{}</rowCount><columnCount>{}</columnCount><spacing value="0.1" unit="in"/><shrouded>false</shrouded><nodeNames></nodeNames><bodyColor hex="808080"/><shroudColor hex="595959"/>"#, comp.footprint.w, comp.footprint.h).unwrap();
                 writeln!(s, "</diylc.{class}>").unwrap();
             }
             Some((part, class, Drawing::TwoLegged { size, colors: [body, border, label], extra })) => {

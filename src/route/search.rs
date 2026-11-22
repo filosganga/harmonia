@@ -296,7 +296,7 @@ pub(super) fn empty_grid(c: &Design, g: &Geometry) -> Grid {
     let run_of: std::collections::HashMap<(usize, usize), usize> =
         c.runs.iter().enumerate().flat_map(|(r, run)| run.pins.iter().map(move |&p| (p, r))).collect();
     for (ci, comp) in c.components.iter().enumerate() {
-        for (pi, _) in comp.pins.iter().enumerate().filter(|(_, pin)| pin.off_grid) {
+        for (pi, _) in comp.footprint.pins.iter().enumerate().filter(|(_, pin)| pin.off_grid) {
             let (x, y) = g.pins[ci][pi];
             let mine = run_of.get(&(ci, pi)).map_or(Owner::Blocked, |&r| Owner::Run(r));
             for p in (x - 1..=x + 1).flat_map(|nx| (y - 1..=y + 1).map(move |ny| (nx, ny))) {

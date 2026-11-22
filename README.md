@@ -307,7 +307,8 @@ text board. Pins are named like the `nets` command prints them.
 | `build.rs` | Runs before compiling: tells the program the git commit it's built from, for the "make it again" line on every output. |
 | `dev/kicad_footprint.py` | A dev tool (Python, not needed to run the program): drafts a `footprints.json` entry from a KiCad footprint file. |
 | `src/sexpr.rs` | Reads KiCad's bracket format, `(comp (ref "R1") ...)`, into a tree. |
-| `src/netlist.rs` | Turns a KiCad netlist plus `footprints.json` (built in, yours in `~/.config/harmonia`, and one next to the netlist) into the circuit the placer works on. |
+| `src/netlist.rs` | Turns a KiCad netlist, plus the footprints its parts use, into the circuit the placer works on. |
+| `src/footprints.rs` | The footprint library: reads `footprints.json` (built in, yours in `~/.config/harmonia`, and one next to the netlist) and gives each part its footprint: outline, pins and the holes its body covers. |
 | `src/board.rs` | The circuit the placer works on (`Design`) and where its parts go: where every pin lands, and the holes each part takes. |
 | `src/measure.rs` | Judges a layout: whether it's allowed (`clashes`, from where the parts are) and, once routed, the eleven measurements, their weights, its cost and score; the one-line report and the text picture of the board. It never routes: `route::measure` routes and then measures. |
 | `src/route.rs` | The router: joins every net with copper traces, and hops over with a jumper (or, last, a solder-side wire) where a trace can't get through or going round costs more; for a finished layout it makes 200 complete routings in different orders, keeps the one the score likes best, and improves it a few runs at a time; a pin walled in so that not even a wire fits is left unrouted. It also turns a sketch's own copper into a routing, to measure your wiring. |

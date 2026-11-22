@@ -19,23 +19,41 @@ pub struct Pin {
     pub off_grid: bool,
 }
 
+/// The shape of a part on the board, in its own holes (before it's turned): its name, its outline,
+/// its pins, and the holes its body covers. Many parts can use the same one (each `Part` keeps its
+/// own copy).
 #[derive(Clone)]
-pub struct Component {
-    pub reference: String,
-    /// What the netlist says it is, e.g. "NE555P" or "10k". Only used when exporting.
-    pub value: String,
-    /// Full KiCad footprint name, e.g. "Package_DIP:DIP-8_W7.62mm".
-    pub footprint: String,
-    /// Which DIYLC part to draw it as, if footprints.json says.
-    pub diylc: Option<crate::diylc::Part>,
-    /// Its outline: w x h holes before turning.
+pub struct Footprint {
+    /// Full KiCad footprint name, e.g. "Package_DIP:DIP-8_W7.62mm", or "DIYLC:..." for a part read
+    /// from a DIYLC sketch.
+    pub name: String,
+    /// Its outline: w x h holes.
     pub w: i32,
     pub h: i32,
     pub pins: Vec<Pin>,
-    /// The holes it stands on, inside its outline: from the board up to its top layer. For most
-    /// parts that's the whole outline; a module only stands on its pins (its headers), and a
-    /// two-legged part drawn at an angle on the line between its legs.
+    /// The holes its part stands on, inside the outline: from the board up to the part's top layer
+    /// (`Part::layers`). For most footprints that's the whole outline; a module's only its pins (its
+    /// headers), and a two-legged part drawn at an angle the line between its legs.
     pub body: Vec<Point>,
+}
+
+impl Footprint {
+    /// Every hole of a w x h outline: the body of an ordinary part.
+    pub fn full_body(w: i32, h: i32) -> Vec<Point> {
+        (0..w).flat_map(|x| (0..h).map(move |y| (x, y))).collect()
+    }
+}
+
+/// One thing soldered to the board, named by its reference (R1, U1): a value, a footprint, and
+/// the layers it takes.
+#[derive(Clone)]
+pub struct Part {
+    pub reference: String,
+    /// What the netlist says it is, e.g. "NE555P" or "10k". Only used when exporting.
+    pub value: String,
+    pub footprint: Footprint,
+    /// Which DIYLC part to draw it as, if footprints.json says.
+    pub diylc: Option<crate::diylc::Part>,
     /// For parts read from a DIYLC file: the original drawing, so it can be written back moved.
     pub source: Option<crate::diylc::Source>,
     /// Which layers it takes, unless the board file says otherwise (`Design::layers`).
@@ -46,13 +64,6 @@ pub struct Component {
     /// The footprints.json its footprint came from, if not the built-in library (yours, or one next
     /// to the netlist), so a layout can say it depends on that file.
     pub footprint_from: Option<String>,
-}
-
-impl Component {
-    /// Every hole of a w x h outline: the body of an ordinary part.
-    pub fn full_body(w: i32, h: i32) -> Vec<Point> {
-        (0..w).flat_map(|x| (0..h).map(move |y| (x, y))).collect()
-    }
 }
 
 /// Which layers above the board a part takes, `lo` to `hi`, both included: 0 is the board's
@@ -141,7 +152,7 @@ pub struct BoardSize {
 #[derive(Clone)]
 pub struct Design {
     pub board: BoardSize,
-    pub components: Vec<Component>,
+    pub components: Vec<Part>,
     /// Each joins two pins or more: a net with one pin has nothing to join, so the netlist and
     /// sketch readers leave it out (and a layout file with one is refused).
     pub nets: Vec<Net>,
@@ -171,7 +182,7 @@ pub struct Run {
 
 impl Design {
     /// A design without rules yet: `constraints::designs` adds them, one design per case.
-    pub fn new(board: BoardSize, components: Vec<Component>, nets: Vec<Net>, power: Option<String>, ground: Option<String>) -> Design {
+    pub fn new(board: BoardSize, components: Vec<Part>, nets: Vec<Net>, power: Option<String>, ground: Option<String>) -> Design {
         let mut c = Design { board, components, nets, power, ground, rules: Vec::new(), net_pins: Vec::new(), constraints: Default::default(), runs: Vec::new() };
         c.net_pins = c.nets.iter().map(|net| net.pins.iter().map(|p| c.find_pin(p)).collect()).collect();
         if let Some(net) = c.nets.iter().find(|n| n.pins.len() < 2) {
@@ -193,12 +204,12 @@ impl Design {
     /// parts, or a part drawn at an angle, which only takes the line between its legs.
     pub fn room_under(&self, i: usize) -> bool {
         let comp = &self.components[i];
-        if comp.module { self.layers(i).lo >= Layers::TOP } else { comp.body.len() < (comp.w * comp.h) as usize }
+        if comp.module { self.layers(i).lo >= Layers::TOP } else { comp.footprint.body.len() < (comp.footprint.w * comp.footprint.h) as usize }
     }
 
     /// (index of U1, index of its pin "8") -> "U1.8": `find_pin` the other way.
     pub fn pin_name(&self, (ci, pi): (usize, usize)) -> String {
-        format!("{}.{}", self.components[ci].reference, self.components[ci].pins[pi].name)
+        format!("{}.{}", self.components[ci].reference, self.components[ci].footprint.pins[pi].name)
     }
 
     /// "U1.8" -> (index of U1, index of its pin "8")
@@ -206,7 +217,7 @@ impl Design {
         let (reference, pin) = label.split_once('.').unwrap_or_else(|| panic!("pin {label} should look like U1.8"));
         let ci = self.components.iter().position(|c| c.reference == reference);
         let ci = ci.unwrap_or_else(|| panic!("a net uses {reference}, which isn't in the component list"));
-        let pi = self.components[ci].pins.iter().position(|p| p.name == pin);
+        let pi = self.components[ci].footprint.pins.iter().position(|p| p.name == pin);
         (ci, pi.unwrap_or_else(|| panic!("{label}: its footprint has no pad {pin}")))
     }
 
@@ -239,8 +250,8 @@ pub fn random_placement(c: &Design, rng: &mut impl Rng) -> Placement {
 }
 
 /// Width and height of a component after `rot` quarter turns.
-pub fn size(comp: &Component, rot: u8) -> (i32, i32) {
-    if rot % 2 == 0 { (comp.w, comp.h) } else { (comp.h, comp.w) }
+pub fn size(comp: &Part, rot: u8) -> (i32, i32) {
+    if rot % 2 == 0 { (comp.footprint.w, comp.footprint.h) } else { (comp.footprint.h, comp.footprint.w) }
 }
 
 /// Turns a hole inside a w x h outline `rot` quarter turns clockwise (the outline's top-left stays at 0, 0).
@@ -266,12 +277,12 @@ pub fn geometry(c: &Design, placement: &[Place]) -> Geometry {
     let mut g = Geometry { bodies: Vec::new(), outlines: Vec::new(), pins: Vec::new() };
     for (comp, p) in c.components.iter().zip(placement) {
         let at = |hole: Point| {
-            let (dx, dy) = turn(hole, comp.w, comp.h, p.rot);
+            let (dx, dy) = turn(hole, comp.footprint.w, comp.footprint.h, p.rot);
             (p.x + dx, p.y + dy)
         };
-        g.bodies.push(comp.body.iter().map(|&b| at(b)).collect());
-        g.outlines.push(Component::full_body(comp.w, comp.h).into_iter().map(at).collect());
-        g.pins.push(comp.pins.iter().map(|pin| at(pin.at)).collect());
+        g.bodies.push(comp.footprint.body.iter().map(|&b| at(b)).collect());
+        g.outlines.push(Footprint::full_body(comp.footprint.w, comp.footprint.h).into_iter().map(at).collect());
+        g.pins.push(comp.footprint.pins.iter().map(|pin| at(pin.at)).collect());
     }
     g
 }
