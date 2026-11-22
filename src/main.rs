@@ -173,7 +173,7 @@ struct Loaded {
     /// For a DIYLC sketch, where you put things: a starting point.
     sketch: Option<board::Placement>,
     /// For a DIYLC sketch, the copper you drew, to score your own wiring.
-    copper: Option<diylc::Copper>,
+    copper: Option<board::Copper>,
     /// The board file's path, if there is one.
     board_file: Option<String>,
 }
@@ -194,7 +194,15 @@ fn load(path: &str, args: &Args) -> Loaded {
         let (c, s, copper) = diylc::load(path, opts);
         (c, Some(s), Some(copper))
     } else {
-        (netlist::load(path, opts), None, None)
+        let mut circuit = netlist::load(path, opts);
+        // A footprint with a DIYLC drawing looks like its DIYLC class in the pictures: only diylc
+        // knows the classes, so it says which look that is.
+        for part in &mut circuit.parts {
+            if let Some(look) = diylc::look(&part.footprint) {
+                part.footprint.look = look;
+            }
+        }
+        (circuit, None, None)
     };
     let (cases, left_out) = constraints::designs(&circuit, &board_file.rules);
     if cases.is_empty() {
@@ -352,7 +360,7 @@ fn made(args: &Args, path: &str, board_file: Option<String>, start: &str, cases:
     }
 }
 
-fn place_cmd(cases: &[Design], args: &Args, sketch: Option<board::Placement>, copper: Option<diylc::Copper>, board_file: Option<String>) {
+fn place_cmd(cases: &[Design], args: &Args, sketch: Option<board::Placement>, copper: Option<board::Copper>, board_file: Option<String>) {
     let t0 = Instant::now();
     let mut rng = StdRng::seed_from_u64(args.seed);
     let net = (args.judge == "net").then(|| Net::load(&model_path(&args.out)));
@@ -395,7 +403,7 @@ fn place_cmd(cases: &[Design], args: &Args, sketch: Option<board::Placement>, co
     }
     println!("{}", measure::ascii_board(c, &placed));
 
-    // The finished board with the copper it was judged by: the layout file, and every drawing made
+    // The finished board with the copper it was judged by: the layout file, and every output made
     // from it, show that one routing.
     let build = Build::routed(c.clone(), best, &label, made);
     let made = &build.made;
@@ -412,7 +420,7 @@ fn place_cmd(cases: &[Design], args: &Args, sketch: Option<board::Placement>, co
         svg::draw(&build, Side::Component)
     );
     std::fs::write(&path, html).unwrap();
-    let [picture, solder, kicad, diy] = write_drawings(&build, &format!("{}/{}", args.out, args.judge));
+    let [picture, solder, kicad, diy] = write_outputs(&build, &format!("{}/{}", args.out, args.judge));
     println!("\nSeed {}. To make this layout again: {} ({})", made.seed, made.command, made.version);
     for footprint in &made.footprints {
         println!("  It also needs {footprint}.");
@@ -424,7 +432,7 @@ fn place_cmd(cases: &[Design], args: &Args, sketch: Option<board::Placement>, co
 
 /// Draws a layout as `<stem>.svg`, `<stem>-solder.svg`, `<stem>.kicad_pcb` and `<stem>.diy`, and
 /// returns those names.
-fn write_drawings(build: &Build, stem: &str) -> [String; 4] {
+fn write_outputs(build: &Build, stem: &str) -> [String; 4] {
     let picture = format!("{stem}.svg");
     std::fs::write(&picture, svg::draw(build, Side::Component)).unwrap();
     let solder = format!("{stem}-solder.svg");
@@ -449,6 +457,6 @@ fn draw_cmd(path: &str) {
     for problem in &build.problems {
         println!("  !! {problem}");
     }
-    let [picture, solder, kicad, diy] = write_drawings(&build, stem);
+    let [picture, solder, kicad, diy] = write_outputs(&build, stem);
     println!("Pictures: {picture}, {solder}   For KiCad: {kicad}   For DIYLC: {diy}");
 }

@@ -6,7 +6,7 @@
 //! `Side::Solder` is the board turned over to solder it: mirrored, so column 0 is on the right,
 //! with the copper in front and the parts behind the board, faint.
 
-use crate::board::{self, Part, Point};
+use crate::board::{self, Look, Point};
 use crate::measure;
 use crate::build::Build;
 use std::collections::{HashMap, HashSet};
@@ -55,30 +55,9 @@ const STYLE: &str = "
   .warn { font-size: 11px; fill: #b00020; }
 ";
 
-/// What to draw a part as: the short name of its DIYLC class (`diylc::CLASSES`, the same name
-/// whether it came from footprints.json or a sketch), or "module" for a module (a DIYLC group, or a
-/// footprint with "module": true), however it's mounted.
-fn shape(comp: &Part) -> &str {
-    match &comp.diylc {
-        Some(p) => &p.part,
-        // A group that isn't a module (say, a header and its label) is drawn like a header.
-        None if comp.footprint.name == "DIYLC:module" && !comp.module => "PinHeader",
-        // A footprints.json module.
-        None if comp.module && !comp.footprint.name.starts_with("DIYLC:") => "module",
-        None => comp.footprint.name.strip_prefix("DIYLC:").unwrap_or(""),
-    }
-}
-
 /// "ESP32C6-L.5v" -> ("ESP32C6-L", "5v"): the header a pin belongs to, and its own name.
 fn split_pin(name: &str) -> (&str, &str) {
     name.rsplit_once('.').unwrap_or(("", name))
-}
-
-/// The leg marked + on a polarised part: the capacitor's +, or the LED's anode.
-fn plus_leg(comp: &Part) -> usize {
-    let named = comp.diylc.as_ref().and_then(|d| d.legs.first()).map(String::as_str);
-    let is_plus = |n: &str| n == "+" || n == "A" || Some(n) == named;
-    comp.footprint.pins.iter().position(|p| is_plus(&p.name)).unwrap_or(0)
 }
 
 fn esc(s: &str) -> String {
@@ -247,20 +226,21 @@ pub fn draw(build: &Build, side: Side) -> String {
         let above = |s: &mut String, x: f64, y: f64, class: &str, text: &str| {
             writeln!(s, r#"<text x="{x:.1}" y="{:.1}" class="{class}">{text}</text>"#, y - 5.0).unwrap();
         };
-        match shape(comp) {
+        let look = &comp.footprint.look;
+        match look {
             // Lying flat between its two legs: a body along the line from one leg to the other.
-            "Resistor" | "AxialFilmCapacitor" | "DiodePlastic" if pins.len() == 2 => {
+            Look::Lying { band } if pins.len() == 2 => {
                 let ((x1, y1), (x2, y2)) = (at(pins[0]), at(pins[1]));
                 let (mx, my) = ((x1 + x2) / 2.0, (y1 + y2) / 2.0);
                 let angle = (y2 - y1).atan2(x2 - x1).to_degrees();
                 let length = (((x2 - x1).hypot(y2 - y1)) - 0.8 * PX).clamp(0.8 * PX, 2.5 * PX);
                 let width = 0.9 * PX;
-                let class = if shape(comp) == "DiodePlastic" { "diode" } else { "resistor" };
+                let class = if *band { "diode" } else { "resistor" };
                 writeln!(parts, r#"<line x1="{x1:.1}" y1="{y1:.1}" x2="{x2:.1}" y2="{y2:.1}" class="lead"/>"#).unwrap();
                 writeln!(parts, r#"<g transform="translate({mx:.1} {my:.1}) rotate({angle:.0})"><title>{label}</title>"#).unwrap();
                 writeln!(parts, r#"<rect x="{:.1}" y="{:.1}" width="{length:.1}" height="{width:.1}" rx="{:.1}" class="{class}"/>"#, -length / 2.0, -width / 2.0, width / 2.0).unwrap();
-                if class == "diode" {
-                    // The cathode band, at the K leg (DIYLC's second).
+                if *band {
+                    // The cathode band, at its second leg (the K).
                     writeln!(parts, r#"<rect x="{:.1}" y="{:.1}" width="4" height="{width:.1}" class="band"/>"#, length / 2.0 - 9.0, -width / 2.0).unwrap();
                 }
                 writeln!(parts, "</g>").unwrap();
@@ -269,30 +249,30 @@ pub fn draw(build: &Build, side: Side) -> String {
                 writeln!(labels, r#"<text x="{mx:.1}" y="{:.1}" class="part-name" transform="rotate({upright:.0} {mx:.1} {my:.1})">{}</text>"#, my + 3.5, if class == "diode" { reference.clone() } else { label.clone() }).unwrap();
             }
             // Standing up: a round body over its legs.
-            "RadialElectrolytic" | "LED" if pins.len() == 2 => {
+            Look::Round { plus, lit } if pins.len() == 2 => {
                 let (cx, cy) = (ox + ow / 2.0, oy + oh / 2.0);
                 let r = comp.footprint.w.max(comp.footprint.h) as f64 * PX / 2.0 * 0.95;
-                let class = if shape(comp) == "LED" { "led" } else { "cap" };
+                let class = if *lit { "led" } else { "cap" };
                 writeln!(parts, r#"<circle cx="{cx:.1}" cy="{cy:.1}" r="{r:.1}" class="{class}"><title>{label}</title></circle>"#).unwrap();
                 // The + just past its leg, on the side away from the other leg.
-                let plus = plus_leg(comp);
+                let plus = comp.footprint.pins.iter().position(|p| &p.name == plus).unwrap_or(0);
                 let ((x1, y1), (x2, y2)) = (at(pins[plus]), at(pins[1 - plus]));
                 let d = (x1 - x2).hypot(y1 - y2).max(1.0);
                 let (lx, ly) = (x1 + (x1 - x2) / d * PX * 0.6, y1 + (y1 - y2) / d * PX * 0.6);
                 writeln!(labels, r#"<text x="{lx:.1}" y="{:.1}" class="plus">+</text>"#, ly + 5.5).unwrap();
                 above(&mut labels, cx, cy - r, "part-name", &label);
             }
-            "RadialCeramicDiskCapacitor" | "RadialFilmCapacitor" => {
+            Look::Disc => {
                 writeln!(parts, r#"<rect {} rx="{:.1}" class="cap"><title>{label}</title></rect>"#, rect(outline, 0.4), PX * 0.4).unwrap();
                 above(&mut labels, ox + ow / 2.0, oy, "part-name", &label);
             }
             // A module: its own board, dashed, with a header box around each group of its pins.
-            "module" => {
+            Look::OwnBoard => {
                 writeln!(base, r#"<rect {} class="module"><title>{reference}</title></rect>"#, rect(outline, 0.45)).unwrap();
                 let (nx, anchor) = if mirror { (ox + ow - 4.0, "end") } else { (ox + 4.0, "start") };
                 writeln!(names, r#"<text x="{nx:.1}" y="{:.1}" text-anchor="{anchor}" class="module-name">{reference}</text>"#, oy + 12.0).unwrap();
             }
-            "PinHeader" => {}
+            Look::Header => {}
             // Anything else (chips, transistors, switches, boxes): its outline.
             _ => {
                 writeln!(parts, r#"<rect {} class="package"><title>{label}</title></rect>"#, rect(outline, 0.45)).unwrap();
@@ -302,12 +282,12 @@ pub fn draw(build: &Build, side: Side) -> String {
         // Pin names, on headers and parts with more than two pins (a resistor's "1" and "2" say
         // nothing): grouped by header ("ESP32C6-L.5v" is on ESP32C6-L), each header boxed and
         // named. A row of pins has its names turned to fit.
-        if pins.len() > 2 || matches!(shape(comp), "PinHeader" | "module") {
+        if pins.len() > 2 || matches!(look, Look::Header | Look::OwnBoard) {
             // A module from footprints.json has plain pin numbers, no header names: its headers are
             // the lines of pins in its footprint, each named after the part. Columns for a module
             // whose rows run down (a DRV8833 breakout), rows for one whose rows run across (an
             // ESP32-C6-Zero lying across): whichever makes fewer lines.
-            let unnamed_module = shape(comp) == "module" && comp.footprint.pins.iter().all(|pin| split_pin(&pin.name).0.is_empty());
+            let unnamed_module = *look == Look::OwnBoard && comp.footprint.pins.iter().all(|pin| split_pin(&pin.name).0.is_empty());
             let lines = |axis: fn(Point) -> i32| comp.footprint.pins.iter().map(|pin| axis(pin.at)).collect::<HashSet<i32>>().len();
             let by_row = lines(|p| p.1) < lines(|p| p.0);
             let mut groups: Vec<(String, &str, Vec<usize>)> = Vec::new(); // (key, name, pins)
@@ -327,11 +307,10 @@ pub fn draw(build: &Build, side: Side) -> String {
                     let turn = if in_a_row { format!(r#" transform="rotate(-90 {x:.1} {y:.1})""#) } else { String::new() };
                     writeln!(labels, r#"<text x="{x:.1}" y="{:.1}" class="pin"{turn}>{}</text>"#, y + 3.0, esc(split_pin(&comp.footprint.pins[pi].name).1)).unwrap();
                 }
-                let shape = shape(comp);
-                if shape == "module" || shape == "PinHeader" {
+                if matches!(look, Look::OwnBoard | Look::Header) {
                     let (hx, hy, hw, _) = bounds(&holes, 0.45);
                     writeln!(parts, r#"<rect {} class="header"><title>{}</title></rect>"#, rect(&holes, 0.45), esc(group)).unwrap();
-                    let name = if shape == "module" && !group.is_empty() { esc(group) } else { reference.clone() };
+                    let name = if *look == Look::OwnBoard && !group.is_empty() { esc(group) } else { reference.clone() };
                     above(&mut labels, hx + hw / 2.0, hy, "header-name", &name);
                 }
             }

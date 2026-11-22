@@ -69,7 +69,7 @@ print their seed and command the same way. `place` writes, in `out/` (or the `--
 ### The layout file
 
 `rules.layout.json` holds the finished board, a *build*: what you asked for (the **design**) and
-what the program made of it (the **layout**), so the drawings (and any tool of your own) don't have
+what the program made of it (the **layout**), so the outputs (and any tool of your own) don't have
 to work it out again, and a saved board can be scored again later. It's JSON, with `"format":
 "harmonia-layout"` and a `"version"` number (a file of another version is refused, with a message):
 
@@ -85,11 +85,13 @@ to work it out again, and a saved board can be scored again later. It's JSON, wi
     **choices**: the option this case took in each one-of.
   - **parts**: each part's reference, value and footprint; its `size` in holes before turning, its
     `layers` (as its footprint or sketch says; a `layers` rule may say otherwise) and whether it's a
-    `module`, the `"diylc"` entry from `footprints.json` if it has one, and its pins: name,
-    `at` (its hole inside the part, before turning), and `off_grid` for a pin between holes. A part
-    that doesn't stand on its whole outline (a module, or a DIYLC part lying at an angle) also has its
-    `body`, the holes it stands on; a part from a DIYLC sketch has its `diylc_drawing`, your drawing of
-    it, which is how the `.diy` keeps it.
+    `module`, its `look` in the pictures (an object, `{"as": ...}`: `lying`, with `"band": true` for
+    a diode; `round`, with `plus`, the pin marked +, and `"lit": true` for an LED; `disc`, `header` or
+    `own-board`; left out for a box), its `footprint_drawings` (the `"diylc"` entry from `footprints.json`, if it has
+    one), and its pins: name, `at` (its hole inside the part, before turning), and `off_grid` for a
+    pin between holes. A part that doesn't stand on its whole outline (a module, or a DIYLC part
+    lying at an angle) also has its `body`, the holes it stands on; a part from a DIYLC sketch has
+    its `drawings`, with `diylc`: your drawing of it, which is how the `.diy` keeps it.
   - **nets**: each net's name and pins (two or more).
 - **layout**: what was made of it.
   - **parts**: where each part sits, `at` and `rot` meaning what they mean in the board file's
@@ -309,7 +311,7 @@ text board. Pins are named like the `nets` command prints them.
 | `src/sexpr.rs` | Reads KiCad's bracket format, `(comp (ref "R1") ...)`, into a tree. |
 | `src/netlist.rs` | Turns a KiCad netlist, plus the footprints its parts use, into the circuit the placer works on. |
 | `src/footprints.rs` | The footprint library: reads `footprints.json` (built in, yours in `~/.config/harmonia`, and one next to the netlist) and gives each part its footprint: outline, pins and the holes its body covers. |
-| `src/board.rs` | The circuit the placer works on (`Design`) and where its parts go: where every pin lands, and the holes each part takes. |
+| `src/board.rs` | The circuit the placer works on (`Design`) and where its parts go: where every pin lands, and the holes each part takes; each footprint's look in the pictures, and the drawings file formats keep of parts and footprints. |
 | `src/measure.rs` | Judges a layout: whether it's allowed (`clashes`, from where the parts are) and, once routed, the eleven measurements, their weights, its cost and score; the one-line report and the text picture of the board. It never routes: `route::measure` routes and then measures. |
 | `src/route.rs` | The router: joins every net with copper traces, and hops over with a jumper (or, last, a solder-side wire) where a trace can't get through or going round costs more; for a finished layout it makes 200 complete routings in different orders, keeps the one the score likes best, and improves it a few runs at a time; a pin walled in so that not even a wire fits is left unrouted. It also turns a sketch's own copper into a routing, to measure your wiring. |
 | `src/route/search.rs` | The router's search: the board as it sees it (who owns each hole, where wires lie) and the A* search for the cheapest way to a run's next pin, in traces and wires, with what each step costs. |
@@ -318,14 +320,14 @@ text board. Pins are named like the `nets` command prints them.
 | `src/build/file.rs` | The layout file: writing a build, and reading it back (for `draw`, and `check`'s round trip). |
 | `src/svg.rs` | Draws the layout as an SVG picture, from the parts' side or the solder side. |
 | `src/kicad_pcb.rs` | Writes the layout as a KiCad board. |
-| `src/diylc.rs` | What the program knows about DIYLC, shared by the reader and the writer: the part classes it supports (`CLASSES`: each one's pins, whether it's low, its body, how to draw a new one), DIYLC's units and turns. |
+| `src/diylc.rs` | What the program knows about DIYLC, shared by the reader and the writer: the part classes it supports (`CLASSES`: each one's pins, whether it's low, its body, how to draw a new one), DIYLC's units and turns; what each class looks like in the pictures (`look`), and DIYLC's drawings of footprints and parts, which only it opens. |
 | `src/diylc/read.rs` | Reads a DIYLC sketch: its parts, its modules (groups), which pins connect, and the copper you drew, to measure your own wiring. |
 | `src/diylc/write.rs` | Writes the layout as a DIYLC project (your own parts, moved, if it came from one). |
 | `src/place.rs` | The auto-placer: starts from an allowed layout and keeps nudging/rotating/swapping/jumping parts, only ever to allowed layouts, keeping changes the judge likes. |
 | `src/nn.rs` | The neural network, written out by hand (8 hidden neurons, 105 weights). |
 | `src/bench.rs` | The benchmark: places every circuit of `circuits/bench.txt` with three seeds, several runs at once, and records the best costs. |
 | `src/main.rs` | The commands: `place`, `train`, `evolve`, `nets`, `check`, `draw`, `bench` and `footprints` (no arguments or `--help` prints them all); reading a circuit and its board file; `place`, `nets` and `draw`, and what `check` and `learn` share with them (placing every case, how a layout was made). `place` and `check` place every case of the board file's rules and keep the best. |
-| `src/check.rs` | `check`: places each DIYLC file, writes it out, reads it back, and compares the connections; reads its layout file back too, and compares the drawings. |
+| `src/check.rs` | `check`: places each DIYLC file, writes it out, reads it back, and compares the connections; reads its layout file back too, and compares the outputs. |
 | `src/learn.rs` | `train` and `evolve`: make ~1,200 example boards (going through the board file's cases in turn, up to 12), have the rules score them, and train the network to match. |
 
 ## How a board is judged
@@ -499,8 +501,8 @@ such as a network that proposes whole layouts.
 
 Run both circuits and look at the pictures (`out/rules.svg`, `out/rules-solder.svg`) and the time
 printed at the end. After a change to routing, the DIYLC files, the board file, the layout file or
-any of the drawings, also check that the `.diy` the program writes still has exactly the connections
-it was given (and that the layout file keeps everything the drawings need):
+any of the outputs, also check that the `.diy` the program writes still has exactly the connections
+it was given (and that the layout file keeps everything the outputs need):
 
 ```bash
 cargo run --release -- check circuits/cat_feeder.diy --seed 2   # one file
@@ -515,7 +517,7 @@ unrouted=0` (it was routed by hand that way; CI checks it).
 for each case when there are several), writes the `.diy` (to `out/check.diy`, or in the `--out` folder, overwritten for each
 file), reads it back and compares the connections. It also writes the layout file (`out/check.layout.json`),
 reads it back, and checks that what was read writes the same layout file again and the same `.diy`,
-pictures and KiCad board as the layout in memory, so the layout file keeps everything the drawings
+pictures and KiCad board as the layout in memory, so the layout file keeps everything the outputs
 need. For each file it says one of:
 
 - **same**: passes (only counted).

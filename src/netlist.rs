@@ -4,7 +4,7 @@
 //! footprint. It says nothing about where the pins physically are, so that
 //! comes from the footprint library (`footprints`).
 
-use crate::board::{BoardSize, Design, Net, Part};
+use crate::board::{BoardSize, Design, Drawings, Net, Part};
 use crate::footprints::{self, Library};
 use crate::sexpr::{self, Sexpr};
 
@@ -46,7 +46,7 @@ fn part(comp: &Sexpr, library: &Library) -> Part {
     let footprint = comp.value("footprint").unwrap_or_else(|| panic!("{reference} has no footprint; set one in KiCad"));
     let found = library.find(&reference, footprint);
     let value = comp.value("value").unwrap_or("").to_string();
-    Part { reference, value, footprint: found.footprint, diylc: found.diylc, source: None, layers: found.layers, module: found.module, footprint_from: found.from }
+    Part { reference, value, footprint: found.footprint, drawings: Drawings::new(), layers: found.layers, module: found.module, footprint_from: found.from }
 }
 
 fn net(net: &Sexpr) -> Net {

@@ -75,7 +75,7 @@ touches, and every constant the diff changes, grep the whole repo for the old va
   against README "How it routes", "Known limits" and the unrouted bullet of "How a board is judged",
   and the `src/place.rs` comment in `anneal` (how many routings, how long they take).
 - `CLASSES` in `src/diylc.rs` against README "Supported DIYLC parts" (every class) and the
-  `"diylc"` list in "Using your own circuit" (the classes with a `drawing`).
+  `"diylc"` list in "Using your own circuit" (the classes with a `template`).
 - `SCORE_SCALE` against the score formula in README.
 - Timings and errors (README intro, "Two ways to train", "Known limits", CLAUDE.md). You can't run
   anything, so when a change touches the placer, router, `measure` or training, flag every timing and

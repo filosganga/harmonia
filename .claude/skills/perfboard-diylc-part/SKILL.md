@@ -11,10 +11,11 @@ A new class is supported only when its connections are proven to match.
 ## One entry in `CLASSES` (`src/diylc.rs`)
 
 Everything the program knows about a DIYLC class is one `Class` in `CLASSES`; the reader
-(`src/diylc/read.rs`), the writer (`src/diylc/write.rs`) and the pictures (`src/svg.rs`) all read it.
+(`src/diylc/read.rs`) and the writer (`src/diylc/write.rs`) read it, and `diylc::class_look` turns
+its `short` name into the part's `Look` in the pictures (`src/svg.rs` draws only looks).
 
 1. `name`: the class as in the error message (`"category.Class"`). `short`: what footprints.json's
-   `"diylc"` entry asks for, what a sketch part is called (`"DIYLC:<short>"`) and what `svg::shape`
+   `"diylc"` entry asks for, what a sketch part is called (`"DIYLC:<short>"`) and what `diylc::class_look`
    matches on.
 2. `kind`: `Kind::Part(Some(&[...]))` for fixed pin names in DIYLC's control-point order (`["+", "-"]`,
    `["A", "K"]`), `Kind::Part(None)` to number them 1, 2, ... or take header labels
@@ -25,8 +26,8 @@ Everything the program knows about a DIYLC class is one `Class` in `CLASSES`; th
 4. `radial`: true if it stands up with a round body (then `read::body_of` grows its box to its
    diameter). The body decides collisions and what a jumper may pass over; too small is worse than
    too big.
-5. `drawing`: only if footprints.json should be able to ask for it. `Drawing::TwoLegged` with
-   DIYLC 6.6's own defaults for a new part (size, colours, settings), or a new `Drawing` variant with
+5. `template`: only if footprints.json should be able to ask for it. `Template::TwoLegged` with
+   DIYLC 6.6's own defaults for a new part (size, colours, settings), or a new `Template` variant with
    its branch in `write.rs`; then add its `short` name to the list of `"diylc"` parts in README
    "Using your own circuit".
 
@@ -35,13 +36,16 @@ by the router automatically; nothing to add.
 
 ## Writing and drawing it
 
-- A part from a sketch is written back from its own XML (`Source`), moved and turned by
+- A part from a sketch is written back from its own XML (its DIYLC drawing, `PartDrawing`), moved and turned by
   `write::moved()`, which also turns `<orientation>`. Check the new class has no other field that
   depends on direction.
-- `src/svg.rs` `shape()`: add a drawing for its `short` name if a grey box (the default) misleads.
-- `diylc::Part` and `diylc::Source` are saved in the layout file (`src/build/file.rs`, a part's
-  `"diylc"` and `"diylc_drawing"`): a new field on either changes the file, so raise `VERSION` there
-  if an older reader would get it wrong.
+- `diylc::class_look`: give its `short` name a `Look` if a grey box (the default) misleads; a look
+  the pictures don't have yet is a new `board::Look` variant, its branch in `src/svg.rs`, and its
+  name in README "The layout file" (a part's `look`).
+- DIYLC's drawings (`FootprintDrawing`, `PartDrawing`) are saved in the layout file as opaque JSON
+  (`src/build/file.rs`, a part's `"footprint_drawings"` and `"drawings"`, key `"diylc"`), and so is
+  its `"look"`: a new field on either drawing changes the file, so raise `VERSION` there if an older
+  reader would get it wrong.
 
 ## Prove it
 
