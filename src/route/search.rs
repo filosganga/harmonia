@@ -8,15 +8,15 @@ use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashSet};
 
 /// Costs, in tenths of a hole of trace. A straight step is one hole, a diagonal about 1.4.
-/// They match the score's weights (board::WEIGHTS) times ten, so the router and the score agree.
+/// They match the score's weights (measure::WEIGHTS) times ten, so the router and the score agree.
 const STRAIGHT: u32 = 10;
 const DIAGONAL: u32 = 14;
 /// What a diagonal step pays on top of its length: the score's `diagonal` weight times ten. (2 is
-/// `diagonal`'s place in board::FEATURES: change it if a measurement goes in before it.)
-const DIAGONAL_EXTRA: u32 = (crate::board::WEIGHTS[2] * 10.0) as u32;
+/// `diagonal`'s place in measure::FEATURES: change it if a measurement goes in before it.)
+const DIAGONAL_EXTRA: u32 = (crate::measure::WEIGHTS[2] * 10.0) as u32;
 /// What a trace pays for each right angle's worth of bending (see `bend`), except at a pin, where
-/// it starts anyway: the score's `turns` weight times ten (1 is its place in board::FEATURES).
-const TURN: u32 = (crate::board::WEIGHTS[1] * 10.0) as u32;
+/// it starts anyway: the score's `turns` weight times ten (1 is its place in measure::FEATURES).
+const TURN: u32 = (crate::measure::WEIGHTS[1] * 10.0) as u32;
 /// How hard each turn is to bend in copper wire, counted in right angles, which are the easiest.
 /// A gentle 45° turn, onto or off a diagonal, is harder to bend so it lands on the right hole, and
 /// a sharp 135° turn harder still.
@@ -68,17 +68,17 @@ const AHEAD: [[u32; HEADINGS]; HEADINGS] = {
     table
 };
 /// What each hole of a jumper or solder-side wire costs: the score's `jumper_len` weight times ten
-/// (5 is its place in board::FEATURES).
-const JUMPER_PER_HOLE: f64 = crate::board::WEIGHTS[5] * 10.0;
+/// (5 is its place in measure::FEATURES).
+const JUMPER_PER_HOLE: f64 = crate::measure::WEIGHTS[5] * 10.0;
 /// What a jumper and a solder-side wire cost on top of their length: the score's `jumpers` and
-/// `bottom` weights times ten (4 and 6 in board::FEATURES). The search weighs them against the
+/// `bottom` weights times ten (4 and 6 in measure::FEATURES). The search weighs them against the
 /// traces' way round (`spread`) and a soft star's join, so a solder-side wire, a hundred corners,
 /// is only taken where no jumper fits or the way to one costs more.
-const JUMPER: u32 = (crate::board::WEIGHTS[4] * 10.0) as u32;
-const SOLDER_WIRE: u32 = (crate::board::WEIGHTS[6] * 10.0) as u32;
+const JUMPER: u32 = (crate::measure::WEIGHTS[4] * 10.0) as u32;
+const SOLDER_WIRE: u32 = (crate::measure::WEIGHTS[6] * 10.0) as u32;
 /// What breaking a soft rule costs per hole (or join) at weight 1: the score's `rules` weight times
-/// ten (10 in board::FEATURES).
-pub(super) const RULE: f64 = crate::board::WEIGHTS[10] * 10.0;
+/// ten (10 in measure::FEATURES).
+pub(super) const RULE: f64 = crate::measure::WEIGHTS[10] * 10.0;
 /// The longest jumper or solder-side wire the router tries, in holes.
 const MAX_JUMP: i32 = 10;
 

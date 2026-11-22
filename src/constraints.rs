@@ -39,7 +39,7 @@
 //!
 //! Every rule may have a "weight", 0-1. Without one it's hard: the placer never breaks it (near and
 //! close, below, cost as at weight 1). With one it may be broken, and each hole it's broken by costs
-//! the weight times a thousand (`board::WEIGHTS`' rules): at 1 that's two solder-side wires, nearly
+//! the weight times a thousand (`measure::WEIGHTS`' rules): at 1 that's two solder-side wires, nearly
 //! a hard limit; at 0 nothing. A weight on an all-of or one-of is the weight of every rule inside
 //! without its own. Except layers (below), which has none: it's how a part is built.
 //!
@@ -50,7 +50,7 @@
 //! quarter turns) the part is from where it wants it (`Rule::broken`).
 //!
 //! A keep-out is a hard limit too: no part or copper covers one, like no two parts share a hole
-//! (see `board::clashes`). The placer never makes a layout that breaks it. A soft one is broken by
+//! (see `measure::clashes`). The placer never makes a layout that breaks it. A soft one is broken by
 //! each of its holes a part or copper covers.
 //!
 //! near: the two pins, on the same net, should be joined by as little copper as possible. It costs
@@ -435,7 +435,7 @@ fn rule_cases(rule: &Rule, inherited: Option<f64>) -> Vec<Case<'_>> {
 pub struct NearRule {
     pub net: usize,
     pub pins: [(usize, usize); 2],
-    /// 0-1: each hole of copper between the pins costs this times `board::WEIGHTS`' rules.
+    /// 0-1: each hole of copper between the pins costs this times `measure::WEIGHTS`' rules.
     pub weight: f64,
 }
 
@@ -454,7 +454,7 @@ pub struct StarRule {
     pub at: (usize, usize),
     pub runs: Vec<Vec<(usize, usize)>>,
     /// None: runs never meet but at `at`. 0-1: a run may join another run of this net anywhere, and
-    /// each join costs this times `board::WEIGHTS`' rules (see `route`).
+    /// each join costs this times `measure::WEIGHTS`' rules (see `route`).
     pub weight: Option<f64>,
 }
 
@@ -489,7 +489,7 @@ pub struct Keepout {
     /// The rule's name, like "M3 screw", or empty.
     pub name: String,
     /// None: nothing goes there, ever. 0-1: parts and copper may, and each hole they cover costs
-    /// this times `board::WEIGHTS`' rules.
+    /// this times `measure::WEIGHTS`' rules.
     pub weight: Option<f64>,
 }
 

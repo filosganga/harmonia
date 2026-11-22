@@ -308,7 +308,8 @@ text board. Pins are named like the `nets` command prints them.
 | `dev/kicad_footprint.py` | A dev tool (Python, not needed to run the program): drafts a `footprints.json` entry from a KiCad footprint file. |
 | `src/sexpr.rs` | Reads KiCad's bracket format, `(comp (ref "R1") ...)`, into a tree. |
 | `src/netlist.rs` | Turns a KiCad netlist plus `footprints.json` (built in, yours in `~/.config/harmonia`, and one next to the netlist) into the circuit the placer works on. |
-| `src/board.rs` | Places parts, works out where every pin lands, measures the board and gives it a score. |
+| `src/board.rs` | The circuit the placer works on (`Design`) and where its parts go: where every pin lands, and the holes each part takes. |
+| `src/measure.rs` | Judges a layout: whether it's allowed (`clashes`, from where the parts are) and, once routed, the eleven measurements, their weights, its cost and score; the one-line report and the text picture of the board. It never routes: `route::measure` routes and then measures. |
 | `src/route.rs` | The router: joins every net with copper traces, and hops over with a jumper (or, last, a solder-side wire) where a trace can't get through or going round costs more; for a finished layout it makes 200 complete routings in different orders, keeps the one the score likes best, and improves it a few runs at a time; a pin walled in so that not even a wire fits is left unrouted. It also turns a sketch's own copper into a routing, to measure your wiring. |
 | `src/route/search.rs` | The router's search: the board as it sees it (who owns each hole, where wires lie) and the A* search for the cheapest way to a run's next pin, in traces and wires, with what each step costs. |
 | `src/route/sketch.rs` | Your own wiring, from a DIYLC sketch, as a routing the score can measure. |
@@ -330,7 +331,7 @@ text board. Pins are named like the `nets` command prints them.
 
 First, whether it's **allowed**: whether it can be built at all. A layout isn't allowed if two parts
 take the same hole, a part hangs off the board (a module's board too), a part sits on a keep-out (one without a weight), or
-a part sits under a module's board where they'd touch (`board::clashes`). That's a yes-or-no check, not
+a part sits under a module's board where they'd touch (`measure::clashes`). That's a yes-or-no check, not
 a cost: the placer never makes a layout that isn't allowed, so the score below only ever compares
 layouts that can be built.
 
@@ -345,7 +346,7 @@ so low parts and jumpers go under a module on headers, and taller parts don't. A
 lying at an angle stands on the line between its legs; a standing one (an electrolytic) on its round
 body, whichever way its legs point.
 
-Then how good it is. `src/board.rs` measures eleven things (weights in `WEIGHTS`):
+Then how good it is. `src/measure.rs` measures eleven things (weights in `WEIGHTS`):
 
 - **wire**: total length of copper trace, in holes, as routed (below).
 - **turns**: how hard the traces' bends are to make. Traces are laid with copper wire, and each

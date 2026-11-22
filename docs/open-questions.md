@@ -46,7 +46,7 @@ changed nothing above about 45; at a jumper's price (15) it swaps most jumpers f
 (the fixed board: 3 jumpers and 7 back wires). You chose to keep it at 500. So this question is now
 only about prices: the router follows them.
 
-The weights say what they say on purpose (`WEIGHTS` in src/board.rs, and the memory "corners over
+The weights say what they say on purpose (`WEIGHTS` in src/measure.rs, and the memory "corners over
 length"): a jumper is three corners' worth, a diagonal step three corners on top of its length, and
 CLAUDE.md asks for "no diagonals, stripboard-like". But your own board has 20 diagonal steps and 4
 jumpers. So either the hand route took diagonals because they were easier by hand than a jumper,

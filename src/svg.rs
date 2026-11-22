@@ -7,6 +7,7 @@
 //! with the copper in front and the parts behind the board, faint.
 
 use crate::board::{self, Component, Point};
+use crate::measure;
 use crate::build::Build;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
@@ -140,9 +141,9 @@ pub fn draw(build: &Build, side: Side) -> String {
     // Parts that collide, hang off the board, sit on a hard keep-out or don't fit under a module (both
     // parts of a collision): only in a layout that isn't allowed, like a sketch as you drew it.
     let mut misplaced: HashSet<usize> = HashSet::new();
-    for clash in board::clashes(c, &g, &vec![true; c.components.len()]) {
+    for clash in measure::clashes(c, &g, &vec![true; c.components.len()]) {
         misplaced.insert(clash.part);
-        if let board::Why::OnPart(other) = clash.why {
+        if let measure::Why::OnPart(other) = clash.why {
             misplaced.insert(other);
         }
     }
@@ -366,8 +367,8 @@ pub fn draw(build: &Build, side: Side) -> String {
         line(&mut legend, &mut ly, &text, "note");
     }
     if misplaced.is_empty() {
-        line(&mut legend, &mut ly, &format!("score {:.0}/100, cost {:.1} (lower is better)", board::score(&m), board::cost(&m)), "legend");
-        let measures: Vec<String> = board::FEATURES.iter().zip(m.0).map(|(k, v)| format!("{k} {}", board::shown(k, v))).collect();
+        line(&mut legend, &mut ly, &format!("score {:.0}/100, cost {:.1} (lower is better)", measure::score(&m), measure::cost(&m)), "legend");
+        let measures: Vec<String> = measure::FEATURES.iter().zip(m.0).map(|(k, v)| format!("{k} {}", measure::shown(k, v))).collect();
         // Wrapped too: eleven measurements don't fit on one line beside the board.
         for text in wrap(&measures.join(" · "), 60) {
             line(&mut legend, &mut ly, &text, "note");

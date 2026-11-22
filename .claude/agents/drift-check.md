@@ -57,7 +57,7 @@ Places that restate the code and drift with it:
 No test reads the README, so a copied figure goes stale silently. For every number the diff
 touches, and every constant the diff changes, grep the whole repo for the old value.
 
-- `FEATURES` / `WEIGHTS` in `src/board.rs`: README "How a board is judged" names each measurement
+- `FEATURES` / `WEIGHTS` in `src/measure.rs`: README "How a board is judged" names each measurement
   and how many there are, also in words (how many "numbers" the network gets, in "Where the neural network fits").
 - The weight count in README "Two ways to train" ("all N weights"): inputs × 8 hidden + 8 + 8 + 1.
   It went stale twice, each time a measurement was added.
@@ -91,7 +91,7 @@ touches, and every constant the diff changes, grep the whole repo for the old va
   and ground, seed, steps.
 - **Hard rules are never learned.** Placement rules without a `weight` (fixed, edge, orientation,
   within, and all-of and one-of of them) are enforced by the placer (`Constraints::allowed`, kept by
-  `constraints::apply`), and so is what's allowed for every part (`board::clashes`: no collisions,
+  `constraints::apply`), and so is what's allowed for every part (`measure::clashes`: no collisions,
   nothing off the board, on a keep-out without a weight, or under a module sharing one of its layers, as footprints and the always-hard `layers` rule say): the placer starts
   from an allowed layout (`place::allowed_start`) and never accepts a move that isn't. A change that
   turns any of these into a cost without the board file asking for it with a `weight` (a

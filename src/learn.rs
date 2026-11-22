@@ -1,16 +1,17 @@
 //! `train` and `evolve`: teach the network to score boards the way the rules do, from example
 //! boards, by gradient descent or by evolution, and save it for `place --judge net`.
 
-use crate::board::{self, Design, Measures};
+use crate::board::Design;
+use crate::measure::{self, Measures};
 use crate::nn::{self, Net};
-use crate::{OUT, model_path, place, program, version};
+use crate::{OUT, model_path, place, program, route, version};
 use rand::{Rng, SeedableRng, rngs::StdRng, seq::SliceRandom};
 use std::time::Instant;
 
 /// Example boards for training: (to learn from, kept aside to test).
 /// Random boards (allowed ones, like every board the placer sees), plus boards caught part-way through auto-placement so there are good ones too,
 /// taking the cases of the board file's rules in turn. Each is measured as the placer judges a move,
-/// routed once (`board::measure_once`): a network that learned from boards routed the thorough way
+/// routed once (`route::measure_once`): a network that learned from boards routed the thorough way
 /// rarely saw a pin left unrouted, didn't learn it's bad, and placed the 555 with solder-side wires.
 fn make_examples(cases: &[Design], rng: &mut StdRng) -> (Vec<Measures>, Vec<Measures>) {
     let mut examples: Vec<Measures> = Vec::new();
@@ -18,16 +19,16 @@ fn make_examples(cases: &[Design], rng: &mut StdRng) -> (Vec<Measures>, Vec<Meas
         let c = &cases[i % cases.len()];
         let mut snap_rng = StdRng::seed_from_u64(rng.random());
         let start = place::random_start(c, rng).unwrap_or_else(|why| panic!("{why}"));
-        place::anneal(c, board::cost, 4000, rng, start, |p| {
+        place::anneal(c, measure::cost, 4000, rng, start, |p| {
             if snap_rng.random::<f64>() < 0.02 {
-                examples.push(board::measure_once(c, p));
+                examples.push(route::measure_once(c, p));
             }
         });
     }
     for i in 0..examples.len() / 4 {
         let c = &cases[i % cases.len()];
         let board = place::random_start(c, rng).unwrap_or_else(|why| panic!("{why}"));
-        examples.push(board::measure_once(c, &board));
+        examples.push(route::measure_once(c, &board));
     }
     examples.shuffle(rng);
     let test = examples.split_off(examples.len() * 4 / 5);
@@ -37,7 +38,7 @@ fn make_examples(cases: &[Design], rng: &mut StdRng) -> (Vec<Measures>, Vec<Meas
 
 /// The network's inputs and the right answer (the rules' score, scaled to 0..1) for each board.
 fn pairs(boards: &[Measures]) -> Vec<(Vec<f64>, f64)> {
-    boards.iter().map(|m| (nn::inputs(m), board::score(m) / 100.0)).collect()
+    boards.iter().map(|m| (nn::inputs(m), measure::score(m) / 100.0)).collect()
 }
 
 /// Teach the network to score boards the way the rules do, by gradient descent.
@@ -107,13 +108,13 @@ pub fn evolve(cases: &[Design], seed: u64, again: &str, out: &str) {
 /// Test the trained network on boards it never saw, and save it for `place --judge net`. `seed`
 /// and `again` say how to make the same network again; it's saved in the folder `out`.
 fn finish(net: &Net, test: &[Measures], t0: Instant, seed: u64, again: &str, out: &str) {
-    let mean_err = test.iter().map(|m| (net.predict(m) - board::score(m)).abs()).sum::<f64>() / test.len() as f64;
+    let mean_err = test.iter().map(|m| (net.predict(m) - measure::score(m)).abs()).sum::<f64>() / test.len() as f64;
     println!("\nOn {} unseen boards the network is off by {mean_err:.1} points on average.", test.len());
     println!("A few of them:");
     let mut sorted = test.to_vec();
-    sorted.sort_by(|a, b| board::score(a).total_cmp(&board::score(b)));
+    sorted.sort_by(|a, b| measure::score(a).total_cmp(&measure::score(b)));
     for m in sorted.iter().step_by((sorted.len() / 6).max(1)) {
-        println!("  rules say {:5.1}   network says {:5.1}", board::score(m), net.predict(m));
+        println!("  rules say {:5.1}   network says {:5.1}", measure::score(m), net.predict(m));
     }
 
     let model = model_path(out);
