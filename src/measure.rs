@@ -184,10 +184,10 @@ pub fn clashes(c: &Design, g: &Geometry, placed: &[bool]) -> Vec<Clash> {
     }
     // A module's board, over its outline beyond what it stands on: a part under it clashes where
     // they share a layer (standing on a hole, a part takes it from the surface up).
-    for (m, (outline, body)) in g.outlines.iter().zip(&g.bodies).enumerate().filter(|&(i, _)| placed[i] && c.components[i].module) {
+    for (m, (outline, body)) in g.outlines.iter().zip(&g.bodies).enumerate().filter(|&(i, _)| placed[i] && c.parts[i].module) {
         let board = c.layers(m);
         let under: HashSet<Point> = outline.iter().filter(|p| !body.contains(p)).copied().collect();
-        for (part, comp) in c.components.iter().enumerate().filter(|&(i, _)| placed[i] && i != m) {
+        for (part, comp) in c.parts.iter().enumerate().filter(|&(i, _)| placed[i] && i != m) {
             let covers = if comp.module { &g.outlines[part] } else { &g.bodies[part] };
             let takes = |hole: &Point| if !comp.module || g.bodies[part].contains(hole) { c.layers(part).standing() } else { c.layers(part) };
             out.extend(covers.iter().filter(|h| under.contains(h) && takes(h).overlaps(board)).map(|&hole| Clash { part, hole, why: Why::UnderModule(m) }));
@@ -210,7 +210,7 @@ pub fn clash_words(c: &Design, clashes: &[Clash]) -> Vec<String> {
             None => seen.push((clash.part, clash.why, 1)),
         }
     }
-    let name = |i: usize| &c.components[i].reference;
+    let name = |i: usize| &c.parts[i].reference;
     let holes = |n: usize| if n == 1 { "1 hole".to_string() } else { format!("{n} holes") };
     seen.iter()
         .map(|&(part, why, n)| match why {
@@ -274,7 +274,7 @@ pub fn ascii_board(c: &Design, placement: &[Place]) -> String {
     }
     let on_board = |(x, y): Point| x >= 0 && x < w && y >= 0 && y < h;
     // Under a module (inside its outline but not taken): ':' where nothing else is.
-    for (_, (outline, body)) in g.outlines.iter().zip(&g.bodies).enumerate().filter(|&(k, _)| c.components[k].module) {
+    for (_, (outline, body)) in g.outlines.iter().zip(&g.bodies).enumerate().filter(|&(k, _)| c.parts[k].module) {
         for &p in outline.iter().filter(|&&p| on_board(p) && !body.contains(&p)) {
             let cell = &mut grid[p.1 as usize][p.0 as usize];
             if *cell == '.' {
@@ -306,11 +306,11 @@ pub fn ascii_board(c: &Design, placement: &[Place]) -> String {
         write!(out, "\n{y:2} {}", row.iter().collect::<String>()).unwrap();
     }
     let mut legend: Vec<String> =
-        c.components.iter().enumerate().map(|(i, comp)| format!("{}={}", (b'A' + i as u8) as char, comp.reference)).collect();
+        c.parts.iter().enumerate().map(|(i, comp)| format!("{}={}", (b'A' + i as u8) as char, comp.reference)).collect();
     if !c.constraints.keepout.is_empty() {
         legend.push("x=keep-out".into());
     }
-    if c.components.iter().any(|comp| comp.module && comp.footprint.body.len() < (comp.footprint.w * comp.footprint.h) as usize) {
+    if c.parts.iter().any(|comp| comp.module && comp.footprint.body.len() < (comp.footprint.w * comp.footprint.h) as usize) {
         legend.push(":=under a module".into());
     }
     out + "\n   " + &legend.join("  ")

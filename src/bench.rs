@@ -50,7 +50,7 @@ pub fn run() {
     // One job per (circuit, seed). The slowest first (many parts, several cases), so the machine
     // isn't left waiting on one long run at the end.
     let mut jobs: Vec<(usize, usize)> = (0..circuits.len()).flat_map(|c| (0..SEEDS.len()).map(move |s| (c, s))).collect();
-    jobs.sort_by_key(|&(c, _)| std::cmp::Reverse(circuits[c].len() * circuits[c][0].components.len()));
+    jobs.sort_by_key(|&(c, _)| std::cmp::Reverse(circuits[c].len() * circuits[c][0].parts.len()));
     let workers = std::thread::available_parallelism().map_or(1, |n| n.get()).min(jobs.len());
     println!(
         "Benchmark: {} circuits x {} seeds, {STEPS} steps each, from a random start ({workers} runs at a time)\n",
@@ -79,7 +79,7 @@ pub fn run() {
         .zip(&circuits)
         .map(|(path, cases)| Found {
             circuit: path.to_string(),
-            parts: cases[0].components.len(),
+            parts: cases[0].parts.len(),
             nets: cases[0].nets.len(),
             costs: vec![0.0; SEEDS.len()],
             seconds: vec![0.0; SEEDS.len()],

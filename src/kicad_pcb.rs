@@ -51,14 +51,14 @@ pub fn write(build: &Build) -> String {
         writeln!(s, "  (net {} {})", i + 1, quote(&net.name)).unwrap();
     }
     // net_of[component][pin] = the pin's net number
-    let mut net_of: Vec<Vec<usize>> = c.components.iter().map(|comp| vec![0; comp.footprint.pins.len()]).collect();
+    let mut net_of: Vec<Vec<usize>> = c.parts.iter().map(|comp| vec![0; comp.footprint.pins.len()]).collect();
     for (n, members) in c.net_pins.iter().enumerate() {
         for &(ci, pi) in members {
             net_of[ci][pi] = n + 1;
         }
     }
 
-    for (ci, (comp, place)) in c.components.iter().zip(placement).enumerate() {
+    for (ci, (comp, place)) in c.parts.iter().zip(placement).enumerate() {
         let a = anchor(comp);
         let (ax, ay) = g.pins[ci][a];
         // Our rotation turns parts clockwise; KiCad measures angles anticlockwise.

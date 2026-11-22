@@ -30,15 +30,15 @@ pub fn load(path: &str, opts: Options) -> Design {
         panic!("{path} doesn't look like a KiCad netlist (it should start with \"(export\")");
     }
     let library = footprints::library(path, opts.user_footprints);
-    let components: Vec<Part> =
+    let parts: Vec<Part> =
         root.child("components").into_iter().flat_map(|cs| cs.children("comp")).map(|comp| part(comp, &library)).collect();
-    library.note_replaced(components.iter().map(|c| c.footprint.name.as_str()));
+    library.note_replaced(parts.iter().map(|c| c.footprint.name.as_str()));
     // KiCad also lists pins that connect to nothing as one-pin nets; there's nothing to wire for those.
     let nets: Vec<Net> =
         root.child("nets").into_iter().flat_map(|ns| ns.children("net")).map(net).filter(|n| n.pins.len() > 1).collect();
 
     let (power, ground) = power_and_ground(&nets, &opts);
-    Design::new(opts.board, components, nets, power, ground)
+    Design::new(opts.board, parts, nets, power, ground)
 }
 
 fn part(comp: &Sexpr, library: &Library) -> Part {

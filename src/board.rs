@@ -152,7 +152,7 @@ pub struct BoardSize {
 #[derive(Clone)]
 pub struct Design {
     pub board: BoardSize,
-    pub components: Vec<Part>,
+    pub parts: Vec<Part>,
     /// Each joins two pins or more: a net with one pin has nothing to join, so the netlist and
     /// sketch readers leave it out (and a layout file with one is refused).
     pub nets: Vec<Net>,
@@ -182,8 +182,8 @@ pub struct Run {
 
 impl Design {
     /// A design without rules yet: `constraints::designs` adds them, one design per case.
-    pub fn new(board: BoardSize, components: Vec<Part>, nets: Vec<Net>, power: Option<String>, ground: Option<String>) -> Design {
-        let mut c = Design { board, components, nets, power, ground, rules: Vec::new(), net_pins: Vec::new(), constraints: Default::default(), runs: Vec::new() };
+    pub fn new(board: BoardSize, parts: Vec<Part>, nets: Vec<Net>, power: Option<String>, ground: Option<String>) -> Design {
+        let mut c = Design { board, parts, nets, power, ground, rules: Vec::new(), net_pins: Vec::new(), constraints: Default::default(), runs: Vec::new() };
         c.net_pins = c.nets.iter().map(|net| net.pins.iter().map(|p| c.find_pin(p)).collect()).collect();
         if let Some(net) = c.nets.iter().find(|n| n.pins.len() < 2) {
             panic!("net {} joins fewer than two pins", net.name);
@@ -197,27 +197,27 @@ impl Design {
 
     /// The layers part `i` takes: the board file's `layers` rule for it, or its own.
     pub fn layers(&self, i: usize) -> Layers {
-        self.constraints.layers.get(i).copied().flatten().unwrap_or(self.components[i].layers)
+        self.constraints.layers.get(i).copied().flatten().unwrap_or(self.parts[i].layers)
     }
 
     /// Whether another part may sit inside part `i`'s outline: a module's board raised above the
     /// parts, or a part drawn at an angle, which only takes the line between its legs.
     pub fn room_under(&self, i: usize) -> bool {
-        let comp = &self.components[i];
+        let comp = &self.parts[i];
         if comp.module { self.layers(i).lo >= Layers::TOP } else { comp.footprint.body.len() < (comp.footprint.w * comp.footprint.h) as usize }
     }
 
     /// (index of U1, index of its pin "8") -> "U1.8": `find_pin` the other way.
     pub fn pin_name(&self, (ci, pi): (usize, usize)) -> String {
-        format!("{}.{}", self.components[ci].reference, self.components[ci].footprint.pins[pi].name)
+        format!("{}.{}", self.parts[ci].reference, self.parts[ci].footprint.pins[pi].name)
     }
 
     /// "U1.8" -> (index of U1, index of its pin "8")
     pub fn find_pin(&self, label: &str) -> (usize, usize) {
         let (reference, pin) = label.split_once('.').unwrap_or_else(|| panic!("pin {label} should look like U1.8"));
-        let ci = self.components.iter().position(|c| c.reference == reference);
+        let ci = self.parts.iter().position(|c| c.reference == reference);
         let ci = ci.unwrap_or_else(|| panic!("a net uses {reference}, which isn't in the component list"));
-        let pi = self.components[ci].footprint.pins.iter().position(|p| p.name == pin);
+        let pi = self.parts[ci].footprint.pins.iter().position(|p| p.name == pin);
         (ci, pi.unwrap_or_else(|| panic!("{label}: its footprint has no pad {pin}")))
     }
 
@@ -241,7 +241,7 @@ pub type Placement = Vec<Place>;
 pub fn random_placement(c: &Design, rng: &mut impl Rng) -> Placement {
     let (w, h) = (c.board.width, c.board.height);
     let mut placement: Placement = c
-        .components
+        .parts
         .iter()
         .map(|_| Place { x: rng.random_range(0..w - 1), y: rng.random_range(0..h - 1), rot: rng.random_range(0..4) })
         .collect();
@@ -275,7 +275,7 @@ pub struct Geometry {
 
 pub fn geometry(c: &Design, placement: &[Place]) -> Geometry {
     let mut g = Geometry { bodies: Vec::new(), outlines: Vec::new(), pins: Vec::new() };
-    for (comp, p) in c.components.iter().zip(placement) {
+    for (comp, p) in c.parts.iter().zip(placement) {
         let at = |hole: Point| {
             let (dx, dy) = turn(hole, comp.footprint.w, comp.footprint.h, p.rot);
             (p.x + dx, p.y + dy)

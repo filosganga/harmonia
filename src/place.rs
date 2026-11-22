@@ -42,7 +42,7 @@ pub fn anneal(
 ) -> Placement {
     assert!(measure::allowed(c, &start), "the placer starts from a layout that's allowed");
     // Parts the placer may touch: everything except the ones the board file allows only one place.
-    let movable: Vec<usize> = (0..c.components.len()).filter(|&i| c.constraints.allowed[i].as_ref().is_none_or(|a| a.len() > 1)).collect();
+    let movable: Vec<usize> = (0..c.parts.len()).filter(|&i| c.constraints.allowed[i].as_ref().is_none_or(|a| a.len() > 1)).collect();
     let mut cur = start;
     // Compare boards by cost, not by the 0-100 score: the score flattens out for big circuits (at
     // cost 700, the cat feeder's wiring, a much worse move barely changes it), which would make the placer accept anything.
@@ -90,7 +90,7 @@ fn a_move(c: &Design, cur: &Placement, movable: &[usize], rng: &mut impl Rng) ->
             Some(allowed) => allowed[rng.random_range(0..allowed.len())],
             None => {
                 let rot = rng.random_range(0..4);
-                let (pw, ph) = size(&c.components[k], rot);
+                let (pw, ph) = size(&c.parts[k], rot);
                 Place { x: rng.random_range(0..=(w - pw).max(0)), y: rng.random_range(0..=(h - ph).max(0)), rot }
             }
         };
@@ -124,10 +124,10 @@ pub fn random_start(c: &Design, rng: &mut impl Rng) -> Result<Placement, String>
 /// which part found no room.
 pub fn allowed_start(c: &Design, from: &Placement) -> Result<Placement, String> {
     let (w, h) = (c.board.width, c.board.height);
-    let n = c.components.len();
+    let n = c.parts.len();
     let mut order: Vec<usize> = (0..n).collect();
     let places = |i: usize| c.constraints.allowed[i].as_ref().map_or(usize::MAX, Vec::len);
-    order.sort_by_key(|&i| (places(i), std::cmp::Reverse(c.components[i].footprint.w * c.components[i].footprint.h)));
+    order.sort_by_key(|&i| (places(i), std::cmp::Reverse(c.parts[i].footprint.w * c.parts[i].footprint.h)));
 
     let mut out = from.clone();
     constraints::apply(c, &mut out);
@@ -149,7 +149,7 @@ pub fn allowed_start(c: &Design, from: &Placement) -> Result<Placement, String> 
         };
         candidates.sort_by_key(|q| (q.rot != at.rot, (q.x - at.x).abs() + (q.y - at.y).abs()));
         if !candidates.into_iter().any(|q| fits(q, &mut out)) {
-            return Err(format!("no room for {} on the {w}x{h} board, next to the parts already down", c.components[i].reference));
+            return Err(format!("no room for {} on the {w}x{h} board, next to the parts already down", c.parts[i].reference));
         }
     }
     Ok(out)
