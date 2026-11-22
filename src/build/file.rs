@@ -28,7 +28,7 @@
 //! out again from the design and the layout, with today's measurements.
 
 use super::{Build, Layout, Made};
-use crate::board::{BoardSize, Component, Design, Layers, Net, Pin, Place, Placement, Point, Run};
+use crate::board::{BoardSize, Design, Footprint, Part, Layers, Net, Pin, Place, Placement, Point, Run};
 use crate::constraints::{self, Rule};
 use crate::diylc::{self, Source};
 use crate::route::Routing;
@@ -196,13 +196,13 @@ pub fn to_json(build: &Build) -> String {
         .map(|comp| PartEntry {
             reference: comp.reference.clone(),
             value: comp.value.clone(),
-            footprint: comp.footprint.clone(),
-            size: (comp.w, comp.h),
+            footprint: comp.footprint.name.clone(),
+            size: (comp.footprint.w, comp.footprint.h),
             layers: comp.layers,
             module: comp.module,
             diylc: comp.diylc.clone(),
-            pins: comp.pins.iter().map(|pin| PinEntry { name: pin.name.clone(), at: pin.at, off_grid: pin.off_grid }).collect(),
-            body: (comp.body != Component::full_body(comp.w, comp.h)).then(|| comp.body.clone()),
+            pins: comp.footprint.pins.iter().map(|pin| PinEntry { name: pin.name.clone(), at: pin.at, off_grid: pin.off_grid }).collect(),
+            body: (comp.footprint.body != Footprint::full_body(comp.footprint.w, comp.footprint.h)).then(|| comp.footprint.body.clone()),
             diylc_drawing: comp.source.clone(),
         })
         .collect();
@@ -215,7 +215,7 @@ pub fn to_json(build: &Build) -> String {
             reference: comp.reference.clone(),
             at: (place.x, place.y),
             rot: place.rot,
-            pins: comp.pins.iter().enumerate().map(|(pi, pin)| HoleEntry { name: pin.name.clone(), hole: g.pins[ci][pi] }).collect(),
+            pins: comp.footprint.pins.iter().enumerate().map(|(pi, pin)| HoleEntry { name: pin.name.clone(), hole: g.pins[ci][pi] }).collect(),
         })
         .collect();
     // Each run's copper. The traces as straight pieces, the way the drawings show them; each run's
@@ -282,18 +282,20 @@ pub fn from_json(text: &str) -> Build {
     let d = file.design;
 
     // The design, then the case of its rules the file says it took.
-    let components: Vec<Component> = d
+    let components: Vec<Part> = d
         .parts
         .iter()
-        .map(|p| Component {
+        .map(|p| Part {
             reference: p.reference.clone(),
             value: p.value.clone(),
-            footprint: p.footprint.clone(),
+            footprint: Footprint {
+                name: p.footprint.clone(),
+                w: p.size.0,
+                h: p.size.1,
+                pins: p.pins.iter().map(|pin| Pin { name: pin.name.clone(), at: pin.at, off_grid: pin.off_grid }).collect(),
+                body: p.body.clone().unwrap_or_else(|| Footprint::full_body(p.size.0, p.size.1)),
+            },
             diylc: p.diylc.clone(),
-            w: p.size.0,
-            h: p.size.1,
-            pins: p.pins.iter().map(|pin| Pin { name: pin.name.clone(), at: pin.at, off_grid: pin.off_grid }).collect(),
-            body: p.body.clone().unwrap_or_else(|| Component::full_body(p.size.0, p.size.1)),
             source: p.diylc_drawing.clone(),
             layers: p.layers.checked(&format!("layout file: {}", p.reference)),
             module: p.module,
@@ -349,7 +351,7 @@ pub fn from_json(text: &str) -> Build {
     for (ci, part) in l.parts.iter().enumerate() {
         for (pi, pin) in part.pins.iter().enumerate() {
             let name = design.pin_name((ci, pi));
-            if pin.name != design.components[ci].pins[pi].name || pin.hole != g.pins[ci][pi] {
+            if pin.name != design.components[ci].footprint.pins[pi].name || pin.hole != g.pins[ci][pi] {
                 panic!("layout file: {name} says it's in hole {:?}, but its part's at, rot and size put it in {:?}", pin.hole, g.pins[ci][pi]);
             }
         }

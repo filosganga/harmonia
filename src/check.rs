@@ -91,7 +91,7 @@ fn check_one(path: &str, args: &Args) -> Outcome {
         let holes: std::collections::HashSet<board::Point> = build.layout.routing.unrouted.iter().map(|&(_, _, hole)| hole).collect();
         let mut unrouted = std::collections::HashSet::new();
         for (ci, comp) in c.components.iter().enumerate() {
-            for pi in 0..comp.pins.len() {
+            for pi in 0..comp.footprint.pins.len() {
                 if holes.contains(&g.pins[ci][pi]) {
                     unrouted.insert(c.pin_name((ci, pi)));
                 }

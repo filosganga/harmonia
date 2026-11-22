@@ -8,7 +8,7 @@
 //!
 //! Written in KiCad 9's file format, which KiCad 10 opens fine.
 
-use crate::board::{self, Component, Point};
+use crate::board::{self, Part, Point};
 use crate::build::Build;
 use std::fmt::Write;
 
@@ -24,8 +24,8 @@ fn mm(hole: i32) -> f64 {
 
 /// The pad a footprint is positioned by: pad "1" if there is one. KiCad's library
 /// footprints for through-hole parts put pad 1 at the footprint's origin too.
-fn anchor(comp: &Component) -> usize {
-    comp.pins.iter().position(|p| p.name == "1").unwrap_or(0)
+fn anchor(comp: &Part) -> usize {
+    comp.footprint.pins.iter().position(|p| p.name == "1").unwrap_or(0)
 }
 
 /// KiCad wants a unique id on every item. These are made-up but valid, and the same every run.
@@ -51,7 +51,7 @@ pub fn write(build: &Build) -> String {
         writeln!(s, "  (net {} {})", i + 1, quote(&net.name)).unwrap();
     }
     // net_of[component][pin] = the pin's net number
-    let mut net_of: Vec<Vec<usize>> = c.components.iter().map(|comp| vec![0; comp.pins.len()]).collect();
+    let mut net_of: Vec<Vec<usize>> = c.components.iter().map(|comp| vec![0; comp.footprint.pins.len()]).collect();
     for (n, members) in c.net_pins.iter().enumerate() {
         for &(ci, pi) in members {
             net_of[ci][pi] = n + 1;
@@ -64,15 +64,15 @@ pub fn write(build: &Build) -> String {
         // Our rotation turns parts clockwise; KiCad measures angles anticlockwise.
         let angle = (360 - 90 * place.rot as i32) % 360;
         // Everything inside a footprint is measured from the anchor pad, before rotating.
-        let local = |(x, y): Point| ((x - comp.pins[a].at.0) as f64 * PITCH, (y - comp.pins[a].at.1) as f64 * PITCH);
+        let local = |(x, y): Point| ((x - comp.footprint.pins[a].at.0) as f64 * PITCH, (y - comp.footprint.pins[a].at.1) as f64 * PITCH);
 
-        writeln!(s, "  (footprint {}\n    (layer \"F.Cu\")\n    (uuid \"{}\")", quote(&comp.footprint), uuid(ids.next().unwrap())).unwrap();
+        writeln!(s, "  (footprint {}\n    (layer \"F.Cu\")\n    (uuid \"{}\")", quote(&comp.footprint.name), uuid(ids.next().unwrap())).unwrap();
         writeln!(s, "    (at {:.2} {:.2} {angle})", mm(ax), mm(ay)).unwrap();
 
         // The body box: from the middle of the top-left hole to the bottom-right one, plus half a hole
         // minus a hair, so parts in neighbouring holes don't count as touching.
         let (x0, y0) = local((0, 0));
-        let (x1, y1) = local((comp.w - 1, comp.h - 1));
+        let (x1, y1) = local((comp.footprint.w - 1, comp.footprint.h - 1));
         let half = PITCH / 2.0 - 0.1;
         let (cx, cy) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
         for (name, text, layer, dy) in [("Reference", &comp.reference, "F.Fab", 0.0), ("Value", &comp.value, "F.Fab", 1.2)] {
@@ -94,7 +94,7 @@ pub fn write(build: &Build) -> String {
             )
             .unwrap();
         }
-        for (pi, pin) in comp.pins.iter().enumerate() {
+        for (pi, pin) in comp.footprint.pins.iter().enumerate() {
             let (px, py) = local(pin.at);
             let shape = if pi == a { "rect" } else { "circle" };
             let net = match net_of[ci][pi] {

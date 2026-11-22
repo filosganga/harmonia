@@ -310,7 +310,7 @@ pub fn ascii_board(c: &Design, placement: &[Place]) -> String {
     if !c.constraints.keepout.is_empty() {
         legend.push("x=keep-out".into());
     }
-    if c.components.iter().any(|comp| comp.module && comp.body.len() < (comp.w * comp.h) as usize) {
+    if c.components.iter().any(|comp| comp.module && comp.footprint.body.len() < (comp.footprint.w * comp.footprint.h) as usize) {
         legend.push(":=under a module".into());
     }
     out + "\n   " + &legend.join("  ")

@@ -10,7 +10,7 @@
 //! board) becomes one part. Only its pins' holes are taken, so low parts can go under it.
 
 use super::{HOLE, Kind, MARGIN, Source, class};
-use crate::board::{BoardSize, Design, Component, Layers, Net, Pin, Place, Placement, Point, bounds};
+use crate::board::{BoardSize, Design, Footprint, Part, Layers, Net, Pin, Place, Placement, Point, bounds};
 use crate::netlist::{self, NET_NAME_HINTS, Options};
 use roxmltree::Node;
 use std::collections::{BTreeSet, HashMap};
@@ -227,7 +227,7 @@ fn nets(parts: &[Drawn], conductors: &[Conductor]) -> (Nets, Vec<Option<usize>>)
 
 /// Turns the drawn parts into circuit parts: one per DIYLC group with pins in it, one per other part.
 /// Also returns each one's top-left hole in the sketch, and for each drawn part (its component, in a group?).
-fn components(path: &str, root: &Node, parts: &[Drawn], decorations: &HashMap<String, Node>) -> (Vec<Component>, Vec<Point>, Vec<(usize, bool)>) {
+fn components(path: &str, root: &Node, parts: &[Drawn], decorations: &HashMap<String, Node>) -> (Vec<Part>, Vec<Point>, Vec<(usize, bool)>) {
     let mut groups: Vec<(String, Vec<String>)> = Vec::new();
     if let Some(gx) = child(*root, "groupsEx") {
         for g in gx.children().filter(|n| n.has_tag_name("group")) {
@@ -236,9 +236,9 @@ fn components(path: &str, root: &Node, parts: &[Drawn], decorations: &HashMap<St
         }
     }
     let mut owner: Vec<Option<(usize, bool)>> = vec![None; parts.len()];
-    let mut out: Vec<Component> = Vec::new();
+    let mut out: Vec<Part> = Vec::new();
     let mut places: Vec<Point> = Vec::new();
-    let add = |reference: String, members: Vec<usize>, extra: Vec<Node>, group: Option<(String, Vec<String>)>, out: &mut Vec<Component>, places: &mut Vec<Point>| {
+    let add = |reference: String, members: Vec<usize>, extra: Vec<Node>, group: Option<(String, Vec<String>)>, out: &mut Vec<Part>, places: &mut Vec<Point>| {
         let in_group = group.is_some();
         // Holes of the module's board outline (rectangles in the group), if any.
         let mut outline: Vec<Point> = extra.iter().filter(|n| n.tag_name().name().starts_with("diylc.shapes.")).flat_map(|n| covered(&points(*n))).collect();
@@ -264,15 +264,17 @@ fn components(path: &str, root: &Node, parts: &[Drawn], decorations: &HashMap<St
         let module = !single && body.len() < (w * h) as usize;
         let low = single && class(&first.class).is_some_and(|c| c.low);
         let xml = members.iter().map(|&pi| parts[pi].node).chain(extra).map(|n| n.document().input_text()[n.range()].to_string()).collect();
-        out.push(Component {
+        out.push(Part {
             reference,
             value: if single { first.value.clone() } else { String::new() },
-            footprint: format!("DIYLC:{}", if single { class(&first.class).map_or("", |c| c.short) } else { "module" }),
+            footprint: Footprint {
+                name: format!("DIYLC:{}", if single { class(&first.class).map_or("", |c| c.short) } else { "module" }),
+                w,
+                h,
+                pins: pins.into_iter().map(|(name, at, off_grid)| Pin { name, at: local(at), off_grid }).collect(),
+                body: body.into_iter().map(local).collect(),
+            },
             diylc: None,
-            w,
-            h,
-            pins: pins.into_iter().map(|(name, at, off_grid)| Pin { name, at: local(at), off_grid }).collect(),
-            body: body.into_iter().map(local).collect(),
             source: Some(Source { xml, group, origin: (x0, y0) }),
             layers: Layers::of(module, low),
             module,

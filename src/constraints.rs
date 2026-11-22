@@ -70,7 +70,7 @@
 //! flat on its pads, [0, 1] or [0, 0]. It has no weight: it's how the part is built. To let the
 //! placer try two ways of mounting, put them in a one-of.
 
-use crate::board::{self, Design, Component, Layers, Place, Placement, Point, Run};
+use crate::board::{self, Design, Part, Layers, Place, Placement, Point, Run};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
@@ -296,7 +296,7 @@ impl Rule {
     /// counted in holes, and quarter turns. A hard rule (no weight) that doesn't hold is infinitely
     /// broken: the part may never go there. An all-of adds up its rules, a one-of takes its least
     /// broken option. Only for rules with a part (see `part`), and places on the board.
-    fn broken(&self, comp: &Component, p: Place, w: i32, h: i32, inherited: Option<f64>) -> f64 {
+    fn broken(&self, comp: &Part, p: Place, w: i32, h: i32, inherited: Option<f64>) -> f64 {
         let weight = self.own_weight().or(inherited);
         let (pw, ph) = board::size(comp, p.rot);
         // Quarter turns from `rot`, either way round: 0, 1 or 2.
@@ -644,8 +644,8 @@ pub fn resolve(case: &Case, c: &Design) -> Result<Constraints, String> {
         let comp = &c.components[i];
         let fits = |p: Place| {
             let (pw, ph) = board::size(comp, p.rot);
-            let on_keepout = comp.body.iter().any(|&hole| {
-                let (dx, dy) = board::turn(hole, comp.w, comp.h, p.rot);
+            let on_keepout = comp.footprint.body.iter().any(|&hole| {
+                let (dx, dy) = board::turn(hole, comp.footprint.w, comp.footprint.h, p.rot);
                 out.keepout_holes.contains(&(p.x + dx, p.y + dy))
             });
             p.x + pw <= w && p.y + ph <= h && !on_keepout

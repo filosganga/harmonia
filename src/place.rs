@@ -127,7 +127,7 @@ pub fn allowed_start(c: &Design, from: &Placement) -> Result<Placement, String> 
     let n = c.components.len();
     let mut order: Vec<usize> = (0..n).collect();
     let places = |i: usize| c.constraints.allowed[i].as_ref().map_or(usize::MAX, Vec::len);
-    order.sort_by_key(|&i| (places(i), std::cmp::Reverse(c.components[i].w * c.components[i].h)));
+    order.sort_by_key(|&i| (places(i), std::cmp::Reverse(c.components[i].footprint.w * c.components[i].footprint.h)));
 
     let mut out = from.clone();
     constraints::apply(c, &mut out);
