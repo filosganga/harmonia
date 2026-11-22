@@ -182,7 +182,7 @@ struct RunEntry {
 struct Score {
     score: f64,
     cost: f64,
-    /// Each of `board::FEATURES`, by name.
+    /// Each of `measure::FEATURES`, by name.
     measures: BTreeMap<String, f64>,
 }
 
@@ -255,9 +255,9 @@ pub fn to_json(build: &Build) -> String {
         },
         layout: LayoutEntry { parts: placed, runs },
         score: Score {
-            score: crate::board::score(m),
-            cost: crate::board::cost(m),
-            measures: crate::board::FEATURES.iter().zip(m.0).map(|(k, v)| (k.to_string(), v)).collect(),
+            score: crate::measure::score(m),
+            cost: crate::measure::cost(m),
+            measures: crate::measure::FEATURES.iter().zip(m.0).map(|(k, v)| (k.to_string(), v)).collect(),
         },
         problems: build.problems.clone(),
     };

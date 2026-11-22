@@ -9,7 +9,7 @@
 //! `mutated` supports the other way to train it, evolution: make randomly
 //! changed copies and keep whichever copy is least wrong.
 
-use crate::board::{FEATURES, Measures, SCORE_SCALE};
+use crate::measure::{FEATURES, Measures, SCORE_SCALE};
 use rand::{Rng, SeedableRng, rngs::StdRng};
 use serde::{Deserialize, Serialize};
 

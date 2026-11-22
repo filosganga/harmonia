@@ -10,7 +10,8 @@ pub mod file;
 
 pub use file::{from_json, to_json};
 
-use crate::board::{self, Design, Measures, Placement, Point};
+use crate::board::{self, Design, Placement, Point};
+use crate::measure::{self, Measures};
 use crate::route::{self, Routing};
 use serde::{Deserialize, Serialize};
 
@@ -73,9 +74,9 @@ pub struct Build {
     /// What the pictures and the DIYLC project are called, like "Placed by rules".
     pub title: String,
     pub made: Made,
-    /// The design's measurements with this layout (`board::measure_routed`).
+    /// The design's measurements with this layout (`measure::measure_routed`).
     pub measures: Measures,
-    /// Plain-language problems, the `!!` lines: what isn't allowed (`board::clash_words`), and pins
+    /// Plain-language problems, the `!!` lines: what isn't allowed (`measure::clash_words`), and pins
     /// left unrouted.
     pub problems: Vec<String>,
 }
@@ -116,10 +117,10 @@ impl Build {
     /// A design and a layout made of it, scored, with their problems.
     pub fn of(design: Design, layout: Layout, title: String, made: Made) -> Build {
         let g = board::geometry(&design, &layout.placement);
-        let measures = board::measure_routed(&design, &layout.placement, &g, &layout.routing);
+        let measures = measure::measure_routed(&design, &layout.placement, &g, &layout.routing);
         // A layout from the placer is always allowed; a sketch as you drew it may not be.
-        let clashes = board::clashes(&design, &g, &vec![true; layout.placement.len()]);
-        let mut problems = board::clash_words(&design, &clashes);
+        let clashes = measure::clashes(&design, &g, &vec![true; layout.placement.len()]);
+        let mut problems = measure::clash_words(&design, &clashes);
         problems.extend(route::unrouted_problems(&design, &g, &layout.routing));
         Build { design, layout, title, made, measures, problems }
     }

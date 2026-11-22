@@ -3,12 +3,14 @@
 //! It keeps nudging, rotating, swapping and jumping parts, keeping changes the judge likes and,
 //! early on, sometimes accepting worse ones so it doesn't get stuck.
 //!
-//! It only ever holds layouts that are allowed (`board::clashes`: no two parts on one hole, nothing
+//! It only ever holds layouts that are allowed (`measure::clashes`: no two parts on one hole, nothing
 //! off the board, on a keep-out, or under a module's board sharing one of its layers). It starts from one, and a
 //! move that would break that is thrown away before it's routed, so the judge only ever compares
 //! layouts that can be built.
 
-use crate::board::{self, Design, Measures, Place, Placement, measure_once, random_placement, size};
+use crate::board::{self, Design, Place, Placement, random_placement, size};
+use crate::measure::{self, Measures};
+use crate::route;
 use crate::constraints;
 use rand::Rng;
 
@@ -38,7 +40,7 @@ pub fn anneal(
     start: Placement,
     mut on_step: impl FnMut(&Placement),
 ) -> Placement {
-    assert!(board::allowed(c, &start), "the placer starts from a layout that's allowed");
+    assert!(measure::allowed(c, &start), "the placer starts from a layout that's allowed");
     // Parts the placer may touch: everything except the ones the board file allows only one place.
     let movable: Vec<usize> = (0..c.components.len()).filter(|&i| c.constraints.allowed[i].as_ref().is_none_or(|a| a.len() > 1)).collect();
     let mut cur = start;
@@ -49,7 +51,7 @@ pub fn anneal(
     // chaser with three solder-side wires on three seeds of six, against none. The layout it ends
     // on is routed the thorough way (`route::route`: the candidates, the best improved), which is
     // never worse.
-    let cost_of = |p: &Placement| cost(&measure_once(c, p));
+    let cost_of = |p: &Placement| cost(&route::measure_once(c, p));
     let mut cur_s = cost_of(&cur);
     let (mut best, mut best_s) = (cur.clone(), cur_s);
     if movable.is_empty() {
@@ -59,7 +61,7 @@ pub fn anneal(
     for i in 0..steps {
         // How much worse (in cost) a move may be and still get accepted now and then; falls to almost 0.
         let temp = 20.0 * (1.0 - i as f64 / steps as f64) + 0.1;
-        let Some(new) = (0..TRIES).map(|_| a_move(c, &cur, &movable, rng)).find(|p| board::allowed(c, p)) else {
+        let Some(new) = (0..TRIES).map(|_| a_move(c, &cur, &movable, rng)).find(|p| measure::allowed(c, p)) else {
             on_step(&cur);
             continue;
         };
@@ -134,7 +136,7 @@ pub fn allowed_start(c: &Design, from: &Placement) -> Result<Placement, String> 
         placed[i] = true;
         let fits = |p: Place, out: &mut Placement| {
             out[i] = p;
-            board::clashes(c, &board::geometry(c, out), &placed).is_empty()
+            measure::clashes(c, &board::geometry(c, out), &placed).is_empty()
         };
         if fits(out[i], &mut out) {
             continue;

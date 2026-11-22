@@ -3,6 +3,7 @@
 //! back, must give the same drawings.
 
 use crate::board::{self, Design};
+use crate::measure;
 use crate::build::{self, Build};
 use crate::svg::{self, Side};
 use crate::{Args, diylc, kicad_pcb, load, made, place_cases};
@@ -63,7 +64,7 @@ fn check_one(path: &str, args: &Args) -> Outcome {
     let round_trip = || {
         let sketch = loaded.sketch.as_ref().expect("a .diy file has a sketch");
         let mut rng = StdRng::seed_from_u64(args.seed);
-        let (k, _, best, _) = place_cases(&loaded.cases, board::cost, args.steps, &mut rng, Some(sketch), true);
+        let (k, _, best, _) = place_cases(&loaded.cases, measure::cost, args.steps, &mut rng, Some(sketch), true);
         let c = &loaded.cases[k];
         let made = made(args, path, loaded.board_file.clone(), "sketch", &loaded.cases, k);
         let placed = best.placement.clone();

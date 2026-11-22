@@ -7,7 +7,8 @@
 //! The runs don't depend on each other, so several go at once, one per processor core. Each run has
 //! its own random numbers, made from its seed, so the costs are the same as running them one by one.
 
-use crate::board::{self, Design};
+use crate::board::Design;
+use crate::measure;
 use rand::{SeedableRng, rngs::StdRng};
 use serde::Serialize;
 use std::sync::Mutex;
@@ -120,8 +121,8 @@ fn load(path: &str) -> Vec<Design> {
 /// A DIYLC sketch starts from random too, not from where it was drawn.
 fn best_cost(cases: &[Design], seed: u64) -> f64 {
     let mut rng = StdRng::seed_from_u64(seed);
-    let (_, _, _, m) = crate::place_cases(cases, board::cost, STEPS, &mut rng, None, false);
-    board::cost(&m)
+    let (_, _, _, m) = crate::place_cases(cases, measure::cost, STEPS, &mut rng, None, false);
+    measure::cost(&m)
 }
 
 fn print_table(results: &[Found]) {

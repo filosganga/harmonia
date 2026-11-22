@@ -42,13 +42,17 @@
 //! built run after run, each the cheapest way the ones before it left, so no run ever leaves room
 //! for a later one: the best is then improved a few runs at a time (`improve`), every change judged
 //! by the score.
+//!
+//! `measure` and `measure_once` route a placement (the thorough way, or once, shortest first) and
+//! then score it with `measure::measure_routed`: the score never routes, the router asks the score.
 
 mod search;
 mod sketch;
 
 pub use sketch::from_sketch;
 
-use crate::board::{Design, Geometry, Measures, Place, Point, WEIGHTS, distance};
+use crate::board::{Design, Geometry, Place, Point, distance, geometry};
+use crate::measure::{Measures, WEIGHTS, measure_routed};
 use rand::{Rng, SeedableRng, rngs::StdRng, seq::SliceRandom};
 use search::{Grid, RULE, Scratch, Side, Step, bend, empty_grid, holes_between, join, jumper_shapes, lay, octile, spread};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -229,7 +233,7 @@ pub fn unit_steps(a: Point, b: Point) -> Option<Vec<(Point, Point)>> {
 
 /// Routes every run of the circuit, for parts at `placement` (whose geometry is `g`): makes
 /// CANDIDATES complete routings, the first shortest run first and the others in random orders, and
-/// keeps the one the score likes best (`board::cost`, every measurement and rule counted), then
+/// keeps the one the score likes best (`measure::cost`, every measurement and rule counted), then
 /// improves it a few runs at a time (`improve`). The router has no rules of its own about what to
 /// try again or what to keep room for: it proposes, the score judges. The random choices come from
 /// fixed seeds, so the same placement always gets the same copper.
@@ -253,8 +257,8 @@ pub fn route(c: &Design, placement: &[Place], g: &Geometry) -> Routing {
         if gave_up {
             continue;
         }
-        let m = crate::board::measure_routed(c, placement, g, &routing);
-        let cost = crate::board::cost(&m);
+        let m = measure_routed(c, placement, g, &routing);
+        let cost = crate::measure::cost(&m);
         if best.as_ref().is_none_or(|b| cost < b.0) {
             best = Some((cost, cost - fixed(&m), routing));
         }
@@ -280,6 +284,21 @@ pub fn route_once(c: &Design, g: &Geometry) -> Routing {
     route_in_order(c, g, empty_grid(c, g), Routing::default(), &order(c, g), f64::INFINITY).0
 }
 
+/// Routes the parts at `placement` the thorough way (`route`), then measures the layout
+/// (`measure::measure_routed`).
+pub fn measure(c: &Design, placement: &[Place]) -> Measures {
+    let g = geometry(c, placement);
+    let routing = route(c, placement, &g);
+    measure_routed(c, placement, &g, &routing)
+}
+
+/// The same, routed once, shortest first (`route_once`): what the placer judges each move by.
+pub fn measure_once(c: &Design, placement: &[Place]) -> Measures {
+    let g = geometry(c, placement);
+    let routing = route_once(c, &g);
+    measure_routed(c, placement, &g, &routing)
+}
+
 /// How many changes `improve` tries. On the cat feeder with every part fixed where it's soldered
 /// (circuits/cat_feeder_fixed), the best of the 200 candidates costs 677 (625 without the star
 /// rules); improved, 627 after 1000 tries, 622 after 2000 (582 without the star rules), 615 after
@@ -292,10 +311,10 @@ const IMPROVE: usize = 2000;
 
 /// Makes a finished routing better, a few runs at a time: rips up a random run and every run with
 /// copper or a pin in the box around its own (grown by 0 to 3 holes, at random), routes them again in a
-/// random order, and keeps the change if the whole board costs less (`board::cost`). The score
+/// random order, and keeps the change if the whole board costs less (`measure::cost`). The score
 /// judges every change, as it judges the candidates; the random choices come from a fixed seed.
 fn improve(c: &Design, placement: &[Place], g: &Geometry, start: Routing) -> Routing {
-    let cost = |r: &Routing| crate::board::cost(&crate::board::measure_routed(c, placement, g, r));
+    let cost = |r: &Routing| crate::measure::cost(&measure_routed(c, placement, g, r));
     let mut rng = StdRng::seed_from_u64(1);
     let (mut best, mut best_cost) = (start.clone(), cost(&start));
     // The holes a run's pins and copper take.

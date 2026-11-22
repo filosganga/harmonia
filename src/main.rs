@@ -21,6 +21,7 @@ mod constraints;
 mod diylc;
 mod kicad_pcb;
 mod learn;
+mod measure;
 mod netlist;
 mod nn;
 mod place;
@@ -28,7 +29,8 @@ mod route;
 mod sexpr;
 mod svg;
 
-use board::{BoardSize, Design, Measures};
+use board::{BoardSize, Design};
+use measure::Measures;
 use build::{Build, Layout, Made};
 use nn::Net;
 use svg::Side;
@@ -236,9 +238,9 @@ fn place_cases(
         let layout = place::anneal(c, &cost, steps, rng, start.clone(), |_| {});
         let g = board::geometry(c, &layout);
         let routing = route::route(c, &layout, &g);
-        let m = board::measure_routed(c, &layout, &g, &routing);
+        let m = measure::measure_routed(c, &layout, &g, &routing);
         if report && cases.len() > 1 {
-            println!("{}", board::report(c, &layout, &m, &format!("Case {} of {} ({})", k + 1, cases.len(), case_name(c))));
+            println!("{}", measure::report(c, &layout, &m, &format!("Case {} of {} ({})", k + 1, cases.len(), case_name(c))));
         }
         let this = cost(&m);
         if best.as_ref().is_none_or(|b| this < b.4) {
@@ -355,7 +357,7 @@ fn place_cmd(cases: &[Design], args: &Args, sketch: Option<board::Placement>, co
     let net = (args.judge == "net").then(|| Net::load(&model_path(&args.out)));
     let judge = |m: &Measures| match &net {
         Some(net) => net.cost(m),
-        None => board::cost(m),
+        None => measure::cost(m),
     };
 
     let (start_label, start_name) = if sketch.is_some() { ("Your sketch", "sketch") } else { ("Random start", "random") };
@@ -368,29 +370,29 @@ fn place_cmd(cases: &[Design], args: &Args, sketch: Option<board::Placement>, co
     // The start, for the page that shows it next to the result. It isn't in the layout file.
     let made = made(args, &args.circuit, board_file, start_name, cases, k);
     let start = Build::new(c.clone(), start, start_label, made.clone());
-    println!("{}", board::report(c, &start.layout.placement, &start.measures, start_label));
+    println!("{}", measure::report(c, &start.layout.placement, &start.measures, start_label));
     // Your own wiring, if you drew any, measured like the router's, and the router's on the same
     // placement (as you drew it, allowed or not), to compare.
     if let (Some(sketch), Some(copper)) = (&sketch, copper.as_ref().filter(|w| !w.traces.is_empty() || !w.jumpers.is_empty())) {
         let g = board::geometry(c, sketch);
         let (yours, breaks) = route::from_sketch(c, &g, copper);
-        println!("{}", board::report_measures(&board::measure_routed(c, sketch, &g, &yours), "  wired as you drew it"));
+        println!("{}", measure::report_measures(&measure::measure_routed(c, sketch, &g, &yours), "  wired as you drew it"));
         if breaks > 0 {
             println!("    (and it breaks the board file's star rules {breaks} times, which the router never does)");
         }
-        println!("{}", board::report_measures(&board::measure(c, sketch), "  wired by the router"));
+        println!("{}", measure::report_measures(&route::measure(c, sketch), "  wired by the router"));
     }
-    println!("{}\n", board::ascii_board(c, &start.layout.placement));
+    println!("{}\n", measure::ascii_board(c, &start.layout.placement));
 
     let label = match case_name(c) {
         choices if choices.is_empty() => format!("Placed by {}", args.judge),
         choices => format!("Placed by {} ({choices})", args.judge),
     };
-    println!("{}", board::report(c, &placed, &m, &label));
+    println!("{}", measure::report(c, &placed, &m, &label));
     if let Some(net) = &net {
-        println!("  (the network thought it would score {:.0}; the rules say {:.0})", net.predict(&m), board::score(&m));
+        println!("  (the network thought it would score {:.0}; the rules say {:.0})", net.predict(&m), measure::score(&m));
     }
-    println!("{}", board::ascii_board(c, &placed));
+    println!("{}", measure::ascii_board(c, &placed));
 
     // The finished board with the copper it was judged by: the layout file, and every drawing made
     // from it, show that one routing.
@@ -442,7 +444,7 @@ fn draw_cmd(path: &str) {
     let build = build::from_json(&text);
     let (m, made) = (&build.measures, &build.made);
     println!("{path}: {}, from {} ({})", build.title, made.circuit, made.again());
-    println!("  score {:.0}/100, cost {:.1}", board::score(m), board::cost(m));
+    println!("  score {:.0}/100, cost {:.1}", measure::score(m), measure::cost(m));
     for problem in &build.problems {
         println!("  !! {problem}");
     }

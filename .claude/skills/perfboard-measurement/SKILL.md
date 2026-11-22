@@ -1,6 +1,6 @@
 ---
 name: perfboard-measurement
-description: Checklist for adding, removing, renaming or reweighting one of the perfboard placer's score measurements (board::FEATURES / WEIGHTS), which are also the neural network's inputs, so the network, the router's costs, the outputs and the README stay in step. Use whenever measure() changes what it returns or a rule weight changes.
+description: Checklist for adding, removing, renaming or reweighting one of the perfboard placer's score measurements (measure::FEATURES / WEIGHTS), which are also the neural network's inputs, so the network, the router's costs, the outputs and the README stay in step. Use whenever measure_routed() changes what it returns or a rule weight changes.
 ---
 
 # Changing a measurement
@@ -9,8 +9,8 @@ A measurement is in five places that the compiler only partly ties together.
 
 ## Code
 
-1. `src/board.rs`: `FEATURES` (names), `WEIGHTS` (one comment per line: what it costs per what), and the
-   `Measures([...])` built at the end of `measure_routed()` (which `measure()` calls). All three in the
+1. `src/measure.rs`: `FEATURES` (names), `WEIGHTS` (one comment per line: what it costs per what), and the
+   `Measures([...])` built at the end of `measure_routed()` (which `route::measure()` calls). All three in the
    **same order**.
 2. `src/nn.rs`: `SCALE`, one rough size per measurement so inputs land around 0..1, **same order as
    FEATURES**. The compiler checks the length, not the order.
