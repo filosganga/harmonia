@@ -69,7 +69,7 @@ fn check_one(path: &str, args: &Args) -> Outcome {
         let c = &loaded.cases[k];
         let made = made(args, path, loaded.board_file.clone(), "sketch", &loaded.cases, k);
         let placed = best.placement.clone();
-        let build = Build::routed(c.clone(), best, "check", made);
+        let build = Build::of(c.clone(), best, "check".to_string(), made);
         let written = format!("{}/check.diy", args.out);
         let diy = diylc::write(&build);
         std::fs::write(&written, &diy).unwrap();
@@ -89,7 +89,7 @@ fn check_one(path: &str, args: &Args) -> Outcome {
         // nets can't join by themselves. Pins the router couldn't reach aren't joined in the drawing at all. Leave them out on both
         // sides: if everything else matches, only they are missing; if not, the writer is wrong.
         let g = c.geometry(&placed);
-        let holes: std::collections::HashSet<board::Point> = build.layout.routing.unrouted.iter().map(|&(_, _, hole)| hole).collect();
+        let holes: std::collections::HashSet<board::Point> = build.wiring.unrouted.iter().map(|&(pin, _)| g.pins[pin.0][pin.1]).collect();
         let mut unrouted = std::collections::HashSet::new();
         for (ci, comp) in c.circuit.parts.iter().enumerate() {
             for pi in 0..comp.footprint.pins.len() {

@@ -152,34 +152,45 @@ pub fn draw(build: &Build, side: Side) -> String {
     }
 
     // --- the copper traces, on the solder side
-    let routing = &build.layout.routing;
+    let layout_copper = &build.layout.copper;
+    let wiring = &build.wiring;
+    // The net a piece of copper is on, by name and colour (grey for copper that joins no pin).
+    let net_name = |net: Option<usize>| net.map_or(String::new(), |n| esc(&circuit.nets[n].name));
+    let net_color = |net: Option<usize>| net.map_or(LONE, |n| colors[n]);
     let opacity = if mirror { 0.9 } else { 0.55 };
-    let mut copper: HashMap<Point, usize> = HashMap::new(); // holes the copper touches -> net
-    for (run, a, b) in routing.straight_traces() {
-        let net = c.runs[run].net;
+    let mut copper: HashMap<Point, Option<usize>> = HashMap::new(); // holes the copper touches -> net
+    for (k, a, b) in layout_copper.straight_pieces() {
+        let net = wiring.trace_net[k];
         let ((x1, y1), (x2, y2)) = (at(a), at(b));
         writeln!(
             wires,
             r#"<line x1="{x1:.1}" y1="{y1:.1}" x2="{x2:.1}" y2="{y2:.1}" stroke="{}" stroke-width="{:.1}" stroke-linecap="round" opacity="{opacity}"><title>trace, {}</title></line>"#,
-            colors[net], PX * 0.42, esc(&circuit.nets[net].name)
+            net_color(net), PX * 0.42, net_name(net)
         )
         .unwrap();
     }
     // Wires on the solder side, the last resort: dashed, with the copper.
-    for &(run, a, b) in &routing.bottom {
-        let ((x1, y1), (x2, y2)) = (at(a), at(b));
+    for (k, w) in layout_copper.wires.iter().enumerate().filter(|(_, w)| w.layer < 0) {
+        let ((x1, y1), (x2, y2)) = (at(w.pins[0]), at(w.pins[1]));
         let line = format!(r#"x1="{x1:.1}" y1="{y1:.1}" x2="{x2:.1}" y2="{y2:.1}""#);
         writeln!(wires, r#"<line {line} class="jumper-halo"/>"#).unwrap();
-        writeln!(wires, r#"<line {line} class="bottom-wire"><title>wire on the solder side, {}</title></line>"#, esc(&circuit.nets[c.runs[run].net].name)).unwrap();
+        writeln!(wires, r#"<line {line} class="bottom-wire"><title>wire on the solder side, {}</title></line>"#, net_name(wiring.wire_net[k])).unwrap();
     }
-    // Connections the router couldn't make: a thin dotted line, no copper.
-    for &(run, a, b) in &routing.unrouted {
-        let ((x1, y1), (x2, y2)) = (at(a), at(b));
-        writeln!(wires, r#"<line x1="{x1:.1}" y1="{y1:.1}" x2="{x2:.1}" y2="{y2:.1}" class="unrouted"><title>not connected: {} couldn't be routed here</title></line>"#, esc(&circuit.nets[c.runs[run].net].name)).unwrap();
+    // Pins the copper doesn't join to their net: a thin dotted line from the rest of it, no copper.
+    for &((ci, pi), from) in &wiring.unrouted {
+        let net = circuit.net_pins.iter().position(|pins| pins.contains(&(ci, pi)));
+        let ((x1, y1), (x2, y2)) = (at(from), at(g.pins[ci][pi]));
+        writeln!(wires, r#"<line x1="{x1:.1}" y1="{y1:.1}" x2="{x2:.1}" y2="{y2:.1}" class="unrouted"><title>not connected: {} couldn't be routed here</title></line>"#, net_name(net)).unwrap();
     }
-    for &(run, a, b) in routing.traces.iter().chain(&routing.jumpers).chain(&routing.bottom) {
-        copper.insert(a, c.runs[run].net);
-        copper.insert(b, c.runs[run].net);
+    for (k, t) in layout_copper.traces.iter().enumerate() {
+        for &h in &t.holes {
+            copper.insert(h, wiring.trace_net[k]);
+        }
+    }
+    for (k, w) in layout_copper.wires.iter().enumerate() {
+        for h in w.pins {
+            copper.insert(h, wiring.wire_net[k]);
+        }
     }
 
     // --- holes: a pin's hole in its net's colour, an empty hole small and white
@@ -204,11 +215,11 @@ pub fn draw(build: &Build, side: Side) -> String {
                     .unwrap();
                 }
                 None if copper.contains_key(&(x, y)) => {
-                    let net = &circuit.nets[copper[&(x, y)]];
+                    let net = copper[&(x, y)];
                     writeln!(
                         holes,
                         r##"<circle cx="{cx:.1}" cy="{cy:.1}" r="{:.1}" fill="{}" stroke="#ffffff" stroke-width="1.5"><title>{x},{y} · trace · net {}</title></circle>"##,
-                        PX * 0.22, colors[copper[&(x, y)]], esc(&net.name)
+                        PX * 0.22, net_color(net), net_name(net)
                     )
                     .unwrap();
                 }
@@ -323,11 +334,11 @@ pub fn draw(build: &Build, side: Side) -> String {
     }
 
     // --- jumpers, on the parts' side, over everything
-    for &(run, a, b) in &routing.jumpers {
-        let ((x1, y1), (x2, y2)) = (at(a), at(b));
+    for (k, w) in layout_copper.wires.iter().enumerate().filter(|(_, w)| w.layer > 0) {
+        let ((x1, y1), (x2, y2)) = (at(w.pins[0]), at(w.pins[1]));
         let line = format!(r#"x1="{x1:.1}" y1="{y1:.1}" x2="{x2:.1}" y2="{y2:.1}""#);
         writeln!(parts, r#"<line {line} class="jumper-halo"/>"#).unwrap();
-        writeln!(parts, r#"<line {line} class="jumper"><title>jumper, {}</title></line>"#, esc(&circuit.nets[c.runs[run].net].name)).unwrap();
+        writeln!(parts, r#"<line {line} class="jumper"><title>jumper, {}</title></line>"#, net_name(wiring.wire_net[k])).unwrap();
     }
 
     // --- the legend, beside the board

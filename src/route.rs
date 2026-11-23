@@ -47,18 +47,16 @@
 //! then score it with `measure::measure_routed`: the score never routes, the router asks the score.
 
 mod search;
-mod sketch;
 
-pub use sketch::from_sketch;
-
-use crate::board::{Face, Geometry, Place, Point, distance};
+use crate::board::{COPPER, Face, Geometry, LYING, Place, Point, distance};
+use crate::layout::{Copper, JumperWire, Trace};
 use crate::measure::{Measures, WEIGHTS, measure_routed};
 use crate::rules::Case;
 use rand::{Rng, SeedableRng, rngs::StdRng, seq::SliceRandom};
-use search::{Grid, RULE, Scratch, Step, bend, empty_grid, holes_between, join, jumper_shapes, lay, octile, spread};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use search::{Grid, RULE, Scratch, Step, empty_grid, join, jumper_shapes, lay, octile, spread};
 
-/// Where the copper goes. Each entry is (run, from hole, to hole).
+/// Where the router lays the copper, run by run: its own working copy. Each entry is (run, from
+/// hole, to hole). A layout holds only the copper (`copper`).
 #[derive(Default, Clone)]
 pub struct Routing {
     /// One step of trace between neighbouring holes, on the solder side.
@@ -69,149 +67,29 @@ pub struct Routing {
     pub bottom: Vec<(usize, Point, Point)>,
     /// A connection the router couldn't make, as (run, the nearest hole already joined, the pin):
     /// the pin is walled in, so not even a wire fits (a wire's leg needs a hole of its own, never a
-    /// pin's), or it's off the board. Only shown, never copper.
+    /// pin's), or it's off the board. Never copper: the score works out what's unrouted from the
+    /// copper (`measure::wiring`); this only keeps the router's running total honest.
     pub unrouted: Vec<(usize, Point, Point)>,
-    /// Where a run of a soft star net joined another run of its net, away from the star point:
-    /// (run, the other run's hole it starts from; in your own wiring, a hole of the copper the runs
-    /// share). Its copper is in `traces`, as the run's own.
-    pub joins: Vec<(usize, Point)>,
 }
 
 impl Routing {
-    /// Length of copper trace, in holes.
-    pub fn trace_length(&self) -> f64 {
-        self.traces.iter().map(|&(_, a, b)| distance(a, b)).sum::<f64>() + 0.0 // + 0.0: no traces is 0, not -0
-    }
-
-    /// How many steps of copper trace go diagonally. Traces are laid in copper wire along the holes,
-    /// and straight ones are easier to lay and can line up in parallel (or come from a stripboard's
-    /// strips); jumpers and solder-side wires are wires, free to go at 45°, so they don't count.
-    pub fn diagonal_steps(&self) -> f64 {
-        self.traces.iter().filter(|&&(_, a, b)| a.0 != b.0 && a.1 != b.1).count() as f64
-    }
-
-    /// How many straight steps of copper trace run against the board's main direction: across or
-    /// down, whichever has fewer. On a stripboard the strips run one way and every piece of copper the
-    /// other way needs a wire; on perfboard too, traces side by side in one direction are the easiest
-    /// to lay. The router doesn't price this, since the main direction is only known once the whole
-    /// board is routed; it matters little, as a trace from one pin to another takes the same steps
-    /// across and down whichever way it turns.
-    pub fn crosswise_steps(&self) -> f64 {
-        let across = self.traces.iter().filter(|&&(_, a, b)| a.1 == b.1).count();
-        let down = self.traces.iter().filter(|&&(_, a, b)| a.0 == b.0).count();
-        across.min(down) as f64
-    }
-
-    /// Length of jumper and solder-side wire, in holes.
-    pub fn jumper_length(&self) -> f64 {
-        self.jumpers.iter().chain(&self.bottom).map(|&(_, a, b)| distance(a, b)).sum::<f64>() + 0.0
-    }
-
-    /// Every hole with copper in it or a wire over it.
-    pub fn copper_holes(&self) -> HashSet<Point> {
-        let traces = self.traces.iter().flat_map(|&(_, a, b)| [a, b]);
-        let wires = self.jumpers.iter().chain(&self.bottom).flat_map(|&(_, a, b)| holes_between(a, b).chain([a, b]));
-        traces.chain(wires).collect()
-    }
-
-    /// Length of copper (traces, jumpers and solder-side wires), in holes, between two holes the
-    /// same net joins, going the way the router laid it. A star net's runs only meet at the star
-    /// point (unless they joined, see `joins`), so between two runs it goes through there.
-    pub fn copper_between(&self, c: &Case, net: usize, from: Point, to: Point) -> f64 {
-        // Every piece of copper of that net, as links between holes, both ways.
-        let mut links: HashMap<Point, Vec<(Point, f64)>> = HashMap::new();
-        for &(run, a, b) in self.traces.iter().chain(&self.jumpers).chain(&self.bottom) {
-            if c.runs[run].net == net {
-                links.entry(a).or_default().push((b, distance(a, b)));
-                links.entry(b).or_default().push((a, distance(a, b)));
-            }
-        }
-        // The shortest way along those links (Dijkstra): keep taking the closest hole not done
-        // yet, and see how far its neighbours are through it. A BTreeMap, not a HashMap: its order
-        // is the same every run, so two holes equally close are taken in the same order, and the
-        // lengths are added up the same way (adding fractions in another order can change the last
-        // digit, and a placer comparing two equal costs could then go another way).
-        let mut best: BTreeMap<Point, f64> = BTreeMap::from([(from, 0.0)]);
-        let mut done: HashSet<Point> = HashSet::new();
-        loop {
-            let closest = best.iter().filter(|(p, _)| !done.contains(*p)).min_by(|a, b| a.1.total_cmp(b.1));
-            let Some((&p, &d)) = closest else {
-                // Not joined: one of them must be a pin the router couldn't reach (`unrouted`),
-                // which costs plenty already. Straight across, then.
-                let left_out = |hole: Point| self.unrouted.iter().any(|&(_, _, pin)| pin == hole);
-                assert!(left_out(from) || left_out(to), "the router left {from:?} and {to:?} unjoined, but neither is unrouted");
-                return distance(from, to);
-            };
-            if p == to {
-                return d;
-            }
-            done.insert(p);
-            for &(q, len) in links.get(&p).into_iter().flatten() {
-                if best.get(&q).is_none_or(|&old| d + len < old) {
-                    best.insert(q, d + len);
-                }
-            }
-        }
-    }
-
-    /// How hard the traces' turns are to bend, in right angles (see `bend`): at holes where exactly
-    /// two steps of one run meet, not in a line. A pin or a wire's leg is free, since a trace starts
-    /// there, and so is a junction of three or more steps, which is soldered like a pin.
-    pub fn turns(&self, g: &Geometry) -> u32 {
-        let pins: HashSet<Point> = g.pins.iter().flatten().copied().collect();
-        let legs: HashSet<(usize, Point)> =
-            self.jumpers.iter().chain(&self.bottom).flat_map(|&(run, a, b)| [(run, a), (run, b)]).collect();
-        // For each hole of each run: the directions its steps leave in.
-        let mut out_of: HashMap<(usize, Point), Vec<Point>> = HashMap::new();
+    /// The copper, as a layout holds it: each run's steps of trace in a row become one trace (a new
+    /// one wherever the run changes or the steps don't follow on), then the wires, those on the
+    /// top face first. No runs: which pins it joins is worked out from the copper itself.
+    pub fn copper(&self) -> Copper {
+        let mut traces: Vec<Trace> = Vec::new();
+        let mut last = None;
         for &(run, a, b) in &self.traces {
-            let d = (b.0 - a.0, b.1 - a.1);
-            out_of.entry((run, a)).or_default().push(d);
-            out_of.entry((run, b)).or_default().push((-d.0, -d.1));
-        }
-        out_of
-            .iter()
-            .filter(|(at, _)| !pins.contains(&at.1) && !legs.contains(at))
-            .map(|(_, dirs)| match dirs[..] {
-                [a, b] => bend((-a.0, -a.1), b),
-                _ => 0,
-            })
-            .sum()
-    }
-
-    /// The traces as straight runs: steps in a row, in the same direction, joined into one.
-    pub fn straight_traces(&self) -> Vec<(usize, Point, Point)> {
-        let mut out: Vec<(usize, Point, Point)> = Vec::new();
-        for &(run, a, b) in &self.traces {
-            if let Some(last) = out.last_mut() {
-                let dir = |p: Point, q: Point| ((q.0 - p.0).signum(), (q.1 - p.1).signum());
-                if last.0 == run && last.2 == a && dir(last.1, last.2) == dir(a, b) {
-                    last.2 = b;
-                    continue;
-                }
+            match traces.last_mut() {
+                Some(t) if last == Some((run, a)) => t.holes.push(b),
+                _ => traces.push(Trace { layer: -COPPER, holes: vec![a, b] }),
             }
-            out.push((run, a, b));
+            last = Some((run, b));
         }
-        out
+        let top = self.jumpers.iter().map(|&(_, a, b)| JumperWire { layer: LYING, pins: [a, b] });
+        let bottom = self.bottom.iter().map(|&(_, a, b)| JumperWire { layer: -LYING, pins: [a, b] });
+        Copper { traces, wires: top.chain(bottom).collect() }
     }
-}
-
-/// The `!!` lines for connections the router couldn't make, naming each pin left out.
-pub fn unrouted_problems(c: &Case, g: &Geometry, routing: &Routing) -> Vec<String> {
-    let name_of = |hole: Point| {
-        let pins = c.circuit.parts.iter().enumerate().flat_map(|(ci, comp)| (0..comp.footprint.pins.len()).map(move |pi| (ci, pi)));
-        pins.filter(|&(ci, pi)| g.pins[ci][pi] == hole)
-            .map(|pin| c.circuit.pin_name(pin))
-            .next()
-            .expect("what's left unrouted is a pin")
-    };
-    routing
-        .unrouted
-        .iter()
-        .map(|&(run, _, pin)| {
-            let net = &c.circuit.nets[c.runs[run].net].name;
-            format!("{} isn't connected to the rest of {net}: walled in so not even a wire fits, or off the board", name_of(pin))
-        })
-        .collect()
 }
 
 /// How many complete routings `route` proposes for a finished layout. On the cat feeder with
@@ -225,20 +103,13 @@ pub fn unrouted_problems(c: &Case, g: &Geometry, routing: &Routing) -> Vec<Strin
 /// with one (`route_once`).
 const CANDIDATES: usize = 200;
 
-/// A straight trace from `a` to `b` (across, down or at 45°) as steps between neighbouring holes,
-/// the way the router lays it; None for one at another angle.
-pub fn unit_steps(a: Point, b: Point) -> Option<Vec<(Point, Point)>> {
-    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
-    (dx == 0 || dy == 0 || dx.abs() == dy.abs()).then(|| holes_between(a, b).chain([b]).scan(a, |from, to| Some((std::mem::replace(from, to), to))).collect())
-}
-
 /// Routes every run of the circuit, for parts at `placement` (whose geometry is `g`): makes
 /// CANDIDATES complete routings, the first shortest run first and the others in random orders, and
 /// keeps the one the score likes best (`measure::cost`, every measurement and rule counted), then
 /// improves it a few runs at a time (`improve`). The router has no rules of its own about what to
 /// try again or what to keep room for: it proposes, the score judges. The random choices come from
 /// fixed seeds, so the same placement always gets the same copper.
-pub fn route(c: &Case, placement: &[Place], g: &Geometry) -> Routing {
+pub fn route(c: &Case, placement: &[Place], g: &Geometry) -> Copper {
     let canonical = order(c, g);
     let empty = empty_grid(c, g);
     // What the placement alone costs (power and crowding): the same for every candidate, so a
@@ -258,7 +129,7 @@ pub fn route(c: &Case, placement: &[Place], g: &Geometry) -> Routing {
         if gave_up {
             continue;
         }
-        let m = measure_routed(c, placement, g, &routing);
+        let m = measure_routed(c, placement, g, &routing.copper());
         let cost = crate::measure::cost(&m);
         if best.as_ref().is_none_or(|b| cost < b.0) {
             best = Some((cost, cost - fixed(&m), routing));
@@ -272,32 +143,31 @@ pub fn route(c: &Case, placement: &[Place], g: &Geometry) -> Routing {
     for (k, &r) in canonical.iter().enumerate() {
         rank[r] = k;
     }
-    for list in [&mut routing.traces, &mut routing.jumpers, &mut routing.bottom, &mut routing.unrouted] {
+    for list in [&mut routing.traces, &mut routing.jumpers, &mut routing.bottom] {
         list.sort_by_key(|&(r, ..)| rank[r]); // stable: a run's pieces stay in the order laid
     }
-    routing.joins.sort_by_key(|&(r, _)| rank[r]);
-    routing
+    routing.copper()
 }
 
 /// Routes every run once, shortest first: what the placer judges each move by (see
 /// `place::anneal`). It's `route`'s first candidate, so `route` is never worse.
-pub fn route_once(c: &Case, g: &Geometry) -> Routing {
-    route_in_order(c, g, empty_grid(c, g), Routing::default(), &order(c, g), f64::INFINITY).0
+pub fn route_once(c: &Case, g: &Geometry) -> Copper {
+    route_in_order(c, g, empty_grid(c, g), Routing::default(), &order(c, g), f64::INFINITY).0.copper()
 }
 
 /// Routes the parts at `placement` the thorough way (`route`), then measures the layout
 /// (`measure::measure_routed`).
 pub fn measure(c: &Case, placement: &[Place]) -> Measures {
     let g = c.geometry(placement);
-    let routing = route(c, placement, &g);
-    measure_routed(c, placement, &g, &routing)
+    let copper = route(c, placement, &g);
+    measure_routed(c, placement, &g, &copper)
 }
 
 /// The same, routed once, shortest first (`route_once`): what the placer judges each move by.
 pub fn measure_once(c: &Case, placement: &[Place]) -> Measures {
     let g = c.geometry(placement);
-    let routing = route_once(c, &g);
-    measure_routed(c, placement, &g, &routing)
+    let copper = route_once(c, &g);
+    measure_routed(c, placement, &g, &copper)
 }
 
 /// How many changes `improve` tries. On the cat feeder with every part fixed where it's soldered
@@ -315,7 +185,7 @@ const IMPROVE: usize = 2000;
 /// random order, and keeps the change if the whole board costs less (`measure::cost`). The score
 /// judges every change, as it judges the candidates; the random choices come from a fixed seed.
 fn improve(c: &Case, placement: &[Place], g: &Geometry, start: Routing) -> Routing {
-    let cost = |r: &Routing| crate::measure::cost(&measure_routed(c, placement, g, r));
+    let cost = |r: &Routing| crate::measure::cost(&measure_routed(c, placement, g, &r.copper()));
     let mut rng = StdRng::seed_from_u64(1);
     let (mut best, mut best_cost) = (start.clone(), cost(&start));
     // The holes a run's pins and copper take.
@@ -346,7 +216,6 @@ fn improve(c: &Case, placement: &[Place], g: &Geometry, start: Routing) -> Routi
             }
         }
         kept.unrouted = best.unrouted.iter().filter(|t| !again.contains(&t.0)).copied().collect();
-        kept.joins = best.joins.iter().filter(|t| !again.contains(&t.0)).copied().collect();
         let (changed, _) = route_in_order(c, g, grid, kept, &again, f64::INFINITY);
         let now = cost(&changed);
         if now < best_cost {
@@ -400,10 +269,7 @@ fn route_in_order(c: &Case, g: &Geometry, mut grid: Grid, mut out: Routing, orde
                 join(&grid, &mut mem, &others, target, r, run.net).map(|(cost, path)| (cost + (RULE * weight).round() as u32, path))
             });
             let path = match (own, joined) {
-                (own, Some((cost, path))) if own.as_ref().is_none_or(|(own_cost, _)| cost < *own_cost) => {
-                    out.joins.push((r, path[0].0));
-                    path
-                }
+                (own, Some((cost, path))) if own.as_ref().is_none_or(|(own_cost, _)| cost < *own_cost) => path,
                 (Some((_, path)), _) => path,
                 (None, _) => {
                     // Walled in even for a wire on either side. A wire can't end on the pin (its leg

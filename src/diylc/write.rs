@@ -11,6 +11,7 @@ use super::{FootprintDrawing, HOLE, MARGIN, ORIENTATIONS, PartDrawing, Template,
 use crate::board::{self, Place, Point};
 use crate::circuit::Format;
 use crate::build::Build;
+use crate::layout::JumperWire;
 use std::fmt::Write;
 
 /// Where the board written here has its top-left corner, in inches.
@@ -187,18 +188,20 @@ pub fn write(build: &Build) -> String {
     }
 
     // The routed copper: traces on the solder side and jumpers on top, coloured like their net.
-    let routing = &build.layout.routing;
+    let (copper, wiring) = (&build.layout.copper, &build.wiring);
     let colors = board::net_colors(&c.circuit);
-    let copper = routing.straight_traces().into_iter().map(|t| (t, "connectivity.CopperTrace", r#"<thickness value="1.0" unit="mm"/><layer>_1</layer><endingStyle>Round</endingStyle>"#));
-    let jumpers = routing.jumpers.iter().map(|&t| (t, "connectivity.Jumper", "<style>SOLID</style>"));
-    for ((run, a, b), class, extra) in copper.chain(jumpers) {
-        let net = c.runs[run].net;
-        let color = &colors[net][1..]; // "#d62828" -> "d62828"
-        two_legged(&mut s, &id(), class, &c.circuit.nets[net].name, "", ["ffffff", "000000", "000000", color], to_inch(a), to_inch(b), "NONE", extra);
+    // A piece's net, by name and colour (grey for copper that joins no pin).
+    let net_name = |net: Option<usize>| net.map_or("", |n| c.circuit.nets[n].name.as_str());
+    let net_color = |net: Option<usize>| net.map_or("9a9a9a", |n| &colors[n][1..]); // "#d62828" -> "d62828"
+    let traces = copper.straight_pieces().into_iter().map(|(k, a, b)| ((wiring.trace_net[k], a, b), "connectivity.CopperTrace", r#"<thickness value="1.0" unit="mm"/><layer>_1</layer><endingStyle>Round</endingStyle>"#));
+    let wire = |(k, w): (usize, &JumperWire)| (wiring.wire_net[k], w.pins[0], w.pins[1]);
+    let top = copper.wires.iter().enumerate().filter(|(_, w)| w.layer > 0).map(|kw| (wire(kw), "connectivity.Jumper", "<style>SOLID</style>"));
+    for ((net, a, b), class, extra) in traces.chain(top) {
+        two_legged(&mut s, &id(), class, net_name(net), "", ["ffffff", "000000", "000000", net_color(net)], to_inch(a), to_inch(b), "NONE", extra);
     }
     // DIYLC has no wire on the solder side, so a jumper that says so in its name, in red.
-    for &(run, a, b) in &routing.bottom {
-        let name = format!("{} (solder side)", c.circuit.nets[c.runs[run].net].name);
+    for (net, a, b) in copper.wires.iter().enumerate().filter(|(_, w)| w.layer < 0).map(wire) {
+        let name = format!("{} (solder side)", net_name(net));
         two_legged(&mut s, &id(), "connectivity.Jumper", &name, "", ["ffffff", "000000", "000000", "b00020"], to_inch(a), to_inch(b), "NAME", "<style>SOLID</style>");
     }
 

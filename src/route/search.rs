@@ -4,6 +4,7 @@
 
 use super::Routing;
 use crate::board::{Face, Geometry, LYING, Point, distance};
+use crate::layout::{bend, holes_between};
 use crate::rules::Case;
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashSet};
@@ -18,29 +19,6 @@ const DIAGONAL_EXTRA: u32 = (crate::measure::WEIGHTS[2] * 10.0) as u32;
 /// What a trace pays for each right angle's worth of bending (see `bend`), except at a pin, where
 /// it starts anyway: the score's `turns` weight times ten (1 is its place in measure::FEATURES).
 const TURN: u32 = (crate::measure::WEIGHTS[1] * 10.0) as u32;
-/// How hard each turn is to bend in copper wire, counted in right angles, which are the easiest.
-/// A gentle 45° turn, onto or off a diagonal, is harder to bend so it lands on the right hole, and
-/// a sharp 135° turn harder still.
-const RIGHT: u32 = 1;
-const GENTLE: u32 = 2;
-const SHARP: u32 = 3;
-
-/// How hard it is to bend a trace arriving in direction `a` so it leaves in direction `b` (each a
-/// step across, down or diagonal), in right angles; 0 if it goes straight on.
-pub(super) const fn bend(a: Point, b: Point) -> u32 {
-    // The dot product says how far apart the two directions are: positive below 90°, zero at 90°.
-    let dot = a.0 * b.0 + a.1 * b.1;
-    if a.0 == b.0 && a.1 == b.1 {
-        0
-    } else if dot > 0 {
-        GENTLE
-    } else if dot == 0 {
-        RIGHT
-    } else {
-        SHARP
-    }
-}
-
 /// `AHEAD[h][g]`: at most how much more bending, in right angles, a trace that came into a hole
 /// heading `h` may need from there than one that came in heading `g`, whichever way it goes on.
 /// So once a hole was reached heading `h` at cost c, reaching it heading `g` at c + AHEAD[h][g] *
@@ -147,13 +125,6 @@ pub(super) struct Grid {
 pub(super) enum Step {
     Trace,
     Wire(Face),
-}
-
-/// The holes strictly between the two legs of a straight or 45° wire.
-pub(super) fn holes_between(a: Point, b: Point) -> impl Iterator<Item = Point> {
-    let (dx, dy) = ((b.0 - a.0).signum(), (b.1 - a.1).signum());
-    let n = (b.0 - a.0).abs().max((b.1 - a.1).abs());
-    (1..n).map(move |k| (a.0 + dx * k, a.1 + dy * k))
 }
 
 impl Grid {
