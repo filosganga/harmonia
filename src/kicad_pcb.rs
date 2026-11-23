@@ -8,7 +8,8 @@
 //!
 //! Written in KiCad 9's file format, which KiCad 10 opens fine.
 
-use crate::board::{self, Part, Point};
+use crate::board::{self, Point};
+use crate::circuit::Part;
 use crate::build::Build;
 use std::fmt::Write;
 
@@ -34,8 +35,8 @@ fn uuid(n: usize) -> String {
 }
 
 pub fn write(build: &Build) -> String {
-    let (c, placement) = (&build.design, &build.layout.placement);
-    let g = board::geometry(c, placement);
+    let (c, placement) = (&build.case, &build.layout.placement);
+    let g = board::geometry(&c.circuit, placement);
     let mut ids = 0..;
     let mut s = String::new();
     s += "(kicad_pcb\n  (version 20241229)\n  (generator \"perfboard\")\n  (generator_version \"0.1\")\n";
@@ -47,18 +48,18 @@ pub fn write(build: &Build) -> String {
 
     // Nets are numbered from 1; 0 means "no net".
     s += "  (net 0 \"\")\n";
-    for (i, net) in c.nets.iter().enumerate() {
+    for (i, net) in c.circuit.nets.iter().enumerate() {
         writeln!(s, "  (net {} {})", i + 1, quote(&net.name)).unwrap();
     }
     // net_of[component][pin] = the pin's net number
-    let mut net_of: Vec<Vec<usize>> = c.parts.iter().map(|comp| vec![0; comp.footprint.pins.len()]).collect();
-    for (n, members) in c.net_pins.iter().enumerate() {
+    let mut net_of: Vec<Vec<usize>> = c.circuit.parts.iter().map(|comp| vec![0; comp.footprint.pins.len()]).collect();
+    for (n, members) in c.circuit.net_pins.iter().enumerate() {
         for &(ci, pi) in members {
             net_of[ci][pi] = n + 1;
         }
     }
 
-    for (ci, (comp, place)) in c.parts.iter().zip(placement).enumerate() {
+    for (ci, (comp, place)) in c.circuit.parts.iter().zip(placement).enumerate() {
         let a = anchor(comp);
         let (ax, ay) = g.pins[ci][a];
         // Our rotation turns parts clockwise; KiCad measures angles anticlockwise.
@@ -99,7 +100,7 @@ pub fn write(build: &Build) -> String {
             let shape = if pi == a { "rect" } else { "circle" };
             let net = match net_of[ci][pi] {
                 0 => String::new(),
-                n => format!(" (net {n} {})", quote(&c.nets[n - 1].name)),
+                n => format!(" (net {n} {})", quote(&c.circuit.nets[n - 1].name)),
             };
             writeln!(
                 s,

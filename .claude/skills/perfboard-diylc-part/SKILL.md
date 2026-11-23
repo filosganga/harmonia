@@ -40,7 +40,7 @@ by the router automatically; nothing to add.
   `write::moved()`, which also turns `<orientation>`. Check the new class has no other field that
   depends on direction.
 - `diylc::class_look`: give its `short` name a `Look` if a grey box (the default) misleads; a look
-  the pictures don't have yet is a new `board::Look` variant, its branch in `src/svg.rs`, and its
+  the pictures don't have yet is a new `circuit::Look` variant (`src/circuit.rs`), its branch in `src/svg.rs`, and its
   name in README "The layout file" (a part's `look`).
 - DIYLC's drawings (`FootprintDrawing`, `PartDrawing`) are saved in the layout file as opaque JSON
   (`src/build/file.rs`, a part's `"footprint_drawings"` and `"drawings"`, key `"diylc"`), and so is

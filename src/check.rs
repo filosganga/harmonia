@@ -2,7 +2,8 @@
 //! and read back, and must come back with the connections it started with. Its layout file, read
 //! back, must give the same outputs.
 
-use crate::board::{self, Design};
+use crate::board;
+use crate::rules::Case;
 use crate::measure;
 use crate::build::{self, Build};
 use crate::svg::{self, Side};
@@ -11,8 +12,8 @@ use rand::{SeedableRng, rngs::StdRng};
 
 /// The connections of a circuit, in an order that doesn't depend on the file: each net, as its
 /// sorted pin names, sorted.
-fn connections(c: &Design) -> Vec<Vec<String>> {
-    let mut nets: Vec<Vec<String>> = c.nets.iter().map(|n| {
+fn connections(c: &Case) -> Vec<Vec<String>> {
+    let mut nets: Vec<Vec<String>> = c.circuit.nets.iter().map(|n| {
         let mut pins = n.pins.clone();
         pins.sort();
         pins
@@ -87,13 +88,13 @@ fn check_one(path: &str, args: &Args) -> Outcome {
         // The placer's layouts are allowed, so no two pins share a hole and none is off the board:
         // nets can't join by themselves. Pins the router couldn't reach aren't joined in the drawing at all. Leave them out on both
         // sides: if everything else matches, only they are missing; if not, the writer is wrong.
-        let g = board::geometry(c, &placed);
+        let g = board::geometry(&c.circuit, &placed);
         let holes: std::collections::HashSet<board::Point> = build.layout.routing.unrouted.iter().map(|&(_, _, hole)| hole).collect();
         let mut unrouted = std::collections::HashSet::new();
-        for (ci, comp) in c.parts.iter().enumerate() {
+        for (ci, comp) in c.circuit.parts.iter().enumerate() {
             for pi in 0..comp.footprint.pins.len() {
                 if holes.contains(&g.pins[ci][pi]) {
-                    unrouted.insert(c.pin_name((ci, pi)));
+                    unrouted.insert(c.circuit.pin_name((ci, pi)));
                 }
             }
         }

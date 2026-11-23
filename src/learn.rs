@@ -1,7 +1,7 @@
 //! `train` and `evolve`: teach the network to score boards the way the rules do, from example
 //! boards, by gradient descent or by evolution, and save it for `place --judge net`.
 
-use crate::board::Design;
+use crate::rules::Case;
 use crate::measure::{self, Measures};
 use crate::nn::{self, Net};
 use crate::{OUT, model_path, place, program, route, version};
@@ -13,7 +13,7 @@ use std::time::Instant;
 /// taking the cases of the board file's rules in turn. Each is measured as the placer judges a move,
 /// routed once (`route::measure_once`): a network that learned from boards routed the thorough way
 /// rarely saw a pin left unrouted, didn't learn it's bad, and placed the 555 with solder-side wires.
-fn make_examples(cases: &[Design], rng: &mut StdRng) -> (Vec<Measures>, Vec<Measures>) {
+fn make_examples(cases: &[Case], rng: &mut StdRng) -> (Vec<Measures>, Vec<Measures>) {
     let mut examples: Vec<Measures> = Vec::new();
     for i in 0..12 {
         let c = &cases[i % cases.len()];
@@ -47,7 +47,7 @@ fn pairs(boards: &[Measures]) -> Vec<(Vec<f64>, f64)> {
 /// 2. Ask the rules for each board's score: that's the "right answer".
 /// 3. Show the network each board many times, nudging every weight in the direction that makes it less wrong.
 /// 4. Test it on boards it has never seen.
-pub fn train(cases: &[Design], seed: u64, again: &str, out: &str) {
+pub fn train(cases: &[Case], seed: u64, again: &str, out: &str) {
     let t0 = Instant::now();
     let mut rng = StdRng::seed_from_u64(seed);
     let (train, test) = make_examples(cases, &mut rng);
@@ -71,7 +71,7 @@ pub fn train(cases: &[Design], seed: u64, again: &str, out: &str) {
 /// 2. Make 19 children, each a copy of the parent with every weight changed a little at random.
 /// 3. Keep whichever of the 20 is least wrong on the example boards; it becomes the new parent.
 /// 4. Repeat. Changes get smaller towards the end, to fine-tune.
-pub fn evolve(cases: &[Design], seed: u64, again: &str, out: &str) {
+pub fn evolve(cases: &[Case], seed: u64, again: &str, out: &str) {
     const CHILDREN: usize = 19;
     const GENERATIONS: usize = 1000;
     let t0 = Instant::now();

@@ -145,7 +145,7 @@ measured):
 - `roll` is drawn before the jump test, so 30% of moves draw a random number they don't use.
 - A nudge can be (0, 0), or be clamped to the same hole at an edge (1 in 25 nudges or more).
 - A swap can pick the part itself (1 in the number of movable parts).
-- A rotation of a part whose rules fix its orientation is put back by `constraints::apply`, and a
+- A rotation of a part whose rules fix its orientation is put back by `rules::apply`, and a
   jump can land where the part already is.
 
 Each of these is routed and scored like a real move, a few percent of all moves together.

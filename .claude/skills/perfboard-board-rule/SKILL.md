@@ -1,6 +1,6 @@
 ---
 name: perfboard-board-rule
-description: Procedure for adding or changing a rule in the perfboard board file (circuits/<name>.json, read by src/constraints.rs), deciding whether it is a hard limit or a preference and wiring it into the placer, router or score accordingly. Use when asked for a new constraint, a new kind of board-file rule, or a change to fixed, edge, orientation, within, all-of, one-of, keepout, near, close or star.
+description: Procedure for adding or changing a rule in the perfboard board file (circuits/<name>.json, read by src/rules.rs), deciding whether it is a hard limit or a preference and wiring it into the placer, router or score accordingly. Use when asked for a new constraint, a new kind of board-file rule, or a change to fixed, edge, orientation, within, all-of, one-of, keepout, near, close or star.
 ---
 
 # Adding a board-file rule
@@ -15,8 +15,8 @@ description: Procedure for adding or changing a rule in the perfboard board file
 |---|---|---|
 | Hard limit on where a part goes | fixed, edge, orientation, within | a `Rule` with a part: `Rule::one_part` and `Rule::part` (name the part; `part` also checks the rule alone) and `Rule::broken` (how far this place is from what it wants: 0, infinite for a hard rule, or weighted holes). `resolve` lists each part's allowed places and `apply` keeps the part on them; nothing else to wire |
 | Hard limit on what may share the board, for every part | hard keep-out holes under parts, no two parts on a hole | `measure::clashes` (with words in `measure::clash_words`): the placer starts from an allowed layout (`place::allowed_start`) and throws away any move that isn't allowed, before routing it. A new kind of clash is a `measure::Why` variant, and is named in svg.rs's "Boxed in red" note and README's lists of what's allowed ("How a board is judged", "Or sketch it in DIYLC") |
-| Hard limit on copper | hard keep-out holes, star separation | `src/route/search.rs` grid (`owner`, `keepout`), or `constraints::runs` for how a net splits; with a weight, the grid's `extra` (soft keep-outs) or `route::join` (soft star). `route::from_sketch` (your own wiring, measured) also counts star joins and breaks: a new copper rule must be counted there too |
-| How a part is built | layers | a `Rule` resolved into `Constraints` per part (`Constraints::layers`, read through `Design::layers`), which everything that asks what a part takes reads instead of the part's own field; no weight, a one-of gives the choice |
+| Hard limit on copper | hard keep-out holes, star separation | `src/route/search.rs` grid (`owner`, `keepout`), or `rules::runs` for how a net splits; with a weight, the grid's `extra` (soft keep-outs) or `route::join` (soft star). `route::from_sketch` (your own wiring, measured) also counts star joins and breaks: a new copper rule must be counted there too |
+| How a part is built | layers | a `Rule` resolved into `Constraints` per part (`Constraints::layers`, read through `Case::layers`), which everything that asks what a part takes reads instead of the part's own field; no weight, a one-of gives the choice |
 | Priced | near, close | a measurement (both count in `rules`), each rule times its `weight` (`HARD`, 1, if left out: they're only known once routed); a new one: use the `perfboard-measurement` skill |
 
   Hard limits are never learned by the network. A priced rule never makes a layout illegal, however
@@ -36,7 +36,7 @@ description: Procedure for adding or changing a rule in the perfboard board file
   options allows (its least broken option). A new placement rule only needs `one_part`, `part` and `broken`; any other new rule only ever
   sees one case.
 
-## Code (`src/constraints.rs`)
+## Code (`src/rules.rs`)
 
 1. `Rule`: a new variant (its `kind` is the variant's name in lowercase; a two-word kind needs
    `#[serde(rename = "all-of")]`-style, like `AllOf` and `OneOf`), with `name: Option<String>`
@@ -51,7 +51,7 @@ description: Procedure for adding or changing a rule in the perfboard board file
 3. Prefer a new simple rule that composes with all-of / one-of over a bigger special-purpose one
    (the maintainer's choice: consistency and composability before convenience).
 4. Other rules (not about where a part goes): `Constraints` gets the rule resolved to indexes
-   (component index, `(component, pin)` via `c.find_pin`), so the placer never looks names up.
+   (part index, `(part, pin)` via `c.find_pin` on the circuit), so the placer never looks names up.
 5. `resolve` (or `Rule::part`, for a placement rule): check everything that is a mistake in the
    file and stop with `panic!("board file: ...")` in plain words naming the part or pin (missing
    part, pin not on that net, a rectangle off the board). A placement rule that is fine but leaves a
@@ -59,7 +59,7 @@ description: Procedure for adding or changing a rule in the perfboard board file
    error for it and that case is left out.
 6. The module's doc comment shows every kind in its JSON example; keep it loadable.
 7. The layout file (`src/build/file.rs`) keeps the board file's rules as written, and reading it
-   back works the case out again (`constraints::designs`), so a new rule round-trips by itself as
+   back works the case out again (`rules::cases`), so a new rule round-trips by itself as
    long as `Rule` writes it back as it was read (`Serialize`, leaving out what was left out). A rule
    that changes what the router makes may need more in the file's `layout` (as a soft star's
    `joins`); raise `VERSION` if an older reader would get the file wrong.

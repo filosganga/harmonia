@@ -5,7 +5,8 @@
 //! footprints.json in the config folder (`user_footprints`) adds footprints for every circuit, and one
 //! next to the netlist for the circuits in that folder; each replaces entries of the same name.
 
-use crate::board::{Drawing, Drawings, Footprint, Format, Layers, Look, Pin, Point};
+use crate::board::{Layers, Point};
+use crate::circuit::{Drawing, Drawings, Footprint, Format, Look, Pin};
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};

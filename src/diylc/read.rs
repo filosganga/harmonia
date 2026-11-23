@@ -10,8 +10,8 @@
 //! board) becomes one part. Only its pins' holes are taken, so low parts can go under it.
 
 use super::{HOLE, Kind, MARGIN, PartDrawing, class, class_look, seal};
-use crate::board::{BoardSize, Copper, Design, Drawings, Footprint, Format, Layers, Look, Net, Part, Pin, Place, Placement, Point, bounds};
-use crate::netlist::{self, NET_NAME_HINTS, Options};
+use crate::board::{Copper, Layers, Place, Placement, Point, bounds};
+use crate::circuit::{Circuit, Drawings, Footprint, Format, Look, NET_NAME_HINTS, Net, Part, Pin};
 use roxmltree::Node;
 use std::collections::{BTreeSet, HashMap};
 
@@ -56,7 +56,7 @@ enum Conductor {
     Pad(Inches, f64, u8),
 }
 
-pub fn load(path: &str, opts: Options) -> (Design, Placement, Copper) {
+pub fn load(path: &str) -> (Circuit, Placement, Copper) {
     let text = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("can't read {path}: {e}"));
     let doc = roxmltree::Document::parse(&text).unwrap_or_else(|e| panic!("bad DIYLC file {path}: {e}"));
     let root = doc.root_element();
@@ -146,9 +146,7 @@ pub fn load(path: &str, opts: Options) -> (Design, Placement, Copper) {
         }
     }
 
-    let (power, ground) = netlist::power_and_ground(&nets, &opts);
-    let board: BoardSize = opts.board;
-    (Design::new(board, parts, nets, power, ground), sketch, copper)
+    (Circuit::new(parts, nets), sketch, copper)
 }
 
 /// Each net as its pins: (drawn part, pin).

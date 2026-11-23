@@ -51,8 +51,9 @@ mod sketch;
 
 pub use sketch::from_sketch;
 
-use crate::board::{Design, Geometry, Place, Point, distance, geometry};
+use crate::board::{Geometry, Place, Point, distance, geometry};
 use crate::measure::{Measures, WEIGHTS, measure_routed};
+use crate::rules::Case;
 use rand::{Rng, SeedableRng, rngs::StdRng, seq::SliceRandom};
 use search::{Grid, RULE, Scratch, Side, Step, bend, empty_grid, holes_between, join, jumper_shapes, lay, octile, spread};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -116,7 +117,7 @@ impl Routing {
     /// Length of copper (traces, jumpers and solder-side wires), in holes, between two holes the
     /// same net joins, going the way the router laid it. A star net's runs only meet at the star
     /// point (unless they joined, see `joins`), so between two runs it goes through there.
-    pub fn copper_between(&self, c: &Design, net: usize, from: Point, to: Point) -> f64 {
+    pub fn copper_between(&self, c: &Case, net: usize, from: Point, to: Point) -> f64 {
         // Every piece of copper of that net, as links between holes, both ways.
         let mut links: HashMap<Point, Vec<(Point, f64)>> = HashMap::new();
         for &(run, a, b) in self.traces.iter().chain(&self.jumpers).chain(&self.bottom) {
@@ -195,11 +196,11 @@ impl Routing {
 }
 
 /// The `!!` lines for connections the router couldn't make, naming each pin left out.
-pub fn unrouted_problems(c: &Design, g: &Geometry, routing: &Routing) -> Vec<String> {
+pub fn unrouted_problems(c: &Case, g: &Geometry, routing: &Routing) -> Vec<String> {
     let name_of = |hole: Point| {
-        let pins = c.parts.iter().enumerate().flat_map(|(ci, comp)| (0..comp.footprint.pins.len()).map(move |pi| (ci, pi)));
+        let pins = c.circuit.parts.iter().enumerate().flat_map(|(ci, comp)| (0..comp.footprint.pins.len()).map(move |pi| (ci, pi)));
         pins.filter(|&(ci, pi)| g.pins[ci][pi] == hole)
-            .map(|pin| c.pin_name(pin))
+            .map(|pin| c.circuit.pin_name(pin))
             .next()
             .expect("what's left unrouted is a pin")
     };
@@ -207,7 +208,7 @@ pub fn unrouted_problems(c: &Design, g: &Geometry, routing: &Routing) -> Vec<Str
         .unrouted
         .iter()
         .map(|&(run, _, pin)| {
-            let net = &c.nets[c.runs[run].net].name;
+            let net = &c.circuit.nets[c.runs[run].net].name;
             format!("{} isn't connected to the rest of {net}: walled in so not even a wire fits, or off the board", name_of(pin))
         })
         .collect()
@@ -237,7 +238,7 @@ pub fn unit_steps(a: Point, b: Point) -> Option<Vec<(Point, Point)>> {
 /// improves it a few runs at a time (`improve`). The router has no rules of its own about what to
 /// try again or what to keep room for: it proposes, the score judges. The random choices come from
 /// fixed seeds, so the same placement always gets the same copper.
-pub fn route(c: &Design, placement: &[Place], g: &Geometry) -> Routing {
+pub fn route(c: &Case, placement: &[Place], g: &Geometry) -> Routing {
     let canonical = order(c, g);
     let empty = empty_grid(c, g);
     // What the placement alone costs (power and crowding): the same for every candidate, so a
@@ -280,21 +281,21 @@ pub fn route(c: &Design, placement: &[Place], g: &Geometry) -> Routing {
 
 /// Routes every run once, shortest first: what the placer judges each move by (see
 /// `place::anneal`). It's `route`'s first candidate, so `route` is never worse.
-pub fn route_once(c: &Design, g: &Geometry) -> Routing {
+pub fn route_once(c: &Case, g: &Geometry) -> Routing {
     route_in_order(c, g, empty_grid(c, g), Routing::default(), &order(c, g), f64::INFINITY).0
 }
 
 /// Routes the parts at `placement` the thorough way (`route`), then measures the layout
 /// (`measure::measure_routed`).
-pub fn measure(c: &Design, placement: &[Place]) -> Measures {
-    let g = geometry(c, placement);
+pub fn measure(c: &Case, placement: &[Place]) -> Measures {
+    let g = geometry(&c.circuit, placement);
     let routing = route(c, placement, &g);
     measure_routed(c, placement, &g, &routing)
 }
 
 /// The same, routed once, shortest first (`route_once`): what the placer judges each move by.
-pub fn measure_once(c: &Design, placement: &[Place]) -> Measures {
-    let g = geometry(c, placement);
+pub fn measure_once(c: &Case, placement: &[Place]) -> Measures {
+    let g = geometry(&c.circuit, placement);
     let routing = route_once(c, &g);
     measure_routed(c, placement, &g, &routing)
 }
@@ -313,7 +314,7 @@ const IMPROVE: usize = 2000;
 /// copper or a pin in the box around its own (grown by 0 to 3 holes, at random), routes them again in a
 /// random order, and keeps the change if the whole board costs less (`measure::cost`). The score
 /// judges every change, as it judges the candidates; the random choices come from a fixed seed.
-fn improve(c: &Design, placement: &[Place], g: &Geometry, start: Routing) -> Routing {
+fn improve(c: &Case, placement: &[Place], g: &Geometry, start: Routing) -> Routing {
     let cost = |r: &Routing| crate::measure::cost(&measure_routed(c, placement, g, r));
     let mut rng = StdRng::seed_from_u64(1);
     let (mut best, mut best_cost) = (start.clone(), cost(&start));
@@ -362,7 +363,7 @@ fn improve(c: &Design, placement: &[Place], g: &Geometry, start: Routing) -> Rou
 /// turns can shrink, when a later step makes a bend a junction), and gives up (true) once that
 /// passes `budget`. The total counts the jumpers, wires and unrouted pins already in `out`, but not
 /// its traces: a budget only means something when `out` starts empty (`improve` gives none).
-fn route_in_order(c: &Design, g: &Geometry, mut grid: Grid, mut out: Routing, order: &[usize], budget: f64) -> (Routing, bool) {
+fn route_in_order(c: &Case, g: &Geometry, mut grid: Grid, mut out: Routing, order: &[usize], budget: f64) -> (Routing, bool) {
     let w = WEIGHTS;
     let (mut wire, mut diagonal, mut across, mut down, mut wire_len) = (0.0, 0.0, 0usize, 0usize, 0.0);
     let n = (grid.w * grid.h) as usize;
@@ -440,7 +441,7 @@ fn route_in_order(c: &Design, g: &Geometry, mut grid: Grid, mut out: Routing, or
 /// they have the fewest ways around things. A run's copper is laid all at once, and `route` hands
 /// back each run's pieces in this order whichever order won, so in a `Routing` each run's pieces
 /// come one after the other, runs in this order (the layout file keeps them that way).
-pub fn order(c: &Design, g: &Geometry) -> Vec<usize> {
+pub fn order(c: &Case, g: &Geometry) -> Vec<usize> {
     let span = |r: usize| {
         let ps: Vec<Point> = c.runs[r].pins.iter().map(|&(ci, pi)| g.pins[ci][pi]).collect();
         let (xs, ys) = (ps.iter().map(|p| p.0), ps.iter().map(|p| p.1));

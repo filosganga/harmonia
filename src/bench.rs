@@ -7,8 +7,8 @@
 //! The runs don't depend on each other, so several go at once, one per processor core. Each run has
 //! its own random numbers, made from its seed, so the costs are the same as running them one by one.
 
-use crate::board::Design;
 use crate::measure;
+use crate::rules::Case;
 use rand::{SeedableRng, rngs::StdRng};
 use serde::Serialize;
 use std::sync::Mutex;
@@ -45,12 +45,12 @@ pub fn run() {
     let t0 = Instant::now();
     let list = std::fs::read_to_string(LIST).unwrap_or_else(|e| panic!("can't read {LIST}: {e}"));
     let paths: Vec<&str> = list.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')).collect();
-    let circuits: Vec<Vec<Design>> = paths.iter().map(|path| load(path)).collect();
+    let circuits: Vec<Vec<Case>> = paths.iter().map(|path| load(path)).collect();
 
     // One job per (circuit, seed). The slowest first (many parts, several cases), so the machine
     // isn't left waiting on one long run at the end.
     let mut jobs: Vec<(usize, usize)> = (0..circuits.len()).flat_map(|c| (0..SEEDS.len()).map(move |s| (c, s))).collect();
-    jobs.sort_by_key(|&(c, _)| std::cmp::Reverse(circuits[c].len() * circuits[c][0].parts.len()));
+    jobs.sort_by_key(|&(c, _)| std::cmp::Reverse(circuits[c].len() * circuits[c][0].circuit.parts.len()));
     let workers = std::thread::available_parallelism().map_or(1, |n| n.get()).min(jobs.len());
     println!(
         "Benchmark: {} circuits x {} seeds, {STEPS} steps each, from a random start ({workers} runs at a time)\n",
@@ -79,8 +79,8 @@ pub fn run() {
         .zip(&circuits)
         .map(|(path, cases)| Found {
             circuit: path.to_string(),
-            parts: cases[0].parts.len(),
-            nets: cases[0].nets.len(),
+            parts: cases[0].circuit.parts.len(),
+            nets: cases[0].circuit.nets.len(),
             costs: vec![0.0; SEEDS.len()],
             seconds: vec![0.0; SEEDS.len()],
         })
@@ -101,7 +101,7 @@ pub fn run() {
 
 /// The circuit once for each case of its board file's rules, read as `place` reads it, ignoring
 /// any flags: the benchmark's settings don't change.
-fn load(path: &str) -> Vec<Design> {
+fn load(path: &str) -> Vec<Case> {
     let args = crate::Args {
         command: "bench".into(),
         circuit: path.into(),
@@ -119,7 +119,7 @@ fn load(path: &str) -> Vec<Design> {
 
 /// Places every case from a random start, as `place --seed <seed>` does, and returns the best cost.
 /// A DIYLC sketch starts from random too, not from where it was drawn.
-fn best_cost(cases: &[Design], seed: u64) -> f64 {
+fn best_cost(cases: &[Case], seed: u64) -> f64 {
     let mut rng = StdRng::seed_from_u64(seed);
     let (_, _, _, m) = crate::place_cases(cases, measure::cost, STEPS, &mut rng, None, false);
     measure::cost(&m)

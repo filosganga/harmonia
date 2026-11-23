@@ -3,7 +3,8 @@
 
 use super::Routing;
 use super::search::Side;
-use crate::board::{Copper, Design, Geometry, Point};
+use crate::board::{Copper, Geometry, Point};
+use crate::rules::Case;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// Your own wiring, drawn in a DIYLC sketch, as a routing, so it's measured the way the router's
@@ -13,7 +14,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 /// Copper that reaches the pins of two runs that way joins them, as a soft star's join does; it's
 /// counted as a join for a soft star, and for a hard one returned as a count of breaks, which the
 /// router never makes. A pin your copper doesn't reach is `unrouted`.
-pub fn from_sketch(c: &Design, g: &Geometry, copper: &Copper) -> (Routing, usize) {
+pub fn from_sketch(c: &Case, g: &Geometry, copper: &Copper) -> (Routing, usize) {
     let pin_hole = |(ci, pi): (usize, usize)| g.pins[ci][pi];
     // Every step of trace, once, by net.
     let mut steps: Vec<(usize, Point, Point)> = Vec::new();
@@ -41,7 +42,7 @@ pub fn from_sketch(c: &Design, g: &Geometry, copper: &Copper) -> (Routing, usize
     }
     let mut out = Routing::default();
     let mut hard_breaks = 0;
-    for (net, _) in c.nets.iter().enumerate() {
+    for (net, _) in c.circuit.nets.iter().enumerate() {
         let runs: Vec<usize> = (0..c.runs.len()).filter(|&r| c.runs[r].net == net).collect();
         let Some(&first_run) = runs.first() else { continue };
         let star = c.runs[first_run].star.map(pin_hole);
@@ -98,7 +99,7 @@ pub fn from_sketch(c: &Design, g: &Geometry, copper: &Copper) -> (Routing, usize
         }
         // A pin the copper doesn't join to the rest of its net: the rest being the star point, or
         // else the biggest group of the net's pins the copper joins.
-        let pins: Vec<((usize, usize), Point)> = c.net_pins[net].iter().map(|&p| (p, pin_hole(p))).collect();
+        let pins: Vec<((usize, usize), Point)> = c.circuit.net_pins[net].iter().map(|&p| (p, pin_hole(p))).collect();
         let anchor = star.unwrap_or_else(|| {
             let group = |hole: Point, whole: &mut HashMap<Point, Point>| find(whole, hole);
             let roots: Vec<Point> = pins.iter().map(|&(_, hole)| group(hole, &mut whole)).collect();

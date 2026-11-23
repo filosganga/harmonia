@@ -8,7 +8,8 @@
 //! by net.
 
 use super::{FootprintDrawing, HOLE, MARGIN, ORIENTATIONS, PartDrawing, Template, class_named, open, xml};
-use crate::board::{self, Format, Place, Point};
+use crate::board::{self, Place, Point};
+use crate::circuit::Format;
 use crate::build::Build;
 use std::fmt::Write;
 
@@ -27,7 +28,7 @@ fn inch_f(hole: f64) -> f64 {
 
 /// One item of your DIYLC drawing, moved to where the placer put its part: every
 /// x="..." y="..." point is turned and shifted, and any <orientation> turned to match.
-fn moved(xml: &str, comp: &crate::board::Part, yours: &PartDrawing, place: &Place) -> String {
+fn moved(xml: &str, comp: &crate::circuit::Part, yours: &PartDrawing, place: &Place) -> String {
     let to_new = |x: f64, y: f64| {
         // Sketch inches -> holes inside the part's outline -> turned -> holes on the board -> inches.
         let (mut lx, mut ly) = (x / HOLE - yours.origin.0 as f64, y / HOLE - yours.origin.1 as f64);
@@ -88,8 +89,8 @@ fn point(s: &mut String, (x, y): (f64, f64)) {
 }
 
 pub fn write(build: &Build) -> String {
-    let (c, placement, title) = (&build.design, &build.layout.placement, build.title.as_str());
-    let g = board::geometry(c, placement);
+    let (c, placement, title) = (&build.case, &build.layout.placement, build.title.as_str());
+    let g = board::geometry(&c.circuit, placement);
     let mut ids = 0..;
     let mut id = || format!("00000000-0000-4000-8000-{:012x}", ids.next().unwrap());
     let to_inch = |(x, y): Point| (inch(x), inch(y));
@@ -116,7 +117,7 @@ pub fn write(build: &Build) -> String {
     s += "\n</diylc.boards.PerfBoard>\n";
 
     let mut groups: Vec<(String, Vec<String>)> = Vec::new();
-    for (ci, (comp, place)) in c.parts.iter().zip(placement).enumerate() {
+    for (ci, (comp, place)) in c.circuit.parts.iter().zip(placement).enumerate() {
         // A part that came from your own DIYLC file: write back your drawing, moved and turned.
         if let Some(drawing) = comp.drawings.get(&Format::Diylc) {
             let yours: PartDrawing = open(drawing, &comp.reference);
@@ -187,17 +188,17 @@ pub fn write(build: &Build) -> String {
 
     // The routed copper: traces on the solder side and jumpers on top, coloured like their net.
     let routing = &build.layout.routing;
-    let colors = board::net_colors(c);
+    let colors = board::net_colors(&c.circuit);
     let copper = routing.straight_traces().into_iter().map(|t| (t, "connectivity.CopperTrace", r#"<thickness value="1.0" unit="mm"/><layer>_1</layer><endingStyle>Round</endingStyle>"#));
     let jumpers = routing.jumpers.iter().map(|&t| (t, "connectivity.Jumper", "<style>SOLID</style>"));
     for ((run, a, b), class, extra) in copper.chain(jumpers) {
         let net = c.runs[run].net;
         let color = &colors[net][1..]; // "#d62828" -> "d62828"
-        two_legged(&mut s, &id(), class, &c.nets[net].name, "", ["ffffff", "000000", "000000", color], to_inch(a), to_inch(b), "NONE", extra);
+        two_legged(&mut s, &id(), class, &c.circuit.nets[net].name, "", ["ffffff", "000000", "000000", color], to_inch(a), to_inch(b), "NONE", extra);
     }
     // DIYLC has no wire on the solder side, so a jumper that says so in its name, in red.
     for &(run, a, b) in &routing.bottom {
-        let name = format!("{} (solder side)", c.nets[c.runs[run].net].name);
+        let name = format!("{} (solder side)", c.circuit.nets[c.runs[run].net].name);
         two_legged(&mut s, &id(), "connectivity.Jumper", &name, "", ["ffffff", "000000", "000000", "b00020"], to_inch(a), to_inch(b), "NAME", "<style>SOLID</style>");
     }
 

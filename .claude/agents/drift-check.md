@@ -41,7 +41,7 @@ Places that restate the code and drift with it:
   (`src/main.rs` `place_cmd`, `src/build.rs`, `src/svg.rs`, `src/diylc/write.rs`, `src/kicad_pcb.rs`);
   and README "The layout file": the fields of `out/<judge>.layout.json` (`src/build/file.rs`), including
   "the eleven measurements by name".
-- README "The board file" and the doc comment at the top of `src/constraints.rs`: every kind of
+- README "The board file" and the doc comment at the top of `src/rules.rs`: every kind of
   `Rule`, and examples that would actually load (pins that exist and are on that net).
 - README "The pieces": one row per file in `src/` and `circuits/`.
 - README "Known limits" and "Next steps": a change that fixes a limit or does a step should remove it.
@@ -91,7 +91,7 @@ touches, and every constant the diff changes, grep the whole repo for the old va
   and ground, seed, steps.
 - **Hard rules are never learned.** Placement rules without a `weight` (fixed, edge, orientation,
   within, and all-of and one-of of them) are enforced by the placer (`Constraints::allowed`, kept by
-  `constraints::apply`), and so is what's allowed for every part (`measure::clashes`: no collisions,
+  `rules::apply`), and so is what's allowed for every part (`measure::clashes`: no collisions,
   nothing off the board, on a keep-out without a weight, or under a module sharing one of its layers, as footprints and the always-hard `layers` rule say): the placer starts
   from an allowed layout (`place::allowed_start`) and never accepts a move that isn't. A change that
   turns any of these into a cost without the board file asking for it with a `weight` (a
