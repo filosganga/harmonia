@@ -245,7 +245,7 @@ fn place_cases(
             }
         };
         let layout = place::anneal(c, &cost, steps, rng, start.clone(), |_| {});
-        let g = board::geometry(&c.circuit, &layout);
+        let g = c.geometry(&layout);
         let routing = route::route(c, &layout, &g);
         let m = measure::measure_routed(c, &layout, &g, &routing);
         if report && cases.len() > 1 {
@@ -283,7 +283,7 @@ fn print_nets(cases: &[Case]) {
     let circuit = &case.circuit;
     println!("{} parts:", circuit.parts.len());
     for (i, comp) in circuit.parts.iter().enumerate() {
-        let kind = if comp.module && case.room_under(i) { "  (module: parts can go under it)" } else { "" };
+        let kind = if case.own_board(i) && case.room_under(i) { "  (module: parts can go under it)" } else { "" };
         println!("  {:<12} {:>2}x{:<2} holes, {} pins{kind}", comp.reference, comp.footprint.w, comp.footprint.h, comp.footprint.pins.len());
     }
     let or_none = |n: &Option<String>| n.clone().unwrap_or_else(|| "none".into());
@@ -384,7 +384,7 @@ fn place_cmd(cases: &[Case], args: &Args, sketch: Option<board::Placement>, copp
     // Your own wiring, if you drew any, measured like the router's, and the router's on the same
     // placement (as you drew it, allowed or not), to compare.
     if let (Some(sketch), Some(copper)) = (&sketch, copper.as_ref().filter(|w| !w.traces.is_empty() || !w.jumpers.is_empty())) {
-        let g = board::geometry(&c.circuit, sketch);
+        let g = c.geometry(sketch);
         let (yours, breaks) = route::from_sketch(c, &g, copper);
         println!("{}", measure::report_measures(&measure::measure_routed(c, sketch, &g, &yours), "  wired as you drew it"));
         if breaks > 0 {

@@ -32,7 +32,7 @@ fn part(comp: &Sexpr, library: &Library) -> Part {
     let footprint = comp.value("footprint").unwrap_or_else(|| panic!("{reference} has no footprint; set one in KiCad"));
     let found = library.find(&reference, footprint);
     let value = comp.value("value").unwrap_or("").to_string();
-    Part { reference, value, footprint: found.footprint, drawings: Drawings::new(), layers: found.layers, module: found.module, footprint_from: found.from }
+    Part { reference, value, footprint: found.footprint, drawings: Drawings::new(), layers: found.layers, footprint_from: found.from }
 }
 
 fn net(net: &Sexpr) -> Net {

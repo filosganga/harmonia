@@ -87,7 +87,7 @@ pub fn draw(build: &Build, side: Side) -> String {
     let circuit = &c.circuit;
     let (w, h) = (c.board.width, c.board.height);
     let mirror = side == Side::Solder;
-    let g = board::geometry(circuit, &build.layout.placement);
+    let g = c.geometry(&build.layout.placement);
     let m = build.measures;
 
     // Holes -> pixels. Fractions are for points between holes, like the middle of a resistor.

@@ -105,9 +105,9 @@ pub struct Footprint {
     pub w: i32,
     pub h: i32,
     pub pins: Vec<Pin>,
-    /// The holes its part stands on, inside the outline: from the board up to the part's top layer
-    /// (`Part::layers`). For most footprints that's the whole outline; a module's only its pins (its
-    /// headers), and a two-legged part drawn at an angle the line between its legs.
+    /// The holes its body covers, inside the outline, at its part's layers (`Part::layers`): the
+    /// whole outline for most footprints (a board on headers too), the line between its legs for a
+    /// two-legged part drawn at an angle, its members' bodies for a DIYLC group that isn't on headers.
     pub body: Vec<Point>,
     /// What it looks like from above, in the pictures.
     pub look: Look,
@@ -169,6 +169,12 @@ impl Footprint {
     pub fn full_body(w: i32, h: i32) -> Vec<Point> {
         (0..w).flat_map(|x| (0..h).map(move |y| (x, y))).collect()
     }
+
+    /// The holes a part with these layers stands on, in body order: its body, or only its pins if
+    /// it's raised (a board on headers stands on its headers, with room under the rest).
+    pub fn stands(&self, layers: Layers) -> Vec<Point> {
+        self.body.iter().copied().filter(|h| !layers.raised() || self.pins.iter().any(|p| p.at == *h)).collect()
+    }
 }
 
 /// One thing soldered to the board, named by its reference (R1, U1): a value, a footprint, and
@@ -184,10 +190,6 @@ pub struct Part {
     pub drawings: Drawings,
     /// Which layers it takes, unless the board file says otherwise (`Case::layers`).
     pub layers: Layers,
-    /// A module: a board of its own (a microcontroller, a motor driver breakout), which covers its
-    /// whole outline at its layers while standing only on its body. (The pictures draw it by its
-    /// footprint's look, `Look::OwnBoard`.)
-    pub module: bool,
     /// The footprints.json its footprint came from, if not the built-in library (yours, or one next
     /// to the netlist), so a layout can say it depends on that file.
     pub footprint_from: Option<String>,

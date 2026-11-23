@@ -2,7 +2,7 @@
 //! layout impossible to build (`clashes`). It judges a layout already routed: `route::measure`
 //! routes one first.
 
-use crate::board::{Geometry, Place, Point, distance, geometry};
+use crate::board::{Geometry, Place, Point, distance};
 use crate::rules::Case;
 use crate::route::Routing;
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -77,7 +77,7 @@ pub fn measure_routed(c: &Case, placement: &[Place], g: &Geometry, routing: &Rou
         0.0
     } else {
         // In a fixed order (a BTreeSet), so the weights add up the same way every run.
-        let mut covered: BTreeSet<Point> = g.bodies.iter().flatten().filter(|p| soft.contains_key(p)).copied().collect();
+        let mut covered: BTreeSet<Point> = g.stands.iter().flatten().filter(|p| soft.contains_key(p)).copied().collect();
         covered.extend(routing.copper_holes().into_iter().filter(|p| soft.contains_key(p)));
         covered.iter().map(|p| soft[p]).sum()
     };
@@ -109,8 +109,8 @@ fn crowding(c: &Case, g: &Geometry) -> i32 {
     // Which part takes each hole (the first one, if two collide: only a layout that isn't allowed has
     // collisions, and the placer never makes one).
     let mut part_at: HashMap<Point, usize> = HashMap::new();
-    for (i, body) in g.bodies.iter().enumerate() {
-        for &hole in body {
+    for (i, stands) in g.stands.iter().enumerate() {
+        for &hole in stands {
             part_at.entry(hole).or_insert(i);
         }
     }
@@ -140,13 +140,14 @@ fn crowding(c: &Case, g: &Geometry) -> i32 {
 /// What's wrong with one hole of a layout that isn't allowed.
 #[derive(Clone, Copy, PartialEq)]
 pub enum Why {
-    /// Another part (this index) already takes the hole.
+    /// Another part (this index) also stands on the hole, and they share a layer there.
     OnPart(usize),
     /// The hole is off the board.
     OffBoard,
     /// The hole is on a hard keep-out (this index in `Constraints::keepout`).
     OnKeepout(usize),
-    /// The hole is under this module's board, and the part reaches into a layer the board takes.
+    /// The hole is under this raised part's body (a board on headers), and the part reaches into a
+    /// layer it takes.
     UnderModule(usize),
 }
 
@@ -157,21 +158,32 @@ pub struct Clash {
     pub why: Why,
 }
 
-/// Everything that makes a layout impossible to build: two parts taking one hole, a part hanging off
-/// the board, a part on a keep-out, or a part under a module's board sharing one of its layers (see
-/// `Layers`; two modules can't overlap either). An empty list means the layout is allowed.
-/// Collisions and keep-outs count the holes a part takes; hanging off the board counts its whole
-/// outline (a module's board can't hang off the perfboard either). Only the parts `placed` says are
-/// counted, so a layout can be checked while it's being put together.
+/// Everything that makes a layout impossible to build: two parts sharing a hole and a layer (see
+/// `Layers`), told apart by where: both standing on the hole, or one under a raised part's body (two
+/// boards on headers can't overlap either); a part hanging off the board; a part on a keep-out. An
+/// empty list means the layout is allowed. Collisions and keep-outs count the holes a part stands
+/// on; hanging off the board counts its whole outline (a board on headers can't hang off the
+/// perfboard either). Only the parts `placed` says are counted, so a layout can be checked while
+/// it's being put together.
 pub fn clashes(c: &Case, g: &Geometry, placed: &[bool]) -> Vec<Clash> {
     let (w, h) = (c.board.width, c.board.height);
     let keepouts = &c.constraints.keepout;
     let mut out = Vec::new();
+    // The layers part `i` takes at a hole of its own: from the copper up at one of its pins.
+    let span = |i: usize, hole: Point| if g.pins[i].contains(&hole) { c.layers(i).pin() } else { c.layers(i) };
+    // The first part standing on each hole.
     let mut taken: HashMap<Point, usize> = HashMap::new();
-    for (part, body) in g.bodies.iter().enumerate().filter(|&(i, _)| placed[i]) {
-        for &hole in body {
+    for (part, stands) in g.stands.iter().enumerate().filter(|&(i, _)| placed[i]) {
+        for &hole in stands {
             match taken.get(&hole) {
-                Some(&other) => out.push(Clash { part, hole, why: Why::OnPart(other) }),
+                // It clashes with the first earlier part on the hole it shares a layer with (two can
+                // share a hole on different layers: a part lying over one soldered flat).
+                Some(&first) => {
+                    let other = (first..part).filter(|&o| placed[o] && g.stands[o].contains(&hole)).find(|&o| span(o, hole).overlaps(span(part, hole)));
+                    if let Some(other) = other {
+                        out.push(Clash { part, hole, why: Why::OnPart(other) });
+                    }
+                }
                 None => _ = taken.insert(hole, part),
             }
             if c.constraints.keepout_holes.contains(&hole) {
@@ -183,15 +195,15 @@ pub fn clashes(c: &Case, g: &Geometry, placed: &[bool]) -> Vec<Clash> {
     for (part, outline) in g.outlines.iter().enumerate().filter(|&(i, _)| placed[i]) {
         out.extend(outline.iter().filter(|&&(x, y)| x < 0 || x >= w || y < 0 || y >= h).map(|&hole| Clash { part, hole, why: Why::OffBoard }));
     }
-    // A module's board, over its outline beyond what it stands on: a part under it clashes where
-    // they share a layer (standing on a hole, a part takes it from the surface up).
-    for (m, (outline, body)) in g.outlines.iter().zip(&g.bodies).enumerate().filter(|&(i, _)| placed[i] && c.circuit.parts[i].module) {
-        let board = c.layers(m);
-        let under: HashSet<Point> = outline.iter().filter(|p| !body.contains(p)).copied().collect();
-        for (part, comp) in c.circuit.parts.iter().enumerate().filter(|&(i, _)| placed[i] && i != m) {
-            let covers = if comp.module { &g.outlines[part] } else { &g.bodies[part] };
-            let takes = |hole: &Point| if !comp.module || g.bodies[part].contains(hole) { c.layers(part).standing() } else { c.layers(part) };
-            out.extend(covers.iter().filter(|h| under.contains(h) && takes(h).overlaps(board)).map(|&hole| Clash { part, hole, why: Why::UnderModule(m) }));
+    // A raised part's body, over the holes it covers but doesn't stand on: a part under it clashes
+    // where they share a layer.
+    for (m, (body, stands)) in g.bodies.iter().zip(&g.stands).enumerate().filter(|&(i, _)| placed[i]) {
+        let under: HashSet<Point> = body.iter().filter(|p| !stands.contains(p)).copied().collect();
+        if under.is_empty() {
+            continue;
+        }
+        for part in (0..g.bodies.len()).filter(|&i| placed[i] && i != m) {
+            out.extend(g.bodies[part].iter().filter(|&&h| under.contains(&h) && span(part, h).overlaps(c.layers(m))).map(|&hole| Clash { part, hole, why: Why::UnderModule(m) }));
         }
     }
     out
@@ -199,7 +211,7 @@ pub fn clashes(c: &Case, g: &Geometry, placed: &[bool]) -> Vec<Clash> {
 
 /// Is the layout allowed: can it be built? (No clashes, see `clashes`.)
 pub fn allowed(c: &Case, placement: &[Place]) -> bool {
-    clashes(c, &geometry(&c.circuit, placement), &vec![true; placement.len()]).is_empty()
+    clashes(c, &c.geometry(placement), &vec![true; placement.len()]).is_empty()
 }
 
 /// The clashes in plain words, one line per part and what's wrong with it, like "R1 and C2 share 2 holes".
@@ -250,7 +262,7 @@ pub fn score(m: &Measures) -> f64 {
 /// One line about a layout: its score, cost and measurements (`m`), or, for one that isn't allowed
 /// (a sketch can be drawn that way), what's wrong with it instead: it isn't scored.
 pub fn report(c: &Case, placement: &[Place], m: &Measures, title: &str) -> String {
-    let wrong = clashes(c, &geometry(&c.circuit, placement), &vec![true; placement.len()]);
+    let wrong = clashes(c, &c.geometry(placement), &vec![true; placement.len()]);
     if !wrong.is_empty() {
         return format!("{title}: not allowed, so not scored: {}", clash_words(c, &wrong).join("; "));
     }
@@ -268,24 +280,24 @@ pub fn report_measures(m: &Measures, title: &str) -> String {
 /// Text picture: each part gets a letter, UPPERCASE on its pins, lowercase on its body, x = keep-out, # = collision.
 pub fn ascii_board(c: &Case, placement: &[Place]) -> String {
     let (w, h) = (c.board.width, c.board.height);
-    let g = geometry(&c.circuit, placement);
+    let g = c.geometry(placement);
     let mut grid = vec![vec!['.'; w as usize]; h as usize];
     for (x, y) in c.constraints.keepout.iter().flat_map(|k| k.holes()) {
         grid[y as usize][x as usize] = 'x';
     }
     let on_board = |(x, y): Point| x >= 0 && x < w && y >= 0 && y < h;
-    // Under a module (inside its outline but not taken): ':' where nothing else is.
-    for (_, (outline, body)) in g.outlines.iter().zip(&g.bodies).enumerate().filter(|&(k, _)| c.circuit.parts[k].module) {
-        for &p in outline.iter().filter(|&&p| on_board(p) && !body.contains(&p)) {
+    // Under a board of its own (inside its outline, not stood on): ':' where nothing else is.
+    for (_, (outline, stands)) in g.outlines.iter().zip(&g.stands).enumerate().filter(|&(k, _)| c.own_board(k)) {
+        for &p in outline.iter().filter(|&&p| on_board(p) && !stands.contains(&p)) {
             let cell = &mut grid[p.1 as usize][p.0 as usize];
             if *cell == '.' {
                 *cell = ':';
             }
         }
     }
-    for (i, body) in g.bodies.iter().enumerate() {
+    for (i, stands) in g.stands.iter().enumerate() {
         let letter = (b'a' + i as u8) as char;
-        for &p in body.iter().filter(|&&p| on_board(p)) {
+        for &p in stands.iter().filter(|&&p| on_board(p)) {
             grid[p.1 as usize][p.0 as usize] = letter;
         }
     }
@@ -311,7 +323,7 @@ pub fn ascii_board(c: &Case, placement: &[Place]) -> String {
     if !c.constraints.keepout.is_empty() {
         legend.push("x=keep-out".into());
     }
-    if c.circuit.parts.iter().any(|comp| comp.module && comp.footprint.body.len() < (comp.footprint.w * comp.footprint.h) as usize) {
+    if (0..placement.len()).any(|k| c.own_board(k) && g.stands[k].len() < g.outlines[k].len()) {
         legend.push(":=under a module".into());
     }
     out + "\n   " + &legend.join("  ")

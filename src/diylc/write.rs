@@ -90,7 +90,7 @@ fn point(s: &mut String, (x, y): (f64, f64)) {
 
 pub fn write(build: &Build) -> String {
     let (c, placement, title) = (&build.case, &build.layout.placement, build.title.as_str());
-    let g = board::geometry(&c.circuit, placement);
+    let g = c.geometry(placement);
     let mut ids = 0..;
     let mut id = || format!("00000000-0000-4000-8000-{:012x}", ids.next().unwrap());
     let to_inch = |(x, y): Point| (inch(x), inch(y));

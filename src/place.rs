@@ -8,7 +8,7 @@
 //! move that would break that is thrown away before it's routed, so the judge only ever compares
 //! layouts that can be built.
 
-use crate::board::{self, Place, Placement, size};
+use crate::board::{Face, Place, Placement, size};
 use crate::measure::{self, Measures};
 use crate::route;
 use crate::rules::{self, Case};
@@ -91,7 +91,7 @@ fn a_move(c: &Case, cur: &Placement, movable: &[usize], rng: &mut impl Rng) -> P
             None => {
                 let rot = rng.random_range(0..4);
                 let (pw, ph) = size(&c.circuit.parts[k], rot);
-                Place { x: rng.random_range(0..=(w - pw).max(0)), y: rng.random_range(0..=(h - ph).max(0)), rot }
+                Place { face: Face::Top, x: rng.random_range(0..=(w - pw).max(0)), y: rng.random_range(0..=(h - ph).max(0)), rot }
             }
         };
     } else if roll < 0.6 {
@@ -119,7 +119,7 @@ fn random_placement(c: &Case, rng: &mut impl Rng) -> Placement {
         .circuit
         .parts
         .iter()
-        .map(|_| Place { x: rng.random_range(0..w - 1), y: rng.random_range(0..h - 1), rot: rng.random_range(0..4) })
+        .map(|_| Place { face: Face::Top, x: rng.random_range(0..w - 1), y: rng.random_range(0..h - 1), rot: rng.random_range(0..4) })
         .collect();
     rules::apply(c, &mut placement);
     placement
@@ -153,7 +153,7 @@ pub fn allowed_start(c: &Case, from: &Placement) -> Result<Placement, String> {
         placed[i] = true;
         let fits = |p: Place, out: &mut Placement| {
             out[i] = p;
-            measure::clashes(c, &board::geometry(&c.circuit, out), &placed).is_empty()
+            measure::clashes(c, &c.geometry(out), &placed).is_empty()
         };
         if fits(out[i], &mut out) {
             continue;
@@ -162,7 +162,7 @@ pub fn allowed_start(c: &Case, from: &Placement) -> Result<Placement, String> {
         let at = out[i];
         let mut candidates: Vec<Place> = match &c.constraints.allowed[i] {
             Some(allowed) => allowed.clone(),
-            None => (0..4).flat_map(|rot| (0..w).flat_map(move |x| (0..h).map(move |y| Place { x, y, rot }))).collect(),
+            None => (0..4).flat_map(|rot| (0..w).flat_map(move |x| (0..h).map(move |y| Place { face: Face::Top, x, y, rot }))).collect(),
         };
         candidates.sort_by_key(|q| (q.rot != at.rot, (q.x - at.x).abs() + (q.y - at.y).abs()));
         if !candidates.into_iter().any(|q| fits(q, &mut out)) {

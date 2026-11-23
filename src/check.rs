@@ -88,7 +88,7 @@ fn check_one(path: &str, args: &Args) -> Outcome {
         // The placer's layouts are allowed, so no two pins share a hole and none is off the board:
         // nets can't join by themselves. Pins the router couldn't reach aren't joined in the drawing at all. Leave them out on both
         // sides: if everything else matches, only they are missing; if not, the writer is wrong.
-        let g = board::geometry(&c.circuit, &placed);
+        let g = c.geometry(&placed);
         let holes: std::collections::HashSet<board::Point> = build.layout.routing.unrouted.iter().map(|&(_, _, hole)| hole).collect();
         let mut unrouted = std::collections::HashSet::new();
         for (ci, comp) in c.circuit.parts.iter().enumerate() {

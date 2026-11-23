@@ -11,7 +11,7 @@ pub mod file;
 
 pub use file::{from_json, to_json};
 
-use crate::board::{self, Board, Placement, Point};
+use crate::board::{Board, Placement, Point};
 use crate::circuit::Circuit;
 use crate::measure::{self, Measures};
 use crate::route::{self, Routing};
@@ -104,7 +104,7 @@ pub struct Build {
 impl Build {
     /// Routes `placement` once, and keeps it all together.
     pub fn new(case: Case, placement: Placement, title: &str, made: Made) -> Build {
-        let g = board::geometry(&case.circuit, &placement);
+        let g = case.geometry(&placement);
         let routing = route::route(&case, &placement, &g);
         Build::routed(case, Layout { placement, routing }, title, made)
     }
@@ -112,7 +112,7 @@ impl Build {
     /// The same, for a layout already routed (`route::route`, its runs as the case has them).
     pub fn routed(case: Case, layout: Layout, title: &str, made: Made) -> Build {
         let Layout { placement, routing } = layout;
-        let g = board::geometry(&case.circuit, &placement);
+        let g = case.geometry(&placement);
         // Put the runs in the order the router routes them first (`route::order`), numbering the
         // copper to match. It's the same copper; only the run numbers change. The file then lists
         // the runs in that order, and reading it back gives the copper in the same order.
@@ -136,7 +136,7 @@ impl Build {
 
     /// A case and a layout made of it, scored, with their problems.
     pub fn of(case: Case, layout: Layout, title: String, made: Made) -> Build {
-        let g = board::geometry(&case.circuit, &layout.placement);
+        let g = case.geometry(&layout.placement);
         let measures = measure::measure_routed(&case, &layout.placement, &g, &layout.routing);
         // A layout from the placer is always allowed; a sketch as you drew it may not be.
         let clashes = measure::clashes(&case, &g, &vec![true; layout.placement.len()]);

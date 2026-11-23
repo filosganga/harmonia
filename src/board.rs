@@ -22,68 +22,90 @@ pub struct Copper {
     pub bottom: Vec<(usize, Point, Point)>,
 }
 
-/// Which layers above the board a part takes, `lo` to `hi`, both included: 0 is the board's
-/// surface (copper, a module soldered flat on its pads), 1 where parts lie and jumper wires run,
-/// 2 above them (a module's board on headers). A part takes them over its body from the surface
-/// up, `0..=hi` (its legs, or itself), and a module's board `lo..=hi` over the rest of its
-/// outline; two things clash where they share a hole and a layer. So a resistor lying flat (1-1)
-/// fits under a module on headers (2-2), and a tall capacitor (1-2) doesn't. Written [lo, hi].
+/// A height from the board, counted outwards from a face: 0 the board itself, 1 bare copper on
+/// the face, 2 parts lying on the board and jumper wires, 3 parts raised above those (a board on
+/// headers); negative on the bottom face.
+pub type Layer = i8;
+/// Bare copper on a face: traces, and the pads a part soldered flat sits on.
+pub const COPPER: Layer = 1;
+/// Parts lying on the board, and jumper wires.
+pub const LYING: Layer = 2;
+/// Parts raised above those: a board on headers.
+pub const RAISED: Layer = 3;
+
+/// Which layers a part takes, `lo` to `hi`, both included, counted from the face it's on. Its body
+/// covers its holes at these layers; each of its pins takes its hole from the copper underneath (on
+/// the other face) up to `hi`. Two things clash where they share a hole and a layer: so a resistor
+/// lying flat (2-2) fits under a board on headers (3-3), and a tall capacitor (2-3) doesn't.
+/// Written [lo, hi].
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
-#[serde(from = "[u8; 2]", into = "[u8; 2]")]
+#[serde(from = "[Layer; 2]", into = "[Layer; 2]")]
 pub struct Layers {
-    pub lo: u8,
-    pub hi: u8,
+    pub lo: Layer,
+    pub hi: Layer,
 }
 
-impl From<[u8; 2]> for Layers {
-    fn from([lo, hi]: [u8; 2]) -> Layers {
+impl From<[Layer; 2]> for Layers {
+    fn from([lo, hi]: [Layer; 2]) -> Layers {
         Layers { lo, hi }
     }
 }
 
-impl From<Layers> for [u8; 2] {
-    fn from(l: Layers) -> [u8; 2] {
+impl From<Layers> for [Layer; 2] {
+    fn from(l: Layers) -> [Layer; 2] {
         [l.lo, l.hi]
     }
 }
 
 impl Layers {
-    /// The top layer.
-    pub const TOP: u8 = 2;
-
-    /// What a part takes unless it says: a module on headers 2-2, a low part (lying flat) 1-1,
-    /// any other part 1-2.
-    pub fn of(module: bool, low: bool) -> Layers {
-        match (module, low) {
-            (true, _) => Layers { lo: 2, hi: 2 },
-            (false, true) => Layers { lo: 1, hi: 1 },
-            (false, false) => Layers { lo: 1, hi: 2 },
+    /// What a part takes unless it says: a board on headers 3-3, a low part (lying flat) 2-2, any
+    /// other part 2-3.
+    pub fn of(raised: bool, low: bool) -> Layers {
+        match (raised, low) {
+            (true, _) => Layers { lo: RAISED, hi: RAISED },
+            (false, true) => Layers { lo: LYING, hi: LYING },
+            (false, false) => Layers { lo: LYING, hi: RAISED },
         }
     }
 
     /// These layers, or a stop naming `what` if they make no sense.
     pub fn checked(self, what: &str) -> Layers {
-        if self.lo > self.hi || self.hi > Layers::TOP {
+        if self.lo < COPPER || self.lo > self.hi || self.hi > RAISED {
             panic!(
-                "{what}: \"layers\" should be [from, to], with 0 <= from <= to <= {} (0 the board's surface, 1 where parts lie, 2 above them), not [{}, {}]",
-                Layers::TOP, self.lo, self.hi
+                "{what}: \"layers\" should be [from, to], with {COPPER} <= from <= to <= {RAISED} ({COPPER} the copper on the board, {LYING} where parts lie, {RAISED} above them), not [{}, {}]",
+                self.lo, self.hi
             );
         }
         self
     }
 
-    /// What it takes where it stands: from the surface up.
-    pub fn standing(self) -> Layers {
-        Layers { lo: 0, hi: self.hi }
+    /// Raised above the parts lying on the board, like a board on headers: there's room under it.
+    pub fn raised(self) -> bool {
+        self.lo >= RAISED
+    }
+
+    /// What a pin of a part with these layers takes in its hole: from the copper underneath, on the
+    /// other face, up to the part's top.
+    pub fn pin(self) -> Layers {
+        Layers { lo: -COPPER, hi: self.hi }
     }
 
     pub fn overlaps(self, other: Layers) -> bool {
         self.lo <= other.hi && other.lo <= self.hi
     }
 
-    pub fn takes(self, layer: u8) -> bool {
+    pub fn takes(self, layer: Layer) -> bool {
         (self.lo..=self.hi).contains(&layer)
     }
+}
+
+/// One of the board's two faces. Parts are always on the top one, for now; traces run on the bottom
+/// one, and wires on either. `Top as usize` is 0 and `Bottom` 1, so per-face arrays (the router's
+/// wires) are indexed by `face as usize`.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Face {
+    Top = 0,
+    Bottom = 1,
 }
 
 /// The perfboard itself: its size in holes.
@@ -95,6 +117,8 @@ pub struct Board {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Place {
+    /// The face it's on: always the top, for now.
+    pub face: Face,
     pub x: i32,
     pub y: i32,
     pub rot: u8,
@@ -118,22 +142,27 @@ pub fn turn((x, y): Point, w: i32, h: i32, rot: u8) -> Point {
 
 /// Where everything physically is on the board.
 pub struct Geometry {
-    /// Holes taken by each component's body.
+    /// The holes each part's body covers.
     pub bodies: Vec<Vec<Point>>,
-    /// Every hole inside each component's outline (the same as its body, except for modules).
+    /// The holes each part stands on: its body, or only its pins if it's raised (`Footprint::stands`).
+    pub stands: Vec<Vec<Point>>,
+    /// Every hole inside each part's outline.
     pub outlines: Vec<Vec<Point>>,
     /// Absolute position of each pin: pins[component][pin].
     pub pins: Vec<Vec<Point>>,
 }
 
-pub fn geometry(c: &Circuit, placement: &[Place]) -> Geometry {
-    let mut g = Geometry { bodies: Vec::new(), outlines: Vec::new(), pins: Vec::new() };
-    for (comp, p) in c.parts.iter().zip(placement) {
+/// Where everything is with the parts of `c` at `placement`, each with the `layers` it takes (see
+/// `Case::geometry`).
+pub fn geometry(c: &Circuit, layers: &[Layers], placement: &[Place]) -> Geometry {
+    let mut g = Geometry { bodies: Vec::new(), stands: Vec::new(), outlines: Vec::new(), pins: Vec::new() };
+    for ((comp, p), &l) in c.parts.iter().zip(placement).zip(layers) {
         let at = |hole: Point| {
             let (dx, dy) = turn(hole, comp.footprint.w, comp.footprint.h, p.rot);
             (p.x + dx, p.y + dy)
         };
         g.bodies.push(comp.footprint.body.iter().map(|&b| at(b)).collect());
+        g.stands.push(comp.footprint.stands(l).into_iter().map(at).collect());
         g.outlines.push(Footprint::full_body(comp.footprint.w, comp.footprint.h).into_iter().map(at).collect());
         g.pins.push(comp.footprint.pins.iter().map(|pin| at(pin.at)).collect());
     }

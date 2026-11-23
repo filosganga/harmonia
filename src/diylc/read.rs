@@ -7,10 +7,12 @@
 //! re-places everything on the real board.
 //!
 //! A DIYLC group with pins in it (say two pin headers plus a rectangle for a module's
-//! board) becomes one part. Only its pins' holes are taken, so low parts can go under it.
+//! board) becomes one part. If it stands only on its pins, it's a board on headers ([3, 3])
+//! over its whole outline, and low parts and jumper wires can go under it; otherwise it stands
+//! on its members' bodies and the rest of its outline is free.
 
 use super::{HOLE, Kind, MARGIN, PartDrawing, class, class_look, seal};
-use crate::board::{Copper, Layers, Place, Placement, Point, bounds};
+use crate::board::{Copper, Face, Layers, Place, Placement, Point, bounds};
 use crate::circuit::{Circuit, Drawings, Footprint, Format, Look, NET_NAME_HINTS, Net, Part, Pin};
 use roxmltree::Node;
 use std::collections::{BTreeSet, HashMap};
@@ -127,7 +129,7 @@ pub fn load(path: &str) -> (Circuit, Placement, Copper) {
         let all = places.iter();
         (all.clone().map(|p| p.0).min().unwrap_or(0), all.map(|p| p.1).min().unwrap_or(0))
     });
-    let sketch: Placement = places.iter().map(|&(x, y)| Place { x: x - origin.0, y: y - origin.1, rot: 0 }).collect();
+    let sketch: Placement = places.iter().map(|&(x, y)| Place { face: Face::Top, x: x - origin.0, y: y - origin.1, rot: 0 }).collect();
 
     // Your copper, in the same holes as the sketch.
     let on_board = |p: Inches| {
@@ -244,15 +246,21 @@ fn circuit_parts(path: &str, root: &Node, drawn: &[Drawn], decorations: &HashMap
         let local = |(x, y): Point| (x - x0, y - y0);
         let single = members.len() == 1 && !in_group;
         let first = &drawn[members[0]];
-        // A group standing on less than its outline (its headers) is a module, on headers.
+        // A group standing on less than its outline is a board of its own: on headers, raised over
+        // its whole outline, if it stands only on its pins; else standing on its members' bodies,
+        // with the rest of its outline free.
         let (w, h) = (x1 - x0 + 1, y1 - y0 + 1);
-        let module = !single && body.len() < (w * h) as usize;
+        let own_board = !single && body.len() < (w * h) as usize;
+        let mut pin_holes: Vec<Point> = pins.iter().map(|p| p.1).collect();
+        pin_holes.sort();
+        pin_holes.dedup();
+        let on_headers = own_board && body == pin_holes;
         let low = single && class(&first.class).is_some_and(|c| c.low);
         let xml = members.iter().map(|&pi| drawn[pi].node).chain(extra).map(|n| n.document().input_text()[n.range()].to_string()).collect();
         let short = if single { class(&first.class).map_or("", |c| c.short) } else { "module" };
         let pins: Vec<Pin> = pins.into_iter().map(|(name, at, off_grid)| Pin { name, at: local(at), off_grid }).collect();
-        // A group that isn't a module (say, a header and its label) looks like a header.
-        let look = match (single, module) {
+        // A group that isn't a board (say, a header and its label) looks like a header.
+        let look = match (single, own_board) {
             (true, _) => class_look(short, &pins, None),
             (false, true) => Look::OwnBoard,
             (false, false) => Look::Header,
@@ -265,13 +273,12 @@ fn circuit_parts(path: &str, root: &Node, drawn: &[Drawn], decorations: &HashMap
                 w,
                 h,
                 pins,
-                body: body.into_iter().map(local).collect(),
+                body: if on_headers { Footprint::full_body(w, h) } else { body.into_iter().map(local).collect() },
                 look,
                 drawings: Drawings::new(),
             },
             drawings: Drawings::from([(Format::Diylc, seal(&PartDrawing { xml, group, origin: (x0, y0) }))]),
-            layers: Layers::of(module, low),
-            module,
+            layers: Layers::of(on_headers, low),
             footprint_from: None,
         });
         places.push((x0, y0));

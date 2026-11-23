@@ -1,13 +1,13 @@
 //! The layout file: one plain JSON file that holds a `Build`, what you asked for and what was
 //! made of it. `to_json` writes it, `from_json` reads it back.
 //!
-//!     { "format": "harmonia-layout", "version": 4, "title": "Placed by rules",
+//!     { "format": "harmonia-layout", "version": 5, "title": "Placed by rules",
 //!       "made": { "circuit": "circuits/555_blinker.net", "judge": "rules", "seed": 1, ... },
 //!       "design": {
 //!         "board": { "width": 18, "height": 12 }, "power": "+5V", "ground": "GND",
 //!         "rules": [ { "kind": "edge", "part": "J1", "edge": "left" }, ... ], "choices": [],
 //!         "parts": [ { "reference": "U1", "value": "NE555", "footprint": "...", "size": [4, 4],
-//!                      "layers": [1, 2], "look": { "as": "round", "plus": "1" },
+//!                      "layers": [2, 3], "look": { "as": "round", "plus": "1" },
 //!                      "footprint_drawings": { "diylc": { "part": "RadialElectrolytic" } },
 //!                      "pins": [ { "name": "1", "at": [0, 3] }, ... ] }, ... ],
 //!         "nets": [ { "name": "GND", "pins": ["U1.1", "C1.2", "J1.2"] }, ... ] },
@@ -30,7 +30,7 @@
 //! out again from the design and the layout, with today's measurements.
 
 use super::{Build, Layout, Made};
-use crate::board::{Board, Layers, Place, Placement, Point};
+use crate::board::{Board, Face, Layers, Place, Placement, Point};
 use crate::circuit::{Circuit, Drawings, Footprint, Look, Net, Part, Pin};
 use crate::route::Routing;
 use crate::rules::{self, Rule, Run};
@@ -40,7 +40,7 @@ use std::collections::BTreeMap;
 /// What the file says it is, and which version of the file format. A change to the format that
 /// an older reader would get wrong gets a new version.
 const FORMAT: &str = "harmonia-layout";
-const VERSION: u32 = 4;
+const VERSION: u32 = 5;
 
 /// Lines in the file are kept to about this many characters (see `pretty`).
 const LINE: usize = 100;
@@ -97,12 +97,9 @@ struct PartEntry {
     footprint: String,
     /// Width and height in holes, before turning.
     size: (i32, i32),
-    /// Which layers above the board it takes, as its footprint or sketch says (a board file's
-    /// `layers` rule, in `rules`, may say otherwise).
+    /// Which layers it takes, counted from its face (`board::Layers`), as its footprint or sketch
+    /// says (a board file's `layers` rule, in `rules`, may say otherwise).
     layers: Layers,
-    /// A module: a board of its own, over its whole outline, standing only on its `body`.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    module: bool,
     /// What its footprint looks like in the pictures: left out for a box.
     #[serde(default, skip_serializing_if = "is_box")]
     look: Look,
@@ -110,8 +107,8 @@ struct PartEntry {
     #[serde(default, skip_serializing_if = "Drawings::is_empty")]
     footprint_drawings: Drawings,
     pins: Vec<PinEntry>,
-    /// The holes the part stands on, inside its outline before turning: only written when it isn't
-    /// the whole outline (a module's headers, or a part drawn at an angle).
+    /// The holes its body covers, inside its outline before turning: only written when it isn't the
+    /// whole outline (a part drawn at an angle, or a DIYLC group that isn't a board on headers).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     body: Option<Vec<Point>>,
     /// How file formats draw the part itself, by format: for a part read from a DIYLC sketch, your
@@ -200,7 +197,7 @@ struct Score {
 pub fn to_json(build: &Build) -> String {
     let (c, layout) = (&build.case, &build.layout);
     let circuit = &c.circuit;
-    let g = crate::board::geometry(circuit, &layout.placement);
+    let g = c.geometry(&layout.placement);
     let parts = circuit
         .parts
         .iter()
@@ -210,7 +207,6 @@ pub fn to_json(build: &Build) -> String {
             footprint: comp.footprint.name.clone(),
             size: (comp.footprint.w, comp.footprint.h),
             layers: comp.layers,
-            module: comp.module,
             look: comp.footprint.look.clone(),
             footprint_drawings: comp.footprint.drawings.clone(),
             pins: comp.footprint.pins.iter().map(|pin| PinEntry { name: pin.name.clone(), at: pin.at, off_grid: pin.off_grid }).collect(),
@@ -311,7 +307,6 @@ pub fn from_json(text: &str) -> Build {
             },
             drawings: p.drawings.clone(),
             layers: p.layers.checked(&format!("layout file: {}", p.reference)),
-            module: p.module,
             // Which file each footprint came from is in `made.footprints`; the part's shape is here.
             footprint_from: None,
         })
@@ -331,11 +326,11 @@ pub fn from_json(text: &str) -> Build {
     if l.parts.len() != case.circuit.parts.len() || l.parts.iter().zip(&case.circuit.parts).any(|(p, c)| p.reference != c.reference) {
         panic!("layout file: \"layout\" should place the design's parts, in the same order");
     }
-    let placement: Placement = l.parts.iter().map(|p| Place { x: p.at.0, y: p.at.1, rot: p.rot }).collect();
+    let placement: Placement = l.parts.iter().map(|p| Place { face: Face::Top, x: p.at.0, y: p.at.1, rot: p.rot }).collect();
 
     // The runs, in the order the router routes them first, as `Build::routed` keeps them: they must be
     // the ones the case's rules make, or the copper would be on the wrong runs.
-    let g = crate::board::geometry(&case.circuit, &placement);
+    let g = case.geometry(&placement);
     let order = crate::route::order(&case, &g);
     case.runs = order.iter().map(|&r| case.runs[r].clone()).collect();
     let said: Vec<(String, Option<String>, Vec<String>)> = l.runs.iter().map(|e| (e.net.clone(), e.star.clone(), e.pins.clone())).collect();

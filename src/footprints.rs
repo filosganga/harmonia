@@ -29,13 +29,13 @@ struct Entry {
     /// Low enough to sit under a module on headers. Leave out if it isn't.
     #[serde(default)]
     low: bool,
-    /// A module (an Arduino Nano, a motor driver breakout): a board of its own, standing on its
-    /// pins, like a DIYLC group with pins in it. On headers unless `layers` says otherwise, so low
-    /// parts and jumper wires can go under it.
+    /// A module (an Arduino Nano, a motor driver breakout): a board of its own over its whole
+    /// outline, like a DIYLC group with pins in it. On headers unless `layers` says otherwise, so it
+    /// stands on its pins and low parts and jumper wires can go under it.
     #[serde(default)]
     module: bool,
-    /// Which layers above the board it takes, [from, to] (see `board::Layers`), if not what
-    /// `module` and `low` say: a module on headers [2, 2], a low part [1, 1], any other [1, 2].
+    /// Which layers it takes, [from, to] (see `board::Layers`), if not what `module` and `low`
+    /// say: a module on headers [3, 3], a low part [2, 2], any other [2, 3].
     #[serde(default)]
     layers: Option<Layers>,
 }
@@ -134,8 +134,6 @@ pub struct Found {
     pub footprint: Footprint,
     /// Which layers the part takes: the entry's `layers`, or what `module` and `low` say.
     pub layers: Layers,
-    /// A module (see `Part::module`).
-    pub module: bool,
     /// The file it came from, if not the built-in library, and what it replaced: see `Part::footprint_from`.
     pub from: Option<String>,
 }
@@ -151,7 +149,6 @@ impl Library {
             panic!("{reference} uses footprint {name}, which isn't in the built-in {FOOTPRINTS} yet: add its size and pads in holes there{user}, or in a {FOOTPRINTS} next to the netlist")
         });
         let pins = entry.pins.iter().map(|(pad, &at)| Pin { name: pad.clone(), at, off_grid: false }).collect();
-        let body = if entry.module { entry.pins.values().copied().collect() } else { Footprint::full_body(entry.w, entry.h) };
         let from = self.from.get(name).map(|(file, replaced)| match replaced {
             Some(what) => format!("{name} from {}, replacing {what}", file.display()),
             None => format!("{name} from {}", file.display()),
@@ -163,13 +160,12 @@ impl Library {
                 w: entry.w,
                 h: entry.h,
                 pins,
-                body,
+                body: Footprint::full_body(entry.w, entry.h),
                 // A module is a board of its own; what a DIYLC drawing says comes later (`diylc::look`).
                 look: if entry.module { Look::OwnBoard } else { Look::Box },
                 drawings: entry.diylc.iter().map(|d| (Format::Diylc, Drawing(d.clone()))).collect::<Drawings>(),
             },
             layers,
-            module: entry.module,
             from,
         }
     }
