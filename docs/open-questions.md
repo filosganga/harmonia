@@ -161,9 +161,10 @@ Each of these is routed and scored like a real move, a few percent of all moves 
 
 ## 5. Both sides of the board, handled the same way
 
-Your note in TODO.md ("Both sides of the board, handled the same way"). Step 1 is done: on the parts' side, each part takes a span of layers, 0 the surface, 1 where parts and
-jumpers lie, 2 above them (`board::Layers`; README "How a board is judged"), from its footprint or
-sketch, or a board file's `layers` rule. A two-legged part lying at an angle now stands on the line
+Your note in TODO.md ("Both sides of the board, handled the same way"). Step 1 is done: each part takes a span of layers counted from its face, 1 the copper, 2 where
+parts and jumpers lie, 3 above them, negative on the bottom face (`board::Layers`; README "How a
+board is judged"), from its footprint or sketch, or a board file's `layers` rule. Faces are in
+place (`board::Face`), with every part on the top one for now. A two-legged part lying at an angle now stands on the line
 between its legs, a standing one on its round body.
 
 Still to decide and build, each on its own branch with the benchmark:
@@ -180,4 +181,4 @@ Still to decide and build, each on its own branch with the benchmark:
   (18s before) and `bench` about 50s (33s): wires became part of the router's search, and the
   finished layout's routing is improved a few runs at a time (`route::IMPROVE`).
 - The installed `harmonia` (`cargo install --path .`) must be reinstalled to read layout files of
-  version 4.
+  version 5 (reinstall whenever the layout file's `VERSION` changes).

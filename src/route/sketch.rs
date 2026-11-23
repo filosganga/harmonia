@@ -2,8 +2,7 @@
 //! measures the router's.
 
 use super::Routing;
-use super::search::Side;
-use crate::board::{Copper, Geometry, Point};
+use crate::board::{Copper, Face, Geometry, Point};
 use crate::rules::Case;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -46,9 +45,9 @@ pub fn from_sketch(c: &Case, g: &Geometry, copper: &Copper) -> (Routing, usize) 
         let runs: Vec<usize> = (0..c.runs.len()).filter(|&r| c.runs[r].net == net).collect();
         let Some(&first_run) = runs.first() else { continue };
         let star = c.runs[first_run].star.map(pin_hole);
-        let pieces: Vec<(Point, Point, Option<Side>)> = steps.iter().map(|&(n, a, b)| (n, a, b, None))
-            .chain(jumpers.iter().map(|&(n, a, b)| (n, a, b, Some(Side::Top))))
-            .chain(bottom.iter().map(|&(n, a, b)| (n, a, b, Some(Side::Bottom))))
+        let pieces: Vec<(Point, Point, Option<Face>)> = steps.iter().map(|&(n, a, b)| (n, a, b, None))
+            .chain(jumpers.iter().map(|&(n, a, b)| (n, a, b, Some(Face::Top))))
+            .chain(bottom.iter().map(|&(n, a, b)| (n, a, b, Some(Face::Bottom))))
             .filter(|&(n, ..)| n == net)
             .map(|(_, a, b, side)| (a, b, side))
             .collect();
@@ -93,8 +92,8 @@ pub fn from_sketch(c: &Case, g: &Geometry, copper: &Copper) -> (Routing, usize) 
             let r = run_of(if Some(a) == star { b } else { a }, &mut branches);
             match side {
                 None => out.traces.push((r, a, b)),
-                Some(Side::Top) => out.jumpers.push((r, a, b)),
-                Some(Side::Bottom) => out.bottom.push((r, a, b)),
+                Some(Face::Top) => out.jumpers.push((r, a, b)),
+                Some(Face::Bottom) => out.bottom.push((r, a, b)),
             }
         }
         // A pin the copper doesn't join to the rest of its net: the rest being the star point, or

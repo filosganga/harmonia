@@ -3,7 +3,7 @@
 //! next pin, in steps of trace and wires (`spread`), with what each step costs.
 
 use super::Routing;
-use crate::board::{Geometry, Point, distance};
+use crate::board::{Face, Geometry, LYING, Point, distance};
 use crate::rules::Case;
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashSet};
@@ -123,8 +123,8 @@ pub(super) struct Grid {
     star: Vec<Option<usize>>,
     /// Holes with a pin in them.
     pin: Vec<bool>,
-    /// Holes where a part takes layer 1 on the parts' side, where a jumper would lie (not under a
-    /// module on headers: a jumper fits under its board).
+    /// Holes where a part takes the layer a jumper would lie on (`LYING`, on the top face): not under
+    /// a board on headers, which a jumper fits under.
     body: Vec<bool>,
     /// Hard keep-out holes: no part, trace or wire.
     keepout: Vec<bool>,
@@ -142,18 +142,11 @@ pub(super) struct Grid {
     pub(super) dir_order: [usize; 8],
 }
 
-/// Which side of the board a wire is on: the parts' side (a jumper) or the solder side.
-#[derive(Clone, Copy, PartialEq)]
-pub(super) enum Side {
-    Top = 0,
-    Bottom = 1,
-}
-
 /// One step of a path: a trace between neighbouring holes, or a wire on one side.
 #[derive(Clone, Copy, PartialEq)]
 pub(super) enum Step {
     Trace,
-    Wire(Side),
+    Wire(Face),
 }
 
 /// The holes strictly between the two legs of a straight or 45° wire.
@@ -189,14 +182,14 @@ impl Grid {
 
     /// Can a wire on `side` lie over this hole, for `run`? Not over a keep-out, or another run's
     /// wire on the same side. On top, not over a pin or a part either; the solder side has none.
-    fn passable(&self, i: usize, run: usize, side: Side) -> bool {
+    fn passable(&self, i: usize, run: usize, side: Face) -> bool {
         let ours = self.wire_at[side as usize][i].is_none_or(|r| r == run);
-        ours && !self.keepout[i] && (side == Side::Bottom || (!self.pin[i] && !self.body[i]))
+        ours && !self.keepout[i] && (side == Face::Bottom || (!self.pin[i] && !self.body[i]))
     }
 
     /// Can a wire leg for `run`, on `side`, go in this hole? A jumper is like a part, so its leg needs
     /// a hole of its own: no pin, nobody else's copper, and a wire could lie over it.
-    fn leg(&self, p: Point, run: usize, side: Side) -> bool {
+    fn leg(&self, p: Point, run: usize, side: Face) -> bool {
         let i = self.at(p);
         !self.pin[i] && (self.owner[i] == Owner::Free || self.owner[i] == Owner::Run(run)) && self.passable(i, run, side)
     }
@@ -214,7 +207,7 @@ impl Grid {
     }
 
     /// Can a wire for `run` lie straight from `a` to `b` on `side`, without crossing another run's?
-    fn clear(&self, a: Point, b: Point, run: usize, side: Side) -> bool {
+    fn clear(&self, a: Point, b: Point, run: usize, side: Face) -> bool {
         holes_between(a, b).all(|p| self.passable(self.at(p), run, side))
             && !self.wires[side as usize].iter().any(|&(r, c, d)| r != run && segments_cross((a, b), (c, d)))
     }
@@ -253,13 +246,14 @@ pub(super) fn empty_grid(c: &Case, g: &Geometry) -> Grid {
         dir_order: [0, 1, 2, 3, 4, 5, 6, 7],
     };
 
-    // Holes where a part takes layer 1, where jumper wires lie: where it stands, and a module's
-    // board if it comes down that low. A jumper goes under a module on headers.
-    for (k, comp) in c.circuit.parts.iter().enumerate() {
+    // Holes where a part takes the layer jumper wires lie on: its pins, if it reaches that high,
+    // and its body, if it lies there. A jumper goes under a board on headers, and over a part
+    // soldered flat at [1, 1].
+    for k in 0..c.circuit.parts.len() {
         let layers = c.layers(k);
-        let stands = layers.standing().takes(1).then_some(&g.bodies[k]);
-        let board = (comp.module && layers.takes(1)).then_some(&g.outlines[k]);
-        for &p in stands.into_iter().chain(board).flatten() {
+        let pins = layers.pin().takes(LYING).then_some(&g.pins[k]);
+        let body = layers.takes(LYING).then_some(&g.bodies[k]);
+        for &p in pins.into_iter().chain(body).flatten() {
             if let Some(i) = grid.index(p) {
                 grid.body[i] = true;
             }
@@ -271,7 +265,7 @@ pub(super) fn empty_grid(c: &Case, g: &Geometry) -> Grid {
         (grid.keepout[i], grid.owner[i]) = (true, Owner::Blocked);
     }
     // Not under a part, though: the part pays for that hole already, and the score counts it once.
-    let under_parts: HashSet<Point> = g.bodies.iter().flatten().copied().collect();
+    let under_parts: HashSet<Point> = g.stands.iter().flatten().copied().collect();
     for (&p, &weight) in c.constraints.soft_keepout.iter().filter(|(p, _)| !under_parts.contains(p)) {
         let i = grid.at(p);
         grid.extra[i] = (RULE * weight).round() as u32;
@@ -314,7 +308,7 @@ pub(super) fn empty_grid(c: &Case, g: &Geometry) -> Grid {
 /// its holes (except a star point, which stays open to the net's other runs).
 pub(super) fn lay(grid: &mut Grid, out: &mut Routing, run: usize, a: Point, b: Point, step: Step) {
     if let Step::Wire(side) = step {
-        let list = if side == Side::Top { &mut out.jumpers } else { &mut out.bottom };
+        let list = if side == Face::Top { &mut out.jumpers } else { &mut out.bottom };
         list.push((run, a, b));
         grid.wires[side as usize].push((run, a, b));
         for p in holes_between(a, b).chain([a, b]) {
@@ -420,9 +414,9 @@ pub(super) fn spread(grid: &Grid, mem: &mut Scratch, from: &[Point], target: Poi
     const WIRES: usize = usize::MAX / 2;
     while let Some(Reverse((_, so_far, s))) = queue.pop() {
         if s >= WIRES {
-            let (i, side) = ((s - WIRES) / 2, if (s - WIRES).is_multiple_of(2) { Side::Top } else { Side::Bottom });
+            let (i, side) = ((s - WIRES) / 2, if (s - WIRES).is_multiple_of(2) { Face::Top } else { Face::Bottom });
             let (p, from) = (grid.hole(i), first[i]);
-            let price = if side == Side::Top { JUMPER } else { SOLDER_WIRE };
+            let price = if side == Face::Top { JUMPER } else { SOLDER_WIRE };
             for &((dx, dy), length) in shapes.expect("wires are only queued when there are shapes") {
                 let q = (p.0 + dx, p.1 + dy);
                 if !grid.on_board(q) || popped[grid.at(q)] == round || !grid.leg(q, run, side) || !grid.clear(p, q, run, side) {
@@ -449,12 +443,12 @@ pub(super) fn spread(grid: &Grid, mem: &mut Scratch, from: &[Point], target: Poi
             }
             // Wires from here: only the first time here, the cheapest, since a wire leaves in any
             // direction without a turn to pay.
-            for side in [Side::Top, Side::Bottom] {
+            for side in [Face::Top, Face::Bottom] {
                 let Some(shapes) = shapes else { break };
                 if via[s] != Step::Trace || !grid.leg(p, run, side) {
                     continue;
                 }
-                let price = if side == Side::Top { JUMPER } else { SOLDER_WIRE };
+                let price = if side == Face::Top { JUMPER } else { SOLDER_WIRE };
                 let on_board = shapes.iter().filter(|&&((dx, dy), _)| grid.on_board((p.0 + dx, p.1 + dy)));
                 let Some(least) = on_board.map(|&((dx, dy), length)| length + guess((p.0 + dx, p.1 + dy))).min() else { continue };
                 queue.push(Reverse((so_far + price + least, so_far + price, WIRES + 2 * i + side as usize)));

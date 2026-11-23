@@ -8,7 +8,7 @@
 //!
 //! Written in KiCad 9's file format, which KiCad 10 opens fine.
 
-use crate::board::{self, Point};
+use crate::board::Point;
 use crate::circuit::Part;
 use crate::build::Build;
 use std::fmt::Write;
@@ -36,7 +36,7 @@ fn uuid(n: usize) -> String {
 
 pub fn write(build: &Build) -> String {
     let (c, placement) = (&build.case, &build.layout.placement);
-    let g = board::geometry(&c.circuit, placement);
+    let g = c.geometry(placement);
     let mut ids = 0..;
     let mut s = String::new();
     s += "(kicad_pcb\n  (version 20241229)\n  (generator \"perfboard\")\n  (generator_version \"0.1\")\n";
@@ -86,8 +86,8 @@ pub fn write(build: &Build) -> String {
         }
         s += "    (attr through_hole)\n";
         // A part others may sit inside (a module on headers) gets no courtyard.
-        let module = c.room_under(ci);
-        for (layer, width) in [("F.SilkS", 0.12), ("F.CrtYd", 0.05)].into_iter().filter(|&(l, _)| !(module && l == "F.CrtYd")) {
+        let room = c.room_under(ci);
+        for (layer, width) in [("F.SilkS", 0.12), ("F.CrtYd", 0.05)].into_iter().filter(|&(l, _)| !(room && l == "F.CrtYd")) {
             writeln!(
                 s,
                 "    (fp_rect (start {:.2} {:.2}) (end {:.2} {:.2}) (stroke (width {width}) (type solid)) (fill no) (layer \"{layer}\") (uuid \"{}\"))",

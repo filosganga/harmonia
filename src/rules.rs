@@ -25,7 +25,7 @@
 //!         { "kind": "near",    "pins": ["C2.1", "U1.5"], "weight": 0.5 },
 //!         { "kind": "close",   "pins": ["D1.2", "U1.3"] },
 //!         { "kind": "star",    "name": "ground at C1", "at": "C1.2", "runs": [["U1.1", "D1.1"]] },
-//!         { "kind": "layers",  "name": "C2 bent over, lying flat", "part": "C2", "layers": [1, 1] }
+//!         { "kind": "layers",  "name": "C2 bent over, lying flat", "part": "C2", "layers": [2, 2] }
 //!       ]
 //!     }
 //!
@@ -66,14 +66,16 @@
 //! other pin of the net gets a run of its own, straight from `at`. A soft one is broken by each join
 //! of one run onto another's copper, which the router takes when it's cheaper (see route.rs).
 //!
-//! layers says how a part is mounted: which layers above the board it takes (`board::Layers`), in
-//! place of what its footprint says. A module soldered on headers takes [2, 2], above the parts,
-//! so low parts and jumper wires go under it; soldered on its pins, [1, 2], like any part;
-//! flat on its pads, [0, 1] or [0, 0]. It has no weight: it's how the part is built. To let the
-//! placer try two ways of mounting, put them in a one-of.
+//! layers says how a part is mounted: which layers it takes (`board::Layers`: 1 the copper on the
+//! board, 2 where parts lie and jumper wires run, 3 above them), in place of what its footprint
+//! says. A board soldered on headers takes [3, 3], raised above the parts: it stands on its pins,
+//! and low parts and jumper wires go under it. Soldered on its pins, [2, 3], like any part, it
+//! stands on its whole body. Flat on its pads, [1, 2] (nothing goes over it) or [1, 1] (jumper
+//! wires and low parts may). It has no weight: it's how the part is built. To let the placer try
+//! two ways of mounting, put them in a one-of.
 
-use crate::board::{self, Board, Layers, Place, Placement, Point};
-use crate::circuit::{Circuit, Part};
+use crate::board::{self, Board, Face, Layers, Place, Placement, Point};
+use crate::circuit::{Circuit, Look, Part};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
@@ -194,7 +196,7 @@ pub enum Rule {
         #[serde(skip_serializing_if = "Option::is_none")]
         weight: Option<f64>,
     },
-    /// How the part is mounted: the layers above the board it takes, like [0, 1]. No weight.
+    /// How the part is mounted: the layers it takes, like [2, 2]. No weight.
     Layers {
         #[serde(skip_serializing_if = "Option::is_none")]
         name: Option<String>,
@@ -371,11 +373,29 @@ impl Case {
         self.constraints.layers.get(i).copied().flatten().unwrap_or(self.circuit.parts[i].layers)
     }
 
-    /// Whether another part may sit inside part `i`'s outline: a module's board raised above the
-    /// parts, or a part drawn at an angle, which only takes the line between its legs.
+    /// Whether part `i` is raised above the parts lying on the board, like a board on headers.
+    pub fn raised(&self, i: usize) -> bool {
+        self.layers(i).raised()
+    }
+
+    /// Whether part `i` is a board of its own: raised, or drawn as one (a module, a DIYLC group of
+    /// parts). The text board marks the space under it, and `nets` says parts can go there.
+    pub fn own_board(&self, i: usize) -> bool {
+        self.raised(i) || self.circuit.parts[i].footprint.look == Look::OwnBoard
+    }
+
+    /// Whether another part may sit inside part `i`'s outline: it's raised, or its body doesn't
+    /// cover all of it (a part drawn at an angle takes only the line between its legs).
     pub fn room_under(&self, i: usize) -> bool {
-        let comp = &self.circuit.parts[i];
-        if comp.module { self.layers(i).lo >= Layers::TOP } else { comp.footprint.body.len() < (comp.footprint.w * comp.footprint.h) as usize }
+        let f = &self.circuit.parts[i].footprint;
+        self.raised(i) || f.body.len() < (f.w * f.h) as usize
+    }
+
+    /// Where everything is with the parts at `placement`, each standing where its layers in this
+    /// case say.
+    pub fn geometry(&self, placement: &[Place]) -> board::Geometry {
+        let layers: Vec<Layers> = (0..self.circuit.parts.len()).map(|i| self.layers(i)).collect();
+        board::geometry(&self.circuit, &layers, placement)
     }
 }
 
@@ -683,9 +703,10 @@ pub fn resolve(option: &CaseRules, c: &Circuit, board: Board) -> Result<Constrai
     // hard keep-outs, so a rule never pushes it there.
     for (i, rules) in rules_for.iter().enumerate().filter(|(_, rules)| !rules.is_empty()) {
         let comp = &c.parts[i];
+        let stands = comp.footprint.stands(out.layers[i].unwrap_or(comp.layers));
         let fits = |p: Place| {
             let (pw, ph) = board::size(comp, p.rot);
-            let on_keepout = comp.footprint.body.iter().any(|&hole| {
+            let on_keepout = stands.iter().any(|&hole| {
                 let (dx, dy) = board::turn(hole, comp.footprint.w, comp.footprint.h, p.rot);
                 out.keepout_holes.contains(&(p.x + dx, p.y + dy))
             });
@@ -693,7 +714,7 @@ pub fn resolve(option: &CaseRules, c: &Circuit, board: Board) -> Result<Constrai
         };
         let broken = |p: Place| rules.iter().map(|(r, weight)| r.broken(comp, p, w, h, *weight)).sum::<f64>();
         let places: Vec<(Place, f64)> = (0..4)
-            .flat_map(|rot| (0..w).flat_map(move |x| (0..h).map(move |y| Place { x, y, rot })))
+            .flat_map(|rot| (0..w).flat_map(move |x| (0..h).map(move |y| Place { face: Face::Top, x, y, rot })))
             .filter(|&p| fits(p))
             .map(|p| (p, broken(p)))
             .filter(|(_, cost)| cost.is_finite())

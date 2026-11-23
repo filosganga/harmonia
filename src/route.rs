@@ -51,11 +51,11 @@ mod sketch;
 
 pub use sketch::from_sketch;
 
-use crate::board::{Geometry, Place, Point, distance, geometry};
+use crate::board::{Face, Geometry, Place, Point, distance};
 use crate::measure::{Measures, WEIGHTS, measure_routed};
 use crate::rules::Case;
 use rand::{Rng, SeedableRng, rngs::StdRng, seq::SliceRandom};
-use search::{Grid, RULE, Scratch, Side, Step, bend, empty_grid, holes_between, join, jumper_shapes, lay, octile, spread};
+use search::{Grid, RULE, Scratch, Step, bend, empty_grid, holes_between, join, jumper_shapes, lay, octile, spread};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// Where the copper goes. Each entry is (run, from hole, to hole).
@@ -288,14 +288,14 @@ pub fn route_once(c: &Case, g: &Geometry) -> Routing {
 /// Routes the parts at `placement` the thorough way (`route`), then measures the layout
 /// (`measure::measure_routed`).
 pub fn measure(c: &Case, placement: &[Place]) -> Measures {
-    let g = geometry(&c.circuit, placement);
+    let g = c.geometry(placement);
     let routing = route(c, placement, &g);
     measure_routed(c, placement, &g, &routing)
 }
 
 /// The same, routed once, shortest first (`route_once`): what the placer judges each move by.
 pub fn measure_once(c: &Case, placement: &[Place]) -> Measures {
-    let g = geometry(&c.circuit, placement);
+    let g = c.geometry(placement);
     let routing = route_once(c, &g);
     measure_routed(c, placement, &g, &routing)
 }
@@ -340,7 +340,7 @@ fn improve(c: &Case, placement: &[Place], g: &Geometry, start: Routing) -> Routi
         let mut grid = empty_grid(c, g);
         grid.dir_order.shuffle(&mut rng);
         let mut kept = Routing::default();
-        for (list, step) in [(&best.traces, Step::Trace), (&best.jumpers, Step::Wire(Side::Top)), (&best.bottom, Step::Wire(Side::Bottom))] {
+        for (list, step) in [(&best.traces, Step::Trace), (&best.jumpers, Step::Wire(Face::Top)), (&best.bottom, Step::Wire(Face::Bottom))] {
             for &(run, a, b) in list.iter().filter(|t| !again.contains(&t.0)) {
                 lay(&mut grid, &mut kept, run, a, b, step);
             }
