@@ -400,7 +400,7 @@ impl Case {
 }
 
 /// Pins to join with one piece of copper. Two runs never share copper, even on the same net,
-/// unless a soft star joins them (`Routing::joins`).
+/// unless a soft star joins them (counted from the copper: `measure::built`, `Built::star_joins`).
 #[derive(Clone)]
 pub struct Run {
     pub net: usize,
@@ -493,7 +493,6 @@ fn rule_cases(rule: &Rule, inherited: Option<f64>) -> Vec<CaseRules<'_>> {
 /// A near rule, matched up with the circuit: pins are (component, pin) indexes.
 #[derive(Clone)]
 pub struct NearRule {
-    pub net: usize,
     pub pins: [(usize, usize); 2],
     /// 0-1: each hole of copper between the pins costs this times `measure::WEIGHTS`' rules.
     pub weight: f64,
@@ -654,9 +653,10 @@ pub fn resolve(option: &CaseRules, c: &Circuit, board: Board) -> Result<Constrai
                     panic!("board file: {called}: both pins are {a}");
                 }
                 // Near is measured along the copper, so there has to be copper between them.
-                let net = net_of(pa).filter(|&net| net_of(pb) == Some(net));
-                let net = net.unwrap_or_else(|| panic!("board file: {called}: {a} and {b} aren't on the same net, so no copper joins them"));
-                out.near.push(NearRule { net, pins: [pa, pb], weight: weight.unwrap_or(HARD) });
+                if net_of(pa).is_none_or(|net| net_of(pb) != Some(net)) {
+                    panic!("board file: {called}: {a} and {b} aren't on the same net, so no copper joins them");
+                }
+                out.near.push(NearRule { pins: [pa, pb], weight: weight.unwrap_or(HARD) });
             }
             Rule::Close { pins: [a, b], .. } => {
                 let (pa, pb) = (c.find_pin(a), c.find_pin(b));

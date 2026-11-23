@@ -4,6 +4,7 @@
 
 use super::Routing;
 use crate::board::{Face, Geometry, LYING, Point, distance};
+use crate::layout::{bend, holes_between};
 use crate::rules::Case;
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashSet};
@@ -18,29 +19,6 @@ const DIAGONAL_EXTRA: u32 = (crate::measure::WEIGHTS[2] * 10.0) as u32;
 /// What a trace pays for each right angle's worth of bending (see `bend`), except at a pin, where
 /// it starts anyway: the score's `turns` weight times ten (1 is its place in measure::FEATURES).
 const TURN: u32 = (crate::measure::WEIGHTS[1] * 10.0) as u32;
-/// How hard each turn is to bend in copper wire, counted in right angles, which are the easiest.
-/// A gentle 45° turn, onto or off a diagonal, is harder to bend so it lands on the right hole, and
-/// a sharp 135° turn harder still.
-const RIGHT: u32 = 1;
-const GENTLE: u32 = 2;
-const SHARP: u32 = 3;
-
-/// How hard it is to bend a trace arriving in direction `a` so it leaves in direction `b` (each a
-/// step across, down or diagonal), in right angles; 0 if it goes straight on.
-pub(super) const fn bend(a: Point, b: Point) -> u32 {
-    // The dot product says how far apart the two directions are: positive below 90°, zero at 90°.
-    let dot = a.0 * b.0 + a.1 * b.1;
-    if a.0 == b.0 && a.1 == b.1 {
-        0
-    } else if dot > 0 {
-        GENTLE
-    } else if dot == 0 {
-        RIGHT
-    } else {
-        SHARP
-    }
-}
-
 /// `AHEAD[h][g]`: at most how much more bending, in right angles, a trace that came into a hole
 /// heading `h` may need from there than one that came in heading `g`, whichever way it goes on.
 /// So once a hole was reached heading `h` at cost c, reaching it heading `g` at c + AHEAD[h][g] *
@@ -137,6 +115,8 @@ pub(super) struct Grid {
     /// which run's wire has a leg in or lies over each hole.
     wires: [Vec<(usize, Point, Point)>; 2],
     wire_at: [Vec<Option<usize>>; 2],
+    /// Holes with a wire's leg in them, on either side: a hole holds one pin at most.
+    leg_at: Vec<bool>,
     /// The order the search tries the eight directions in (indexes into DIRS), which decides
     /// between ways that cost the same: `route` shuffles it for each candidate.
     pub(super) dir_order: [usize; 8],
@@ -147,13 +127,6 @@ pub(super) struct Grid {
 pub(super) enum Step {
     Trace,
     Wire(Face),
-}
-
-/// The holes strictly between the two legs of a straight or 45° wire.
-pub(super) fn holes_between(a: Point, b: Point) -> impl Iterator<Item = Point> {
-    let (dx, dy) = ((b.0 - a.0).signum(), (b.1 - a.1).signum());
-    let n = (b.0 - a.0).abs().max((b.1 - a.1).abs());
-    (1..n).map(move |k| (a.0 + dx * k, a.1 + dy * k))
 }
 
 impl Grid {
@@ -188,10 +161,11 @@ impl Grid {
     }
 
     /// Can a wire leg for `run`, on `side`, go in this hole? A jumper is like a part, so its leg needs
-    /// a hole of its own: no pin, nobody else's copper, and a wire could lie over it.
+    /// a hole of its own: no pin (a part's, or another wire's leg, even of the same run), nobody else's
+    /// copper, and a wire could lie over it.
     fn leg(&self, p: Point, run: usize, side: Face) -> bool {
         let i = self.at(p);
-        !self.pin[i] && (self.owner[i] == Owner::Free || self.owner[i] == Owner::Run(run)) && self.passable(i, run, side)
+        !self.pin[i] && !self.leg_at[i] && (self.owner[i] == Owner::Free || self.owner[i] == Owner::Run(run)) && self.passable(i, run, side)
     }
 
     /// Can a trace leave the pin at `p` for `run`, to a neighbouring hole? If not, the pin is walled
@@ -243,6 +217,7 @@ pub(super) fn empty_grid(c: &Case, g: &Geometry) -> Grid {
         diag: vec![None; n],
         wires: [Vec::new(), Vec::new()],
         wire_at: [vec![None; n], vec![None; n]],
+        leg_at: vec![false; n],
         dir_order: [0, 1, 2, 3, 4, 5, 6, 7],
     };
 
@@ -314,6 +289,10 @@ pub(super) fn lay(grid: &mut Grid, out: &mut Routing, run: usize, a: Point, b: P
         for p in holes_between(a, b).chain([a, b]) {
             let i = grid.at(p);
             grid.wire_at[side as usize][i] = Some(run);
+        }
+        for p in [a, b] {
+            let i = grid.at(p);
+            grid.leg_at[i] = true;
         }
     } else {
         out.traces.push((run, a, b));

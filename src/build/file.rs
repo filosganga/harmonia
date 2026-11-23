@@ -1,7 +1,7 @@
 //! The layout file: one plain JSON file that holds a `Build`, what you asked for and what was
 //! made of it. `to_json` writes it, `from_json` reads it back.
 //!
-//!     { "format": "harmonia-layout", "version": 5, "title": "Placed by rules",
+//!     { "format": "harmonia-layout", "version": 6, "title": "Placed by rules",
 //!       "made": { "circuit": "circuits/555_blinker.net", "judge": "rules", "seed": 1, ... },
 //!       "design": {
 //!         "board": { "width": 18, "height": 12 }, "power": "+5V", "ground": "GND",
@@ -14,8 +14,9 @@
 //!       "layout": {
 //!         "parts": [ { "reference": "U1", "at": [6, 3], "rot": 0,
 //!                      "pins": [ { "name": "1", "hole": [6, 6] }, ... ] }, ... ],
-//!         "runs": [ { "net": "GND", "star": null, "pins": ["J1.2", "U1.1", "C1.2"],
-//!                     "traces": [ [[6, 6], [6, 9]] ], "jumpers": [], "solder_wires": [] }, ... ] },
+//!         "copper": {
+//!           "traces": [ { "layer": -1, "holes": [[6, 6], [6, 9], [8, 9]] }, ... ],
+//!           "jumper_wires": [ { "name": "W1", "layer": 2, "pins": [[3, 4], [3, 8]] }, ... ] } },
 //!       "score": { "score": 57.0, "cost": 84.6, "measures": { "wire": 41.0, ... } },
 //!       "problems": [] }
 //!
@@ -23,24 +24,25 @@
 //! nets) and the board file's rules exactly as written, with `choices`: the option this case took
 //! in each one-of. The layout is where each part sits (`at` and `rot` mean what they mean in a
 //! `fixed` rule: top-left hole after turning, quarter turns clockwise), the hole each pin lands in,
-//! and the copper: one run for each piece the router joins (a net, or a branch of a star net), in
-//! the order it routes them first; its traces are straight pieces, hole to hole.
+//! and the copper: traces, each by the ends of its straight pieces (its two ends and every hole
+//! where it changes direction) on its layer, and jumper wires, W1, W2, ..., each with its layer
+//! and the hole of each pin. No runs and no nets: which pins the copper joins is worked out from it.
 //!
 //! The score and the problems are written for people to read. Reading the file back works them
 //! out again from the design and the layout, with today's measurements.
 
-use super::{Build, Layout, Made};
-use crate::board::{Board, Face, Layers, Place, Placement, Point};
+use super::{Build, Made};
+use crate::board::{Board, COPPER, Face, LYING, Layer, Layers, Place, Placement, Point};
 use crate::circuit::{Circuit, Drawings, Footprint, Look, Net, Part, Pin};
-use crate::route::Routing;
-use crate::rules::{self, Rule, Run};
+use crate::layout::{Copper, JumperWire, Layout, Trace, unit_steps};
+use crate::rules::{self, Rule};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 /// What the file says it is, and which version of the file format. A change to the format that
 /// an older reader would get wrong gets a new version.
 const FORMAT: &str = "harmonia-layout";
-const VERSION: u32 = 5;
+const VERSION: u32 = 6;
 
 /// Lines in the file are kept to about this many characters (see `pretty`).
 const LINE: usize = 100;
@@ -140,7 +142,7 @@ fn is_false(b: &bool) -> bool {
 #[serde(deny_unknown_fields)]
 struct LayoutEntry {
     parts: Vec<PlacedEntry>,
-    runs: Vec<RunEntry>,
+    copper: CopperEntry,
 }
 
 /// Where a part sits, and the hole each of its pins lands in.
@@ -163,24 +165,28 @@ struct HoleEntry {
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct RunEntry {
-    net: String,
-    /// The star point, if this run is a branch of a star net.
-    star: Option<String>,
-    pins: Vec<String>,
-    /// Copper traces on the solder side, as straight pieces: [from hole, to hole].
-    traces: Vec<[Point; 2]>,
-    /// Jumpers on the parts' side.
-    jumpers: Vec<[Point; 2]>,
-    /// Wires on the solder side, the last resort.
-    solder_wires: Vec<[Point; 2]>,
-    /// Connections the router couldn't make: [nearest hole joined, pin]. Left out when there are none.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    unrouted: Vec<[Point; 2]>,
-    /// For a branch of a soft star net: where it joined another branch's copper, away from the
-    /// star point (each costs the star's weight). Left out when there are none.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    joins: Vec<Point>,
+struct CopperEntry {
+    traces: Vec<TraceEntry>,
+    jumper_wires: Vec<WireEntry>,
+}
+
+/// A trace: its layer (-1, the bottom face's copper), and its holes: its two ends and every hole
+/// where it changes direction, so each piece between two is straight across, down or at 45°.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TraceEntry {
+    layer: Layer,
+    holes: Vec<Point>,
+}
+
+/// A jumper wire: its name (W1, W2, ... in order), its layer (2 on the top face, -2 on the bottom
+/// one), and the hole of each of its two pins.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WireEntry {
+    name: String,
+    layer: Layer,
+    pins: [Point; 2],
 }
 
 /// For people reading the file: reading it back works these out again.
@@ -226,26 +232,10 @@ pub fn to_json(build: &Build) -> String {
             pins: comp.footprint.pins.iter().enumerate().map(|(pi, pin)| HoleEntry { name: pin.name.clone(), hole: g.pins[ci][pi] }).collect(),
         })
         .collect();
-    // Each run's copper. The traces as straight pieces, the way the outputs show them; each run's
-    // pieces come one after the other (see `Build::case`), so picking them out keeps their order.
-    let routing = &layout.routing;
-    let straight = routing.straight_traces();
-    let of_run = |list: &[(usize, Point, Point)], r: usize| list.iter().filter(|t| t.0 == r).map(|&(_, a, b)| [a, b]).collect();
-    let runs = c
-        .runs
-        .iter()
-        .enumerate()
-        .map(|(r, run)| RunEntry {
-            net: circuit.nets[run.net].name.clone(),
-            star: run.star.map(|p| circuit.pin_name(p)),
-            pins: run.pins.iter().map(|&p| circuit.pin_name(p)).collect(),
-            traces: of_run(&straight, r),
-            jumpers: of_run(&routing.jumpers, r),
-            solder_wires: of_run(&routing.bottom, r),
-            unrouted: of_run(&routing.unrouted, r),
-            joins: routing.joins.iter().filter(|j| j.0 == r).map(|j| j.1).collect(),
-        })
-        .collect();
+    // The copper: each trace by the ends of its straight pieces, the wires by name.
+    let copper = &layout.copper;
+    let traces = copper.traces.iter().map(|t| TraceEntry { layer: t.layer, holes: t.straight_ends() }).collect();
+    let jumper_wires = copper.wires.iter().enumerate().map(|(k, w)| WireEntry { name: JumperWire::name(k), layer: w.layer, pins: w.pins }).collect();
     let m = &build.measures;
     let file = File {
         format: FORMAT.to_string(),
@@ -261,7 +251,7 @@ pub fn to_json(build: &Build) -> String {
             parts,
             nets: circuit.nets.clone(),
         },
-        layout: LayoutEntry { parts: placed, runs },
+        layout: LayoutEntry { parts: placed, copper: CopperEntry { traces, jumper_wires } },
         score: Score {
             score: crate::measure::score(m),
             cost: crate::measure::cost(m),
@@ -317,7 +307,7 @@ pub fn from_json(text: &str) -> Build {
     }
     let circuit = Circuit::new(parts, d.nets).with_power_and_ground(d.power, d.ground);
     let (cases, _) = rules::cases(&circuit, board, &d.rules);
-    let mut case = cases.into_iter().find(|c| c.constraints.choices == d.choices).unwrap_or_else(|| {
+    let case = cases.into_iter().find(|c| c.constraints.choices == d.choices).unwrap_or_else(|| {
         panic!("layout file: its rules have no case that takes {:?}", d.choices)
     });
 
@@ -328,33 +318,26 @@ pub fn from_json(text: &str) -> Build {
     }
     let placement: Placement = l.parts.iter().map(|p| Place { face: Face::Top, x: p.at.0, y: p.at.1, rot: p.rot }).collect();
 
-    // The runs, in the order the router routes them first, as `Build::routed` keeps them: they must be
-    // the ones the case's rules make, or the copper would be on the wrong runs.
     let g = case.geometry(&placement);
-    let order = crate::route::order(&case, &g);
-    case.runs = order.iter().map(|&r| case.runs[r].clone()).collect();
-    let said: Vec<(String, Option<String>, Vec<String>)> = l.runs.iter().map(|e| (e.net.clone(), e.star.clone(), e.pins.clone())).collect();
-    let made_by_rules: Vec<(String, Option<String>, Vec<String>)> = case.runs.iter().map(|run: &Run| (case.circuit.nets[run.net].name.clone(), run.star.map(|p| case.circuit.pin_name(p)), run.pins.iter().map(|&p| case.circuit.pin_name(p)).collect())).collect();
-    if said != made_by_rules {
-        panic!("layout file: its runs aren't the ones its design's rules make");
-    }
-    let mut routing = Routing::default();
-    for (r, entry) in l.runs.iter().enumerate() {
-        for &[a, b] in &entry.traces {
-            routing.traces.extend(steps(a, b).into_iter().map(|(a, b)| (r, a, b)));
+    // The copper, each trace's listed holes back to every hole it touches.
+    let traces = l.copper.traces.iter().map(|t| {
+        if t.layer != -COPPER || t.holes.len() < 2 {
+            panic!("layout file: a trace should be on layer {} with two holes or more, not on {} with {}", -COPPER, t.layer, t.holes.len());
         }
-        routing.jumpers.extend(entry.jumpers.iter().map(|&[a, b]| (r, a, b)));
-        routing.bottom.extend(entry.solder_wires.iter().map(|&[a, b]| (r, a, b)));
-        routing.unrouted.extend(entry.unrouted.iter().map(|&[a, b]| (r, a, b)));
-        routing.joins.extend(entry.joins.iter().map(|&at| (r, at)));
-    }
+        let mut holes = vec![t.holes[0]];
+        for w in t.holes.windows(2) {
+            holes.extend(steps(w[0], w[1]).into_iter().map(|(_, b)| b));
+        }
+        Trace { layer: t.layer, holes }
+    });
+    let wires = l.copper.jumper_wires.iter().enumerate().map(|(k, w)| {
+        if w.name != JumperWire::name(k) || w.layer.abs() != LYING || w.pins[0] == w.pins[1] {
+            panic!("layout file: jumper wire {} should be called {}, on layer {LYING} or -{LYING}, with its pins in two holes", w.name, JumperWire::name(k));
+        }
+        JumperWire { layer: w.layer, pins: w.pins }
+    });
+    let copper = Copper { traces: traces.collect(), wires: wires.collect() };
 
-    // What's left unrouted is one of its run's pins.
-    for &(r, _, pin) in &routing.unrouted {
-        if !case.runs[r].pins.iter().any(|&(ci, pi)| g.pins[ci][pi] == pin) {
-            panic!("layout file: {} has something unrouted at {pin:?}, which isn't one of its pins", case.circuit.nets[case.runs[r].net].name);
-        }
-    }
     // What the file says twice must agree: each pin's hole.
     for (ci, part) in l.parts.iter().enumerate() {
         for (pi, pin) in part.pins.iter().enumerate() {
@@ -364,13 +347,13 @@ pub fn from_json(text: &str) -> Build {
             }
         }
     }
-    Build::of(case, Layout { placement, routing }, file.title, file.made)
+    Build::of(case, Layout { placement, copper }, file.title, file.made)
 }
 
 /// A straight trace from `a` to `b` (across, down or at 45°) as the steps between neighbouring
 /// holes the router laid it in.
 fn steps(a: Point, b: Point) -> Vec<(Point, Point)> {
-    (a != b).then(|| crate::route::unit_steps(a, b)).flatten().unwrap_or_else(|| {
+    (a != b).then(|| unit_steps(a, b)).flatten().unwrap_or_else(|| {
         panic!("layout file: a trace from {a:?} to {b:?} isn't straight across, down or at 45°")
     })
 }

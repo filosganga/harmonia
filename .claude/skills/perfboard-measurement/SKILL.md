@@ -17,7 +17,7 @@ A measurement is in five places that the compiler only partly ties together.
 3. `src/route/search.rs`: the router's costs are the matching weights × 10 (`STRAIGHT`/`DIAGONAL` for wire,
    `TURN` for turns, `DIAGONAL_EXTRA` for diagonal, `JUMPER_PER_HOLE` for jumper length, `RULE` for a
    soft keep-out's hole or a soft star's join, and `JUMPER` / `SOLDER_WIRE` for each wire, weighed
-   against the traces' way round and a join; `crosswise` isn't priced, see `Routing::crosswise_steps`).
+   against the traces' way round and a join; `crosswise` isn't priced, see `Copper::crosswise_steps` in `src/layout.rs`).
    The running total in `route_in_order` (when a candidate routing stops) reads `WEIGHTS[0]` and `[2]` to `[7]` (not turns, `[1]`, which can shrink; leave it out),
    and `route`'s placement cost `[8]` and `[9]`, by position too. `TURN`, `DIAGONAL_EXTRA`, `JUMPER`,
    `JUMPER_PER_HOLE`, `SOLDER_WIRE` and `RULE` read `WEIGHTS[1]`, `[2]`, `[4]`, `[5]`, `[6]` and

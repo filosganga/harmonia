@@ -21,6 +21,7 @@ mod circuit;
 mod diylc;
 mod footprints;
 mod kicad_pcb;
+mod layout;
 mod learn;
 mod measure;
 mod netlist;
@@ -34,7 +35,8 @@ mod svg;
 use board::Board;
 use rules::Case;
 use measure::Measures;
-use build::{Build, Layout, Made, Request};
+use build::{Build, Made, Request};
+use layout::{Copper, Layout};
 use nn::Net;
 use svg::Side;
 use rand::{SeedableRng, rngs::StdRng};
@@ -246,8 +248,8 @@ fn place_cases(
         };
         let layout = place::anneal(c, &cost, steps, rng, start.clone(), |_| {});
         let g = c.geometry(&layout);
-        let routing = route::route(c, &layout, &g);
-        let m = measure::measure_routed(c, &layout, &g, &routing);
+        let copper = route::route(c, &layout, &g);
+        let m = measure::measure_routed(c, &layout, &g, &copper);
         if report && cases.len() > 1 {
             println!("{}", measure::report(c, &layout, &m, &format!("Case {} of {} ({})", k + 1, cases.len(), case_name(c))));
         }
@@ -262,7 +264,7 @@ fn place_cases(
                 }
                 None => start,
             };
-            best = Some((k, shown, Layout { placement: layout, routing }, m, this));
+            best = Some((k, shown, Layout { placement: layout, copper }, m, this));
         }
     }
     let Some((k, start, layout, m, _)) = best else {
@@ -385,7 +387,11 @@ fn place_cmd(cases: &[Case], args: &Args, sketch: Option<board::Placement>, copp
     // placement (as you drew it, allowed or not), to compare.
     if let (Some(sketch), Some(copper)) = (&sketch, copper.as_ref().filter(|w| !w.traces.is_empty() || !w.jumpers.is_empty())) {
         let g = c.geometry(sketch);
-        let (yours, breaks) = route::from_sketch(c, &g, copper);
+        let yours = Copper::from_sketch(copper, c.circuit.nets.len());
+        let built = measure::built(c, &g, &yours);
+        built.refuse_shorts();
+        let hard = c.constraints.stars.iter().zip(&built.star_joins).filter(|(s, _)| s.weight.is_none());
+        let breaks: usize = hard.map(|(_, &n)| n).sum();
         println!("{}", measure::report_measures(&measure::measure_routed(c, sketch, &g, &yours), "  wired as you drew it"));
         if breaks > 0 {
             println!("    (and it breaks the board file's star rules {breaks} times, which the router never does)");
@@ -405,8 +411,8 @@ fn place_cmd(cases: &[Case], args: &Args, sketch: Option<board::Placement>, copp
     println!("{}", measure::ascii_board(c, &placed));
 
     // The finished board with the copper it was judged by: the layout file, and every output made
-    // from it, show that one routing.
-    let build = Build::routed(c.clone(), best, &label, made);
+    // from it, show that copper.
+    let build = Build::of(c.clone(), best, label.clone(), made);
     let made = &build.made;
     for problem in &build.problems {
         println!("  !! {problem}");

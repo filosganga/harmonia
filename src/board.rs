@@ -10,8 +10,9 @@ use crate::circuit::{Circuit, Footprint, Part};
 pub type Point = (i32, i32);
 
 /// The copper drawn in a DIYLC sketch, in holes of the board, each piece with the index of its net
-/// in the circuit: what `route::from_sketch` turns into a routing, to score your own wiring the way the
-/// router's is scored. A piece that joins no pins is left out.
+/// in the circuit: what `layout::Copper::from_sketch` turns into a layout's copper, to score your own
+/// wiring the way the router's is scored. A piece that joins no pins is left out. (Until the DIYLC
+/// reader returns a layout of its own.)
 #[derive(Default, Clone)]
 pub struct Copper {
     /// Copper traces, (net, one end, the other), as drawn: a trace may be many holes long.
@@ -184,6 +185,14 @@ const NET_COLORS: [&str; 14] = [
     "#1f77b4", "#2ca02c", "#17becf", "#8c564b", "#bcbd22", "#393b79", "#637939",
     "#8c6d31", "#843c39", "#7b4173", "#a6761d", "#1b9e77", "#756bb1", "#e6550d",
 ];
+
+/// The colour of a pin, or a piece of copper, on no net.
+pub const LONE: &str = "#9a9a9a";
+
+/// The colour of `net` in `colors` (see `net_colors`), or LONE for none.
+pub fn net_color(colors: &[&'static str], net: Option<usize>) -> &'static str {
+    net.map_or(LONE, |n| colors[n])
+}
 
 /// A colour for each net: power red, ground near-black, the rest from NET_COLORS.
 /// The SVG picture and the DIYLC jumpers both use these, so a net looks the same in both.

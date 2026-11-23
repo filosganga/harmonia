@@ -175,10 +175,24 @@ Still to decide and build, each on its own branch with the benchmark:
   top for boards with pads on both sides, the same layers on the solder side, and the KiCad layers.
   DIYLC may not be able to draw a part on the back.
 
+## 6. The router prices star joins one way, the score another
+
+Since the layout holds only copper (the domain-model plan, step 6), the score counts a soft star's
+joins from the copper: in each piece of copper with the star point taken out, every branch beyond
+the first. The router still prices each join path it takes at the star's weight. So a branch that
+joins another twice in one place costs the router two joins and the score one, and a join that
+turns another branch's corner into a junction saves a corner the router didn't count. The score
+judges every routing the router proposes, so this only makes the router's search a little less
+well aimed on soft-star boards (`circuits/cat_feeder_fixed`'s `orig.json`, `hand.json`,
+`keep-softstar.json`, `add.json`).
+
+**Suggestion.** Price a join in the search only when it reaches a piece of copper the run hasn't
+joined yet, if a soft-star board shows the router taking double joins.
+
 ## Also worth knowing
 
 - Placing is slower since the router rework: `place circuits/cat_feeder.diy` takes about 40s
   (18s before) and `bench` about 50s (33s): wires became part of the router's search, and the
   finished layout's routing is improved a few runs at a time (`route::IMPROVE`).
 - The installed `harmonia` (`cargo install --path .`) must be reinstalled to read layout files of
-  version 5 (reinstall whenever the layout file's `VERSION` changes).
+  version 6 (reinstall whenever the layout file's `VERSION` changes).
