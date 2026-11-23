@@ -29,7 +29,7 @@ pub const FEATURES: [&str; 11] = ["wire", "turns", "diagonal", "crosswise", "jum
 /// crowding 115 -> 83.
 pub const WEIGHTS: [f64; 11] = [
     1.0,  // wire: per hole of copper trace, as routed (see route/search.rs, whose costs match these)
-    5.0,  // turns: per right angle's worth of bending a trace (45° is 2, 135° is 3; see route/search.rs `bend`): a corner is the work, not the length
+    5.0,  // turns: per right angle's worth of bending a trace (45° is 2, 135° is 3; see layout.rs `bend`): a corner is the work, not the length
     15.0, // diagonal: per diagonal step of copper trace, on top of its length, three corners' worth (jumpers and wires don't count)
     0.5,  // crosswise: per straight step of trace running against the board's main direction (see route.rs)
     15.0, // jumpers: per jumper on the parts' side, three corners' worth (the router prices every jumper at this, route/search.rs `JUMPER`)
@@ -48,8 +48,8 @@ pub const SCORE_SCALE: f64 = 150.0;
 #[derive(Clone, Copy, Debug)]
 pub struct Measures(pub [f64; FEATURES.len()]);
 
-/// What a layout's copper builds, compared with the circuit its case asks for (see `wiring`).
-pub struct Wiring {
+/// What a layout's copper builds, compared with the circuit its case asks for (see `built`).
+pub struct Built {
     /// Each pin the copper doesn't join to the rest of its net, with the nearest hole of the rest
     /// (where a dotted line starts): nets in order, each net's pins in order.
     pub unrouted: Vec<((usize, usize), Point)>,
@@ -65,7 +65,7 @@ pub struct Wiring {
     pub shorts: Vec<String>,
 }
 
-impl Wiring {
+impl Built {
     /// Stops on a short: a layout with one can't be scored.
     pub fn refuse_shorts(&self) {
         if let Some(short) = self.shorts.first() {
@@ -77,7 +77,7 @@ impl Wiring {
 /// Works out which pins the `copper` joins, with the parts at geometry `g`, and compares that with
 /// the nets the case asks for: the pins left out of their net (unrouted), the star rules broken
 /// (joins), each piece of copper's net, and any shorts.
-pub fn wiring(c: &Case, g: &Geometry, copper: &Copper) -> Wiring {
+pub fn built(c: &Case, g: &Geometry, copper: &Copper) -> Built {
     let pin_hole = |(ci, pi): (usize, usize)| g.pins[ci][pi];
     let holes: Vec<Point> = g.pins.iter().flatten().copied().collect();
     let mut whole = copper.joined(&holes, &[]);
@@ -103,23 +103,32 @@ pub fn wiring(c: &Case, g: &Geometry, copper: &Copper) -> Wiring {
             }
         }
     }
+    // Whether a trace could leave the pin in this hole: a neighbouring hole on the board without a
+    // pin, copper or a hard keep-out (the router starts from such a pin, so a walled-in one is the
+    // one it names).
+    let taken: HashSet<Point> = holes.iter().copied().chain(copper.steps().flat_map(|(a, b)| [a, b])).chain(copper.wires.iter().flat_map(|w| w.pins)).collect();
+    let free = |p: Point| p.0 >= 0 && p.1 >= 0 && p.0 < c.board.width && p.1 < c.board.height && !taken.contains(&p) && !c.constraints.keepout_holes.contains(&p);
+    let way_out = |(x, y): Point| (-1..=1).flat_map(|dx| (-1..=1).map(move |dy| (x + dx, y + dy))).any(|q| q != (x, y) && free(q));
     // A pin the copper doesn't join to the rest of its net: the rest being the star point's group,
-    // or else the biggest group of the net's pins the copper joins (the first, if two are as big).
+    // or else the biggest group of the net's pins the copper joins (if two are as big, the first
+    // with a way out).
     let mut unrouted = Vec::new();
     for (net, pins) in c.circuit.net_pins.iter().enumerate() {
         let star = c.constraints.stars.iter().find(|s| s.net == net).map(|s| pin_hole(s.at));
         let roots: Vec<Point> = pins.iter().map(|&p| whole.find(pin_hole(p))).collect();
         let anchor = star.unwrap_or_else(|| {
-            let biggest = (0..pins.len()).max_by_key(|&i| (roots.iter().filter(|&&r| r == roots[i]).count(), std::cmp::Reverse(i))).unwrap();
+            let size = |i: usize| roots.iter().filter(|&&r| r == roots[i]).count();
+            let biggest = (0..pins.len()).max_by_key(|&i| (size(i), way_out(pin_hole(pins[i])), std::cmp::Reverse(i))).unwrap();
             pin_hole(pins[biggest])
         });
         let main = whole.find(anchor);
+        let rest = whole.group_of(anchor);
         for (&pin, &root) in pins.iter().zip(&roots) {
             if root != main {
+                // The dotted line starts at the nearest hole of the rest (the lowest, if two are as near).
                 let hole = pin_hole(pin);
-                let rest = whole.group_of(anchor);
-                let from = *rest.iter().min_by(|&&a, &&b| distance(a, hole).total_cmp(&distance(b, hole)).then(a.cmp(&b))).unwrap();
-                unrouted.push((pin, from));
+                let nearest = |&&a: &&Point, &&b: &&Point| distance(a, hole).total_cmp(&distance(b, hole)).then(a.cmp(&b));
+                unrouted.push((pin, *rest.iter().min_by(nearest).unwrap()));
             }
         }
     }
@@ -147,13 +156,13 @@ pub fn wiring(c: &Case, g: &Geometry, copper: &Copper) -> Wiring {
     let mut net_at = |hole: Point| group_net.get(&whole.find(hole)).and_then(|&(net, _)| net);
     let trace_net = copper.traces.iter().map(|t| net_at(t.holes[0])).collect();
     let wire_net = copper.wires.iter().map(|w| net_at(w.pins[0])).collect();
-    Wiring { unrouted, star_joins, trace_net, wire_net, shorts }
+    Built { unrouted, star_joins, trace_net, wire_net, shorts }
 }
 
 /// The `!!` lines for pins the copper doesn't join to their net, naming each one.
-pub fn unrouted_problems(c: &Case, wiring: &Wiring) -> Vec<String> {
+pub fn unrouted_problems(c: &Case, built: &Built) -> Vec<String> {
     let net_of = |pin: (usize, usize)| c.circuit.net_pins.iter().position(|pins| pins.contains(&pin)).expect("an unrouted pin is on a net");
-    wiring
+    built
         .unrouted
         .iter()
         .map(|&(pin, _)| {
@@ -166,7 +175,7 @@ pub fn unrouted_problems(c: &Case, wiring: &Wiring) -> Vec<String> {
 /// What the rules measure on parts at `placement` (whose geometry is `g`), joined by `copper` (so a
 /// layout is routed only once).
 pub fn measure_routed(c: &Case, placement: &[Place], g: &Geometry, copper: &Copper) -> Measures {
-    let wiring = wiring(c, g, copper);
+    let built = built(c, g, copper);
     let pins_of = |net: usize| -> Vec<Point> { c.circuit.net_pins[net].iter().map(|&(ci, pi)| g.pins[ci][pi]).collect() };
     let net_pins = |name: &Option<String>| name.as_ref().map(|n| pins_of(c.circuit.net_index(n))).unwrap_or_default();
     let (vcc, gnd) = (net_pins(&c.circuit.power), net_pins(&c.circuit.ground));
@@ -201,7 +210,7 @@ pub fn measure_routed(c: &Case, placement: &[Place], g: &Geometry, copper: &Copp
     };
     // Each join of a soft star's branches costs its weight (added once per join, so the sum is the
     // same whatever order they come in).
-    let soft_joins = c.constraints.stars.iter().zip(&wiring.star_joins).filter_map(|(s, &n)| s.weight.map(|w| (w, n)));
+    let soft_joins = c.constraints.stars.iter().zip(&built.star_joins).filter_map(|(s, &n)| s.weight.map(|w| (w, n)));
     let joins: f64 = soft_joins.flat_map(|(w, n)| std::iter::repeat_n(w, n)).sum();
     let rules: f64 = along_copper.chain(straight).sum::<f64>() + placed + on_keepouts + joins + 0.0; // + 0.0: no rules is 0, not -0
 
@@ -214,7 +223,7 @@ pub fn measure_routed(c: &Case, placement: &[Place], g: &Geometry, copper: &Copp
         copper.top().count() as f64,
         copper.wire_length(),
         copper.bottom().count() as f64,
-        wiring.unrouted.len() as f64,
+        built.unrouted.len() as f64,
         power as f64, crowding as f64, rules])
 }
 

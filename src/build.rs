@@ -14,7 +14,7 @@ pub use file::{from_json, to_json};
 use crate::board::{Board, Placement};
 use crate::circuit::Circuit;
 use crate::layout::Layout;
-use crate::measure::{self, Measures, Wiring};
+use crate::measure::{self, Measures, Built};
 use crate::route;
 use crate::rules::{self, Case, Rule};
 use serde::{Deserialize, Serialize};
@@ -88,8 +88,8 @@ pub struct Build {
     pub made: Made,
     /// The case's measurements with this layout (`measure::measure_routed`).
     pub measures: Measures,
-    /// What its copper joins, compared with what the case asks for (`measure::wiring`).
-    pub wiring: Wiring,
+    /// What its copper joins, compared with what the case asks for (`measure::built`).
+    pub built: Built,
     /// Plain-language problems, the `!!` lines: what isn't allowed (`measure::clash_words`), and pins
     /// left unrouted.
     pub problems: Vec<String>,
@@ -107,15 +107,15 @@ impl Build {
     pub fn of(case: Case, layout: Layout, title: String, made: Made) -> Build {
         let g = case.geometry(&layout.placement);
         let measures = measure::measure_routed(&case, &layout.placement, &g, &layout.copper);
-        let wiring = measure::wiring(&case, &g, &layout.copper);
+        let built = measure::built(&case, &g, &layout.copper);
         // A layout from the placer is always allowed; a sketch as you drew it may not be. One that
         // is allowed can't have a short (two parts on one hole make one that isn't).
         let clashes = measure::clashes(&case, &g, &vec![true; layout.placement.len()]);
         if clashes.is_empty() {
-            wiring.refuse_shorts();
+            built.refuse_shorts();
         }
         let mut problems = measure::clash_words(&case, &clashes);
-        problems.extend(measure::unrouted_problems(&case, &wiring));
-        Build { case, layout, title, made, measures, wiring, problems }
+        problems.extend(measure::unrouted_problems(&case, &built));
+        Build { case, layout, title, made, measures, built, problems }
     }
 }

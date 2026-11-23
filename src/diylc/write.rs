@@ -188,13 +188,13 @@ pub fn write(build: &Build) -> String {
     }
 
     // The routed copper: traces on the solder side and jumpers on top, coloured like their net.
-    let (copper, wiring) = (&build.layout.copper, &build.wiring);
+    let (copper, built) = (&build.layout.copper, &build.built);
     let colors = board::net_colors(&c.circuit);
-    // A piece's net, by name and colour (grey for copper that joins no pin).
-    let net_name = |net: Option<usize>| net.map_or("", |n| c.circuit.nets[n].name.as_str());
-    let net_color = |net: Option<usize>| net.map_or("9a9a9a", |n| &colors[n][1..]); // "#d62828" -> "d62828"
-    let traces = copper.straight_pieces().into_iter().map(|(k, a, b)| ((wiring.trace_net[k], a, b), "connectivity.CopperTrace", r#"<thickness value="1.0" unit="mm"/><layer>_1</layer><endingStyle>Round</endingStyle>"#));
-    let wire = |(k, w): (usize, &JumperWire)| (wiring.wire_net[k], w.pins[0], w.pins[1]);
+    // A piece's net, by name and colour (grey for copper that joins no pin), "#d62828" -> "d62828".
+    let net_name = |net: Option<usize>| c.circuit.net_name(net);
+    let net_color = |net: Option<usize>| &board::net_color(&colors, net)[1..];
+    let traces = copper.straight_pieces().into_iter().map(|(k, a, b)| ((built.trace_net[k], a, b), "connectivity.CopperTrace", r#"<thickness value="1.0" unit="mm"/><layer>_1</layer><endingStyle>Round</endingStyle>"#));
+    let wire = |(k, w): (usize, &JumperWire)| (built.wire_net[k], w.pins[0], w.pins[1]);
     let top = copper.wires.iter().enumerate().filter(|(_, w)| w.layer > 0).map(|kw| (wire(kw), "connectivity.Jumper", "<style>SOLID</style>"));
     for ((net, a, b), class, extra) in traces.chain(top) {
         two_legged(&mut s, &id(), class, net_name(net), "", ["ffffff", "000000", "000000", net_color(net)], to_inch(a), to_inch(b), "NONE", extra);

@@ -42,6 +42,21 @@ pub struct JumperWire {
     pub pins: [Point; 2],
 }
 
+impl Trace {
+    /// Its two ends and every hole where it changes direction: the ends of its straight pieces.
+    pub fn straight_ends(&self) -> Vec<Point> {
+        let dir = |p: Point, q: Point| ((q.0 - p.0).signum(), (q.1 - p.1).signum());
+        let mut out = vec![self.holes[0]];
+        for k in 1..self.holes.len() {
+            let turns_here = k + 1 < self.holes.len() && dir(self.holes[k - 1], self.holes[k]) != dir(self.holes[k], self.holes[k + 1]);
+            if turns_here || k + 1 == self.holes.len() {
+                out.push(self.holes[k]);
+            }
+        }
+        out
+    }
+}
+
 impl JumperWire {
     /// Its name, from its place among the layout's wires: W1, W2, ...
     pub fn name(index: usize) -> String {
@@ -92,11 +107,12 @@ impl Copper {
         self.traces.iter().flat_map(|t| t.holes.windows(2).map(|w| (w[0], w[1])))
     }
 
-    /// The wires on the top face, then those on the bottom one.
+    /// The jumper wires on the top face.
     pub fn top(&self) -> impl Iterator<Item = &JumperWire> {
         self.wires.iter().filter(|w| w.layer > 0)
     }
 
+    /// The jumper wires on the bottom face, the last resort.
     pub fn bottom(&self) -> impl Iterator<Item = &JumperWire> {
         self.wires.iter().filter(|w| w.layer < 0)
     }
@@ -194,7 +210,7 @@ impl Copper {
     }
 
     /// The traces as straight pieces: steps in a row in the same direction, joined into one, each
-    /// with the index of its trace.
+    /// with the index of its trace (see `Trace::straight_ends`).
     pub fn straight_pieces(&self) -> Vec<(usize, Point, Point)> {
         let dir = |p: Point, q: Point| ((q.0 - p.0).signum(), (q.1 - p.1).signum());
         let mut out: Vec<(usize, Point, Point)> = Vec::new();
@@ -245,7 +261,7 @@ impl Copper {
         let (lo, hi) = every.fold(((i32::MAX, i32::MAX), (i32::MIN, i32::MIN)), |(lo, hi), p| ((lo.0.min(p.0), lo.1.min(p.1)), (hi.0.max(p.0), hi.1.max(p.1))));
         let w = (hi.0 - lo.0 + 1).max(0) as usize;
         let n = w * (hi.1 - lo.1 + 1).max(0) as usize;
-        let mut j = Joined { corner: lo, w, parent: (0..n).collect() };
+        let mut j = Joined { top_left: lo, width: w, parent: (0..n).collect() };
         // Every trace is on one face and every pin goes through both, so a hole is one node.
         for (a, b) in links {
             if !apart.contains(&a) && !apart.contains(&b) {
@@ -259,15 +275,16 @@ impl Copper {
 /// Holes joined by copper, in groups (a union-find: each hole points towards its group's root),
 /// over the smallest rectangle around the pins and copper it was made from.
 pub struct Joined {
-    /// The rectangle's top-left hole, and its width: hole (x, y) is at (y - top) * w + (x - left).
-    corner: Point,
-    w: usize,
+    /// The rectangle's top-left hole, and its width: hole (x, y) is at
+    /// (y - top_left.1) * width + (x - top_left.0).
+    top_left: Point,
+    width: usize,
     parent: Vec<usize>,
 }
 
 impl Joined {
     fn index(&self, (x, y): Point) -> usize {
-        (y - self.corner.1) as usize * self.w + (x - self.corner.0) as usize
+        (y - self.top_left.1) as usize * self.width + (x - self.top_left.0) as usize
     }
 
     fn root(&mut self, mut i: usize) -> usize {
@@ -281,12 +298,12 @@ impl Joined {
     /// The group a hole is in, named by one of its holes. (A hole outside the rectangle has no
     /// copper and no pin: it's a group of its own.)
     pub fn find(&mut self, p: Point) -> Point {
-        let inside = p.0 >= self.corner.0 && p.1 >= self.corner.1 && ((p.0 - self.corner.0) as usize) < self.w && self.index(p) < self.parent.len();
+        let inside = p.0 >= self.top_left.0 && p.1 >= self.top_left.1 && ((p.0 - self.top_left.0) as usize) < self.width && self.index(p) < self.parent.len();
         if !inside {
             return p;
         }
         let r = self.root(self.index(p));
-        (self.corner.0 + (r % self.w) as i32, self.corner.1 + (r / self.w) as i32)
+        (self.top_left.0 + (r % self.width) as i32, self.top_left.1 + (r / self.width) as i32)
     }
 
     fn join(&mut self, a: Point, b: Point) {
@@ -299,8 +316,8 @@ impl Joined {
     /// Every hole in the same group as `p` (in the rectangle, row by row).
     pub fn group_of(&mut self, p: Point) -> Vec<Point> {
         let root = self.find(p);
-        let (w, h) = (self.w as i32, (self.parent.len() / self.w.max(1)) as i32);
-        let holes: Vec<Point> = (0..h).flat_map(|y| (0..w).map(move |x| (x, y))).map(|(x, y)| (self.corner.0 + x, self.corner.1 + y)).collect();
+        let (w, h) = (self.width as i32, (self.parent.len() / self.width.max(1)) as i32);
+        let holes: Vec<Point> = (0..h).flat_map(|y| (0..w).map(move |x| (x, y))).map(|(x, y)| (self.top_left.0 + x, self.top_left.1 + y)).collect();
         holes.into_iter().filter(|&h| self.find(h) == root).collect()
     }
 }

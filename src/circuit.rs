@@ -75,6 +75,11 @@ impl Circuit {
         (ci, pi.unwrap_or_else(|| panic!("{label}: its footprint has no pad {pin}")))
     }
 
+    /// The name of `net`, or "" for none.
+    pub fn net_name(&self, net: Option<usize>) -> &str {
+        net.map_or("", |n| self.nets[n].name.as_str())
+    }
+
     /// "5V" -> the index of the net called that.
     pub fn net_index(&self, name: &str) -> usize {
         self.nets.iter().position(|n| n.name == name).unwrap_or_else(|| panic!("no net called {name}"))

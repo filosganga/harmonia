@@ -15,7 +15,7 @@ description: Procedure for adding or changing a rule in the perfboard board file
 |---|---|---|
 | Hard limit on where a part goes | fixed, edge, orientation, within | a `Rule` with a part: `Rule::one_part` and `Rule::part` (name the part; `part` also checks the rule alone) and `Rule::broken` (how far this place is from what it wants: 0, infinite for a hard rule, or weighted holes). `resolve` lists each part's allowed places and `apply` keeps the part on them; nothing else to wire |
 | Hard limit on what may share the board, for every part | hard keep-out holes under parts, no two parts on a hole | `measure::clashes` (with words in `measure::clash_words`): the placer starts from an allowed layout (`place::allowed_start`) and throws away any move that isn't allowed, before routing it. A new kind of clash is a `measure::Why` variant, and is named in svg.rs's "Boxed in red" note and README's lists of what's allowed ("How a board is judged", "Or sketch it in DIYLC") |
-| Hard limit on copper | hard keep-out holes, star separation | `src/route/search.rs` grid (`owner`, `keepout`), or `rules::runs` for how a net splits; with a weight, the grid's `extra` (soft keep-outs) or `route::join` (soft star). `route::from_sketch` (your own wiring, measured) also counts star joins and breaks: a new copper rule must be counted there too |
+| Hard limit on copper | hard keep-out holes, star separation | `src/route/search.rs` grid (`owner`, `keepout`), or `rules::runs` for how a net splits; with a weight, the grid's `extra` (soft keep-outs) or `route::join` (soft star). The score counts it from the copper, the router's or your sketch's alike, in `measure::built` (unrouted pins, star joins and breaks, shorts): a new copper rule must be counted there too |
 | How a part is built | layers | a `Rule` resolved into `Constraints` per part (`Constraints::layers`, read through `Case::layers`), which everything that asks what a part takes reads instead of the part's own field; no weight, a one-of gives the choice |
 | Priced | near, close | a measurement (both count in `rules`), each rule times its `weight` (`HARD`, 1, if left out: they're only known once routed); a new one: use the `perfboard-measurement` skill |
 
@@ -27,7 +27,8 @@ description: Procedure for adding or changing a rule in the perfboard board file
   without one. A new rule must say how it's broken with a weight, in holes, and price that in the
   `rules` measurement (times `WEIGHTS`' rules, 1000): a placement rule in `Rule::broken` (it then
   needs nothing else: `resolve` fills `place_cost`); a keep-out in `soft_keepout` (the router's
-  `extra`); a star by its joins (`route::join`). Without a weight it stays as hard as it was.
+  `extra`); a star by its joins (priced in the router by `route::join`, counted by the score in
+  `measure::built`). Without a weight it stays as hard as it was.
 
   all-of and one-of are not kinds of rule to wire anywhere: when the board file is read, `cases`
   expands them into plain lists of rules (a one-of makes one case per option), and every case is
@@ -61,8 +62,9 @@ description: Procedure for adding or changing a rule in the perfboard board file
 7. The layout file (`src/build/file.rs`) keeps the board file's rules as written, and reading it
    back works the case out again (`rules::cases`), so a new rule round-trips by itself as
    long as `Rule` writes it back as it was read (`Serialize`, leaving out what was left out). A rule
-   that changes what the router makes may need more in the file's `layout` (as a soft star's
-   `joins`); raise `VERSION` if an older reader would get the file wrong.
+   that changes what the copper means may need more in the file's `layout` (it holds only the
+   copper; joins and unrouted pins are worked out from it); raise `VERSION` if an older reader
+   would get the file wrong.
 
 ## Docs and examples
 

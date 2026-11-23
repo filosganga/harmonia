@@ -388,9 +388,9 @@ fn place_cmd(cases: &[Case], args: &Args, sketch: Option<board::Placement>, copp
     if let (Some(sketch), Some(copper)) = (&sketch, copper.as_ref().filter(|w| !w.traces.is_empty() || !w.jumpers.is_empty())) {
         let g = c.geometry(sketch);
         let yours = Copper::from_sketch(copper, c.circuit.nets.len());
-        let wiring = measure::wiring(c, &g, &yours);
-        wiring.refuse_shorts();
-        let hard = c.constraints.stars.iter().zip(&wiring.star_joins).filter(|(s, _)| s.weight.is_none());
+        let built = measure::built(c, &g, &yours);
+        built.refuse_shorts();
+        let hard = c.constraints.stars.iter().zip(&built.star_joins).filter(|(s, _)| s.weight.is_none());
         let breaks: usize = hard.map(|(_, &n)| n).sum();
         println!("{}", measure::report_measures(&measure::measure_routed(c, sketch, &g, &yours), "  wired as you drew it"));
         if breaks > 0 {
@@ -411,7 +411,7 @@ fn place_cmd(cases: &[Case], args: &Args, sketch: Option<board::Placement>, copp
     println!("{}", measure::ascii_board(c, &placed));
 
     // The finished board with the copper it was judged by: the layout file, and every output made
-    // from it, show that one routing.
+    // from it, show that copper.
     let build = Build::of(c.clone(), best, label.clone(), made);
     let made = &build.made;
     for problem in &build.problems {

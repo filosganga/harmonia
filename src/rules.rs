@@ -400,7 +400,7 @@ impl Case {
 }
 
 /// Pins to join with one piece of copper. Two runs never share copper, even on the same net,
-/// unless a soft star joins them (`Routing::joins`).
+/// unless a soft star joins them (counted from the copper: `measure::built`, `Built::star_joins`).
 #[derive(Clone)]
 pub struct Run {
     pub net: usize,

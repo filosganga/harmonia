@@ -89,7 +89,7 @@ fn check_one(path: &str, args: &Args) -> Outcome {
         // nets can't join by themselves. Pins the router couldn't reach aren't joined in the drawing at all. Leave them out on both
         // sides: if everything else matches, only they are missing; if not, the writer is wrong.
         let g = c.geometry(&placed);
-        let holes: std::collections::HashSet<board::Point> = build.wiring.unrouted.iter().map(|&(pin, _)| g.pins[pin.0][pin.1]).collect();
+        let holes: std::collections::HashSet<board::Point> = build.built.unrouted.iter().map(|&(pin, _)| g.pins[pin.0][pin.1]).collect();
         let mut unrouted = std::collections::HashSet::new();
         for (ci, comp) in c.circuit.parts.iter().enumerate() {
             for pi in 0..comp.footprint.pins.len() {

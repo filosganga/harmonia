@@ -95,11 +95,12 @@ to work it out again, and a saved board can be scored again later. It's JSON, wi
 - **layout**: what was made of it.
   - **parts**: where each part sits, `at` and `rot` meaning what they mean in the board file's
     `fixed` rule, and the `hole` each of its pins lands in.
-  - **runs**: what the router joins with one piece of copper (a net, or a branch of a star net,
-    with its `star` point), in the order it routes them first (shortest first), with that copper:
-    `traces` as straight pieces, `[from hole, to hole]`, then `jumpers` and `solder_wires` the same
-    way, `unrouted` (only when there are any): connections the router couldn't make, and `joins`
-    (only for a soft star's branch that took any): where it joined another branch's copper.
+  - **copper**: the `traces`, each with its `layer` (-1, the bottom face's copper) and its `holes`:
+    its two ends and every hole where it changes direction, each piece between two straight across,
+    down or at 45°; and the `jumper_wires`, W1, W2, ..., each with its `name`, its `layer` (2 on the
+    top face, -2 on the bottom one, the last resort) and the hole of each of its two `pins`. No runs
+    and no nets: which pins the copper joins (and so what's unrouted, or where a star's branches
+    join) is worked out from it, like the score.
 - **score**: the score, the cost and the eleven measurements by name (below), and **problems**:
   the `!!` lines. Both are written for people to read; reading the file back works them out again.
 
@@ -156,7 +157,8 @@ router's on the same placement ("wired by the router"), so you can see which the
 measure the sketch exactly as you drew it: before the board file's placement rules move or turn
 anything, and whether it's allowed or not (two parts sharing a hole are scored anyway; a pin off the
 real board counts as unrouted). Your wiring's star-rule breaks are counted like the router's joins (with
-a weight) or on a line of their own (without one).
+a weight) or on a line of their own (without one). Copper that joins two nets (two pieces drawn apart
+that land in one hole) is a short, and the program stops on it, naming the two pins.
 
 - **Your sketch doesn't have to be allowed.** Parts drawn on top of each other, off the real board,
   on a keep-out (without a weight) or under a module are moved, each to the nearest place where it fits, before the
@@ -277,7 +279,9 @@ one, say a copy with a weight changed). Everything in it is optional:
     others: left without a weight, they cost as at weight 1. Before weights they cost 4 a hole, a
     weight of 0.004.
   - keepout: each of its holes a part or copper covers.
-  - star: each time a run joins another run of the net away from the star point (see "How it routes").
+  - star: each time the copper joins one of its branches to another away from the star point,
+    counted from the copper: in each piece of copper (the star point taken out), every branch
+    beyond the first (see "How it routes").
   - all-of, one-of: a weight here is the weight of every rule inside that has none of its own. A
     one-of about where one part goes counts its least broken option.
 
@@ -317,9 +321,9 @@ text board. Pins are named like the `nets` command prints them.
 | `src/circuit.rs` | What is to be built, the `Circuit`: its parts (each with its footprint, its look in the pictures, and the drawings file formats keep of it), its nets, and which nets are power and ground (as given, or guessed from their names). Every reader returns one. |
 | `src/board.rs` | The board, and where the parts go on it: where every pin lands, and the holes each part takes. |
 | `src/measure.rs` | Judges a layout: whether it's allowed (`clashes`, from where the parts are) and, once routed, the eleven measurements, their weights, its cost and score; the one-line report and the text picture of the board. It never routes: `route::measure` routes and then measures. |
-| `src/route.rs` | The router: joins every net with copper traces, and hops over with a jumper (or, last, a solder-side wire) where a trace can't get through or going round costs more; for a finished layout it makes 200 complete routings in different orders, keeps the one the score likes best, and improves it a few runs at a time; a pin walled in so that not even a wire fits is left unrouted. It also turns a sketch's own copper into a routing, to measure your wiring. |
+| `src/layout.rs` | A finished board, a `Layout`: where each part sits and its `Copper` (traces as paths of holes on a face, jumper wires W1, W2, ... with a layer), with no runs or nets. The copper measures itself (length, corners, the length between two holes along it) and works out which holes it joins; `measure::wiring` compares that with what the case asks for (unrouted pins, star joins, shorts). |
+| `src/route.rs` | The router: joins every net with copper traces, and hops over with a jumper (or, last, a solder-side wire) where a trace can't get through or going round costs more; for a finished layout it makes 200 complete routings in different orders, keeps the one the score likes best, and improves it a few runs at a time; a pin walled in so that not even a wire fits is left unrouted. It works run by run inside, and hands back the copper alone, which the score judges. |
 | `src/route/search.rs` | The router's search: the board as it sees it (who owns each hole, where wires lie) and the A* search for the cheapest way to a run's next pin, in traces and wires, with what each step costs. |
-| `src/route/sketch.rs` | Your own wiring, from a DIYLC sketch, as a routing the score can measure. |
 | `src/build.rs` | What you ask for, a `Request` (a circuit, the board and your rules), and a finished board, a `Build`: the case of it that won (`Case`, in `src/rules.rs`), what was made of it (`Layout`: where each part goes and the copper), and how; scored once, and drawn by the three writers below. |
 | `src/build/file.rs` | The layout file: writing a build, and reading it back (for `draw`, and `check`'s round trip). |
 | `src/svg.rs` | Draws the layout as an SVG picture, from the parts' side or the solder side. |
@@ -362,7 +366,8 @@ Then how good it is. `src/measure.rs` measures eleven things (weights in `WEIGHT
   bend is one more to make by hand, while a longer straight run is hardly more work: so a right
   angle costs as much as five holes of trace. A right angle, the easiest,
   counts 1; a gentle 45° turn, onto or off a diagonal, counts 2, since it's harder to land on the
-  right hole; a sharp 135° turn counts 3. A pin or a wire's leg is free, since a trace starts
+  right hole; a sharp 135° turn counts 3. Counted at each hole where exactly two steps of trace
+  meet, however the copper is split into traces: a pin or a wire's leg is free, since a trace starts
   there, and so is a junction where three or more steps meet, which is soldered like a pin.
   Jumpers never bend: each is one straight wire.
 - **diagonal**: steps of copper trace laid at 45°, each costing three corners (fifteen holes of
@@ -384,7 +389,9 @@ Then how good it is. `src/measure.rs` measures eleven things (weights in `WEIGHT
 - **bottom**: how many wires on the solder side, the last resort. Each costs a hundred corners
   (more than thirty jumpers), so the placer finds room for jumpers instead.
 - **unrouted**: connections the router couldn't make at all: a pin walled in by other copper so that
-  not even a wire fits (a wire's leg needs a hole of its own, never a pin's).
+  not even a wire fits (a wire's leg needs a hole of its own, never a pin's or another wire's leg).
+  Worked out from the copper: a pin not joined to the rest of its net (its star point's piece, or
+  else its biggest piece).
   Each costs five thousand holes of trace (as much as ten solder-side wires), far more than any wiring, so the placer keeps away from such
   layouts; one that's left is drawn as a thin dotted line, with a `!!` line naming the pin. It stays
   a cost, not part of "allowed": it's only known once the board is routed, it's the greedy router's
@@ -439,7 +446,7 @@ or a wire lies over costs the weight times a thousand, so the router goes round 
   run up to a free hole, the jumper hops over, and traces carry on from where it lands. It goes across, down or at
   45°, 2 to 10 holes long. It lies on layer 2: it can't pass over a part, a pin or a hard keep-out (it
   can go under a module on headers, like low parts), or over or across another run's jumper. A jumper is like a part: its legs
-  need holes of their own, never a pin's. It may lie over a hole where a solder-side wire ends:
+  need holes of their own, never a pin's or another wire's leg. It may lie over a hole where a solder-side wire ends:
   hopping over things is what it's for.
 - A **wire on the solder side** is the last resort: it costs a hundred corners, as in the score, so
   it's only used when no jumper fits, or the way to one would cost more than a hundred corners. Same shape and legs, but nothing sits on that side except copper,
@@ -472,7 +479,10 @@ less. A soft star's runs go again together, since one may have joined another's 
 feeder with its parts fixed, this takes the best routing from 677 to 622 (about 1.3s), and on the
 hand-wired sketch's placement from 635 to 600. With jumpers priced at 95 instead of 15, the 200
 routings alone never got below the hand wiring (1349, with 4 jumpers; they found 1503 with 9), and
-improved they find 1123 with 6. The random choices come from fixed seeds, so the same placement
+improved they find 1123 with 6. (Those figures are from before the layout held only copper: since
+then corners and star joins are counted from the copper and a hole holds one wire leg, and the
+improved routing costs 610 on the fixed board, with 10 jumpers, and 596 on the sketch's placement.)
+The random choices come from fixed seeds, so the same placement
 always gets the same copper.
 
 The placer can't afford 200 routings for every move, so it judges each move by the first one,
@@ -579,7 +589,7 @@ benchmark before and after it and compare the layouts, not the old numbers.
   in ten put a part anywhere it fits on the board. On a crowded board, a place that's only reachable
   by moving two parts at once is still hard to find.
 - **KiCad has no traces.** `rules.kicad_pcb` has the parts and their nets, not the routed copper.
-  The copper is in the layout file (`runs`) and in the `Build` that `src/kicad_pcb.rs` is given,
+  The copper is in the layout file (`copper`) and in the `Build` that `src/kicad_pcb.rs` is given,
   so writing it into the KiCad board only needs that writer to draw it.
 - **DIP pin names from DIYLC.** Reading a `.diy`, a DIP chip's right-hand pins are numbered top to
   bottom (5–8) where the chip's own numbering runs bottom to top, so the top-right pin is called 5,

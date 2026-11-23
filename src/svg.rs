@@ -17,8 +17,6 @@ use std::fmt::Write;
 const PX: f64 = 30.0;
 const MARGIN: f64 = 40.0;
 const LEGEND_W: f64 = 420.0;
-/// The colour of a pin connected to nothing.
-const LONE: &str = "#9a9a9a";
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum Side {
@@ -117,7 +115,7 @@ pub fn draw(build: &Build, side: Side) -> String {
             net_of.insert(p, n);
         }
     }
-    let pin_color = |p: (usize, usize)| net_of.get(&p).map_or(LONE, |&n| colors[n]);
+    let pin_color = |p: (usize, usize)| net_of.get(&p).map_or(board::LONE, |&n| colors[n]);
 
     // Parts that collide, hang off the board, sit on a hard keep-out or don't fit under a module (both
     // parts of a collision): only in a layout that isn't allowed, like a sketch as you drew it.
@@ -152,15 +150,15 @@ pub fn draw(build: &Build, side: Side) -> String {
     }
 
     // --- the copper traces, on the solder side
-    let layout_copper = &build.layout.copper;
-    let wiring = &build.wiring;
+    let copper = &build.layout.copper;
+    let built = &build.built;
     // The net a piece of copper is on, by name and colour (grey for copper that joins no pin).
-    let net_name = |net: Option<usize>| net.map_or(String::new(), |n| esc(&circuit.nets[n].name));
-    let net_color = |net: Option<usize>| net.map_or(LONE, |n| colors[n]);
+    let net_name = |net: Option<usize>| esc(circuit.net_name(net));
+    let net_color = |net: Option<usize>| board::net_color(&colors, net);
     let opacity = if mirror { 0.9 } else { 0.55 };
-    let mut copper: HashMap<Point, Option<usize>> = HashMap::new(); // holes the copper touches -> net
-    for (k, a, b) in layout_copper.straight_pieces() {
-        let net = wiring.trace_net[k];
+    let mut net_at: HashMap<Point, Option<usize>> = HashMap::new(); // holes the copper touches -> net
+    for (k, a, b) in copper.straight_pieces() {
+        let net = built.trace_net[k];
         let ((x1, y1), (x2, y2)) = (at(a), at(b));
         writeln!(
             wires,
@@ -170,26 +168,26 @@ pub fn draw(build: &Build, side: Side) -> String {
         .unwrap();
     }
     // Wires on the solder side, the last resort: dashed, with the copper.
-    for (k, w) in layout_copper.wires.iter().enumerate().filter(|(_, w)| w.layer < 0) {
+    for (k, w) in copper.wires.iter().enumerate().filter(|(_, w)| w.layer < 0) {
         let ((x1, y1), (x2, y2)) = (at(w.pins[0]), at(w.pins[1]));
         let line = format!(r#"x1="{x1:.1}" y1="{y1:.1}" x2="{x2:.1}" y2="{y2:.1}""#);
         writeln!(wires, r#"<line {line} class="jumper-halo"/>"#).unwrap();
-        writeln!(wires, r#"<line {line} class="bottom-wire"><title>wire on the solder side, {}</title></line>"#, net_name(wiring.wire_net[k])).unwrap();
+        writeln!(wires, r#"<line {line} class="bottom-wire"><title>wire on the solder side, {}</title></line>"#, net_name(built.wire_net[k])).unwrap();
     }
     // Pins the copper doesn't join to their net: a thin dotted line from the rest of it, no copper.
-    for &((ci, pi), from) in &wiring.unrouted {
-        let net = circuit.net_pins.iter().position(|pins| pins.contains(&(ci, pi)));
+    for &((ci, pi), from) in &built.unrouted {
+        let net = net_of.get(&(ci, pi)).copied();
         let ((x1, y1), (x2, y2)) = (at(from), at(g.pins[ci][pi]));
         writeln!(wires, r#"<line x1="{x1:.1}" y1="{y1:.1}" x2="{x2:.1}" y2="{y2:.1}" class="unrouted"><title>not connected: {} couldn't be routed here</title></line>"#, net_name(net)).unwrap();
     }
-    for (k, t) in layout_copper.traces.iter().enumerate() {
+    for (k, t) in copper.traces.iter().enumerate() {
         for &h in &t.holes {
-            copper.insert(h, wiring.trace_net[k]);
+            net_at.insert(h, built.trace_net[k]);
         }
     }
-    for (k, w) in layout_copper.wires.iter().enumerate() {
+    for (k, w) in copper.wires.iter().enumerate() {
         for h in w.pins {
-            copper.insert(h, wiring.wire_net[k]);
+            net_at.insert(h, built.wire_net[k]);
         }
     }
 
@@ -214,8 +212,8 @@ pub fn draw(build: &Build, side: Side) -> String {
                     )
                     .unwrap();
                 }
-                None if copper.contains_key(&(x, y)) => {
-                    let net = copper[&(x, y)];
+                None if net_at.contains_key(&(x, y)) => {
+                    let net = net_at[&(x, y)];
                     writeln!(
                         holes,
                         r##"<circle cx="{cx:.1}" cy="{cy:.1}" r="{:.1}" fill="{}" stroke="#ffffff" stroke-width="1.5"><title>{x},{y} · trace · net {}</title></circle>"##,
@@ -334,11 +332,11 @@ pub fn draw(build: &Build, side: Side) -> String {
     }
 
     // --- jumpers, on the parts' side, over everything
-    for (k, w) in layout_copper.wires.iter().enumerate().filter(|(_, w)| w.layer > 0) {
+    for (k, w) in copper.wires.iter().enumerate().filter(|(_, w)| w.layer > 0) {
         let ((x1, y1), (x2, y2)) = (at(w.pins[0]), at(w.pins[1]));
         let line = format!(r#"x1="{x1:.1}" y1="{y1:.1}" x2="{x2:.1}" y2="{y2:.1}""#);
         writeln!(parts, r#"<line {line} class="jumper-halo"/>"#).unwrap();
-        writeln!(parts, r#"<line {line} class="jumper"><title>jumper, {}</title></line>"#, net_name(wiring.wire_net[k])).unwrap();
+        writeln!(parts, r#"<line {line} class="jumper"><title>jumper, {}</title></line>"#, net_name(built.wire_net[k])).unwrap();
     }
 
     // --- the legend, beside the board
@@ -392,7 +390,7 @@ pub fn draw(build: &Build, side: Side) -> String {
     }
     let alone = (0..circuit.parts.len()).flat_map(|ci| (0..circuit.parts[ci].footprint.pins.len()).map(move |pi| (ci, pi))).filter(|p| !net_of.contains_key(p)).count();
     if alone > 0 {
-        writeln!(legend, r#"<rect x="{lx:.1}" y="{:.1}" width="{swatch:.1}" height="{swatch:.1}" rx="{:.1}" fill="{LONE}"/>"#, ly - swatch * 0.8, swatch / 4.0).unwrap();
+        writeln!(legend, r#"<rect x="{lx:.1}" y="{:.1}" width="{swatch:.1}" height="{swatch:.1}" rx="{:.1}" fill="{}"/>"#, ly - swatch * 0.8, swatch / 4.0, board::LONE).unwrap();
         writeln!(legend, r#"<text x="{:.1}" y="{ly:.1}" class="legend">connected to nothing: {alone} pins</text>"#, lx + swatch * 1.6).unwrap();
         ly += line_h * 1.45;
     }

@@ -16,8 +16,8 @@
 //! it may pass under parts and over traces and pins (it's insulated); it still keeps off hard
 //! keep-outs and other runs' solder-side wires. It costs a hundred corners in the score, so the
 //! router only takes one where no jumper fits (or the way to one costs more), and the placer avoids it. A wire's leg needs a hole of its own,
-//! never a pin's: a pin walled in so that not even a wire fits is left `unrouted`, costing more
-//! than any wiring.
+//! never a pin's or another wire's leg: a pin walled in so that not even a wire fits is left
+//! `unrouted`, costing more than any wiring.
 //!
 //! A soft keep-out (one with a weight) takes copper, but each hole of it costs: the router pays
 //! that on every step of trace into it and every hole a wire lies over.
@@ -58,25 +58,25 @@ use search::{Grid, RULE, Scratch, Step, empty_grid, join, jumper_shapes, lay, oc
 /// Where the router lays the copper, run by run: its own working copy. Each entry is (run, from
 /// hole, to hole). A layout holds only the copper (`copper`).
 #[derive(Default, Clone)]
-pub struct Routing {
+struct Routing {
     /// One step of trace between neighbouring holes, on the solder side.
-    pub traces: Vec<(usize, Point, Point)>,
+    traces: Vec<(usize, Point, Point)>,
     /// A jumper on the parts' side.
-    pub jumpers: Vec<(usize, Point, Point)>,
+    jumpers: Vec<(usize, Point, Point)>,
     /// A wire on the solder side, the last resort.
-    pub bottom: Vec<(usize, Point, Point)>,
+    bottom: Vec<(usize, Point, Point)>,
     /// A connection the router couldn't make, as (run, the nearest hole already joined, the pin):
     /// the pin is walled in, so not even a wire fits (a wire's leg needs a hole of its own, never a
     /// pin's), or it's off the board. Never copper: the score works out what's unrouted from the
-    /// copper (`measure::wiring`); this only keeps the router's running total honest.
-    pub unrouted: Vec<(usize, Point, Point)>,
+    /// copper (`measure::built`); this only keeps the router's running total honest.
+    unrouted: Vec<(usize, Point, Point)>,
 }
 
 impl Routing {
     /// The copper, as a layout holds it: each run's steps of trace in a row become one trace (a new
     /// one wherever the run changes or the steps don't follow on), then the wires, those on the
     /// top face first. No runs: which pins it joins is worked out from the copper itself.
-    pub fn copper(&self) -> Copper {
+    fn copper(&self) -> Copper {
         let mut traces: Vec<Trace> = Vec::new();
         let mut last = None;
         for &(run, a, b) in &self.traces {
@@ -177,7 +177,9 @@ pub fn measure_once(c: &Case, placement: &[Place]) -> Measures {
 /// jumper costing 95 instead of 15: the best candidate costs 1503 with 9 jumpers, the hand wiring
 /// 1349 with 4, and improved, 1123 with 6. The candidates alone never got below the hand wiring
 /// whatever the jumper price: built run after run, each the cheapest way the ones before left, no
-/// run leaves room for a later one. Changing a few runs at a time does.
+/// run leaves room for a later one. Changing a few runs at a time does. (Measured before corners and
+/// star joins were counted from the copper and a hole held one wire leg; since then the fixed board's
+/// improved routing costs 610.)
 const IMPROVE: usize = 2000;
 
 /// Makes a finished routing better, a few runs at a time: rips up a random run and every run with
@@ -304,10 +306,10 @@ fn route_in_order(c: &Case, g: &Geometry, mut grid: Grid, mut out: Routing, orde
 }
 
 /// The order `route_once` routes the runs in, and `route`'s first candidate: shortest first, since
-/// they have the fewest ways around things. A run's copper is laid all at once, and `route` hands
-/// back each run's pieces in this order whichever order won, so in a `Routing` each run's pieces
-/// come one after the other, runs in this order (the layout file keeps them that way).
-pub fn order(c: &Case, g: &Geometry) -> Vec<usize> {
+/// they have the fewest ways around things. `route` sorts the winner's pieces into this order before
+/// turning them into copper, so the same placement always gives its traces and wires in the same
+/// order.
+fn order(c: &Case, g: &Geometry) -> Vec<usize> {
     let span = |r: usize| {
         let ps: Vec<Point> = c.runs[r].pins.iter().map(|&(ci, pi)| g.pins[ci][pi]).collect();
         let (xs, ys) = (ps.iter().map(|p| p.0), ps.iter().map(|p| p.1));

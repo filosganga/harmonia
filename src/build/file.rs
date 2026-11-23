@@ -24,9 +24,9 @@
 //! nets) and the board file's rules exactly as written, with `choices`: the option this case took
 //! in each one-of. The layout is where each part sits (`at` and `rot` mean what they mean in a
 //! `fixed` rule: top-left hole after turning, quarter turns clockwise), the hole each pin lands in,
-//! and the copper: traces, each by its corners (the holes where it changes direction, and its two
-//! ends) on its layer, and jumper wires, W1, W2, ..., each with its layer and the hole of each pin.
-//! No runs and no nets: which pins the copper joins is worked out from it.
+//! and the copper: traces, each by the ends of its straight pieces (its two ends and every hole
+//! where it changes direction) on its layer, and jumper wires, W1, W2, ..., each with its layer
+//! and the hole of each pin. No runs and no nets: which pins the copper joins is worked out from it.
 //!
 //! The score and the problems are written for people to read. Reading the file back works them
 //! out again from the design and the layout, with today's measurements.
@@ -170,7 +170,7 @@ struct CopperEntry {
     jumper_wires: Vec<WireEntry>,
 }
 
-/// A trace: its layer (-1, the bottom face's copper), and its corners: its two ends and every hole
+/// A trace: its layer (-1, the bottom face's copper), and its holes: its two ends and every hole
 /// where it changes direction, so each piece between two is straight across, down or at 45°.
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -232,16 +232,9 @@ pub fn to_json(build: &Build) -> String {
             pins: comp.footprint.pins.iter().enumerate().map(|(pi, pin)| HoleEntry { name: pin.name.clone(), hole: g.pins[ci][pi] }).collect(),
         })
         .collect();
-    // The copper: each trace by its corners (the ends of its straight pieces), the wires by name.
+    // The copper: each trace by the ends of its straight pieces, the wires by name.
     let copper = &layout.copper;
-    let pieces = copper.straight_pieces();
-    let traces = (0..copper.traces.len())
-        .map(|k| {
-            let mut ends = pieces.iter().filter(|p| p.0 == k);
-            let first = ends.next().expect("a trace has a step");
-            TraceEntry { layer: copper.traces[k].layer, holes: std::iter::once(first.1).chain(std::iter::once(first.2)).chain(ends.map(|p| p.2)).collect() }
-        })
-        .collect();
+    let traces = copper.traces.iter().map(|t| TraceEntry { layer: t.layer, holes: t.straight_ends() }).collect();
     let jumper_wires = copper.wires.iter().enumerate().map(|(k, w)| WireEntry { name: JumperWire::name(k), layer: w.layer, pins: w.pins }).collect();
     let m = &build.measures;
     let file = File {
@@ -326,7 +319,7 @@ pub fn from_json(text: &str) -> Build {
     let placement: Placement = l.parts.iter().map(|p| Place { face: Face::Top, x: p.at.0, y: p.at.1, rot: p.rot }).collect();
 
     let g = case.geometry(&placement);
-    // The copper, each trace's corners back to every hole it touches.
+    // The copper, each trace's listed holes back to every hole it touches.
     let traces = l.copper.traces.iter().map(|t| {
         if t.layer != -COPPER || t.holes.len() < 2 {
             panic!("layout file: a trace should be on layer {} with two holes or more, not on {} with {}", -COPPER, t.layer, t.holes.len());
